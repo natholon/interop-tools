@@ -1,0 +1,137 @@
+"""Synthetic SIU message generators, one per supported trigger event.
+
+Same required/optional philosophy as app.generators.adt: a generated message
+must always convert successfully through app.mappings.siu, so timing (which
+the mapper requires for S12/S13/S14) is never left out - only *how* it's
+supplied (TQ1 vs. legacy SCH-11) is randomized, to exercise both paths.
+"""
+
+import random
+
+from app.generators.base import (
+    format_hl7_datetime,
+    generate_msh_segment,
+    generate_pid_segment,
+    maybe,
+    random_appointment_type_code,
+    random_equipment,
+    random_identifier,
+    random_location_field,
+    random_nte_comment,
+    random_physician_xcn,
+    random_reason_code,
+    random_service,
+    random_time_range,
+    segment,
+)
+from app.hl7.parser import parse_message
+
+
+def _sch_common_fields(rng: random.Random) -> dict:
+    fields = {1: f"PLC{random_identifier(rng, 4)}"}
+    if maybe(rng, p=0.5):
+        fields[2] = f"FIL{random_identifier(rng, 4)}"
+    if maybe(rng, p=0.5):
+        code, display = random_reason_code(rng)
+        fields[7] = f"{code}^{display}^LOCAL"
+    if maybe(rng, p=0.5):
+        code, display = random_appointment_type_code(rng)
+        fields[8] = f"{code}^{display}^LOCAL"
+    if maybe(rng, p=0.5):
+        start, end = random_time_range(rng)
+        fields[9] = str(int((end - start).total_seconds() // 60))
+        fields[10] = "MIN"
+    if maybe(rng, p=0.2):
+        fields[25] = "Booked"
+    return fields
+
+
+def _tq1_segment(rng: random.Random, start, end) -> str:
+    tq1_fields = {1: "1", 7: format_hl7_datetime(start), 8: format_hl7_datetime(end)}
+    if maybe(rng, p=0.5):
+        tq1_fields[6] = str(int((end - start).total_seconds() // 60))
+    return segment("TQ1", tq1_fields, 14)
+
+
+def _apply_required_timing(rng: random.Random, sch_fields: dict) -> list[str]:
+    """S12/S13/S14: timing is required. ~75% via TQ1, ~25% via legacy SCH-11
+    (component 4 = start, component 5 = end) - both must always resolve to a
+    real start+end, exercising resolve_appointment_timing's two paths."""
+    start, end = random_time_range(rng)
+    if maybe(rng, p=0.75):
+        return [_tq1_segment(rng, start, end)]
+    sch_fields[11] = f"^^^{format_hl7_datetime(start)}^{format_hl7_datetime(end)}"
+    return []
+
+
+def _apply_optional_timing(rng: random.Random) -> list[str]:
+    """S15: timing is optional - ~40% include a TQ1, ~60% omit entirely."""
+    if not maybe(rng, p=0.4):
+        return []
+    start, end = random_time_range(rng)
+    return [_tq1_segment(rng, start, end)]
+
+
+def _resource_group_segments(rng: random.Random) -> list[str]:
+    segments = []
+    if maybe(rng, p=0.5):
+        segments.append(segment("NTE", {1: "1", 3: random_nte_comment(rng)}, 4))
+
+    resource_segments = []
+    if maybe(rng, p=0.5):
+        code, display = random_service(rng)
+        resource_segments.append(segment("AIS", {1: "1", 3: f"{code}^{display}^LOCAL"}, 12))
+    if maybe(rng, p=0.5):
+        resource_id, display = random_equipment(rng)
+        resource_segments.append(
+            segment("AIG", {1: "1", 3: f"{resource_id}^{display}^LOCAL", 4: "EQUIPMENT^Equipment^LOCAL"}, 14)
+        )
+    if maybe(rng, p=0.5):
+        resource_segments.append(segment("AIL", {1: "1", 3: random_location_field(rng)}, 12))
+    if maybe(rng, p=0.5):
+        resource_segments.append(segment("AIP", {1: "1", 3: random_physician_xcn(rng)}, 12))
+
+    if resource_segments:
+        segments.append(segment("RGS", {1: "1"}, 3))
+        segments.extend(resource_segments)
+    return segments
+
+
+def _assemble(msh: str, sch_fields: dict, timing_segments: list[str], pid: str, resource_segments: list[str]) -> str:
+    segments = [msh, segment("SCH", sch_fields, 27)]
+    segments.extend(timing_segments)
+    segments.append(pid)
+    segments.extend(resource_segments)
+    text = "\r".join(segments) + "\r"
+    parse_message(text)  # self-check: a generator bug should raise, not return broken text
+    return text
+
+
+def _generate_booked(rng: random.Random, trigger_event: str) -> str:
+    msh, _ = generate_msh_segment(rng, "SIU", trigger_event)
+    sch_fields = _sch_common_fields(rng)
+    timing_segments = _apply_required_timing(rng, sch_fields)
+    pid = generate_pid_segment(rng)
+    resource_segments = _resource_group_segments(rng)
+    return _assemble(msh, sch_fields, timing_segments, pid, resource_segments)
+
+
+def generate_siu_s12(rng: random.Random) -> str:
+    return _generate_booked(rng, "S12")
+
+
+def generate_siu_s13(rng: random.Random) -> str:
+    return _generate_booked(rng, "S13")
+
+
+def generate_siu_s14(rng: random.Random) -> str:
+    return _generate_booked(rng, "S14")
+
+
+def generate_siu_s15(rng: random.Random) -> str:
+    msh, _ = generate_msh_segment(rng, "SIU", "S15")
+    sch_fields = _sch_common_fields(rng)
+    timing_segments = _apply_optional_timing(rng)
+    pid = generate_pid_segment(rng)
+    resource_segments = _resource_group_segments(rng)
+    return _assemble(msh, sch_fields, timing_segments, pid, resource_segments)

@@ -73,3 +73,35 @@ def test_api_convert_resolves_siu_message_end_to_end():
         e["resource"] for e in body["bundle"]["entry"] if e["resource"]["resourceType"] == "Appointment"
     )
     assert appointment["status"] == "booked"
+
+
+def test_index_renders_message_type_dropdown():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'id="message-type-select"' in response.text
+    assert "ADT^A01 - Admit" in response.text
+    assert "SIU^S12 - New Appointment" in response.text
+
+
+def test_api_generate_returns_convertible_message():
+    # Full-stack smoke test: generated text must itself round-trip through /api/convert.
+    response = client.get("/api/generate", params={"message_type": "ADT", "trigger_event": "A01"})
+    assert response.status_code == 200
+    hl7_text = response.json()["hl7_text"]
+    assert hl7_text
+
+    convert_response = client.post("/api/convert", json={"hl7_text": hl7_text})
+    assert convert_response.status_code == 200
+    assert convert_response.json()["bundle"]["resourceType"] == "Bundle"
+
+
+def test_api_generate_is_reproducible_with_seed():
+    first = client.get("/api/generate", params={"message_type": "SIU", "trigger_event": "S12", "seed": 5})
+    second = client.get("/api/generate", params={"message_type": "SIU", "trigger_event": "S12", "seed": 5})
+    assert first.json()["hl7_text"] == second.json()["hl7_text"]
+
+
+def test_api_generate_unsupported_combination_returns_404():
+    response = client.get("/api/generate", params={"message_type": "ADT", "trigger_event": "A99"})
+    assert response.status_code == 404
+    assert response.json()["error"]["category"] == "Unknown message type"

@@ -10,8 +10,16 @@
         <label for="hl7_file">Or upload a file (overrides pasted text)</label>
         <input type="file" id="hl7_file" name="hl7_file" accept=".hl7,.txt">
     </div>
+    <div class="field">
+        <label for="message-type-select">Sample message type</label>
+        <select id="message-type-select">
+            {% for msg_type, trigger, label in supported_types %}
+            <option value="{{ msg_type }}|{{ trigger }}">{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
     <div class="actions">
-        <button type="button" id="load-sample">Load sample message</button>
+        <button type="button" id="generate-sample">Generate sample</button>
         <button type="submit">Convert to FHIR</button>
     </div>
 </form>
@@ -28,6 +36,5 @@
     <pre><code id="output-code">{{ result or "" }}</code></pre>
 </section>
 
-<script type="application/json" id="sample-message-data">{{ sample_message_json | safe }}</script>
 <script src="/static/app.js"></script>
 {% endblock %}

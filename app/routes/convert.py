@@ -5,20 +5,13 @@ from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ValidationError
 
+from app.generators.registry import generate as generate_sample
+from app.generators.registry import list_supported_types
 from app.hl7.errors import Hl7ParseError, MappingError, MissingSegmentError
 from app.hl7.pipeline import convert_hl7_to_bundle
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
-
-SAMPLE_MESSAGE = (
-    "MSH|^~\\&|SENDAPP|SENDFAC|RECVAPP|RECVFAC|20260811120000||ADT^A01|MSG00001|P|2.5\r"
-    "EVN|A01|20260811120000\r"
-    "PID|1||123456^^^HOSP^MR||Doe^Jane^Q||19620305|F|||123 Main St^Apt 4^Springfield^IL^62704^USA"
-    "||(555)555-1234\r"
-    "PV1|1|I|W123^456^A^HOSP||||1234^Smith^John^^^^MD||||||||||||V0001|||||||||||||||||||||||||"
-    "20260811120000|\r"
-)
 
 _ERROR_STATUS = {
     Hl7ParseError: ("Parse error", 400),
@@ -53,7 +46,7 @@ async def index(request: Request):
             "hl7_text": "",
             "result": None,
             "error": None,
-            "sample_message_json": json.dumps(SAMPLE_MESSAGE),
+            "supported_types": list_supported_types(),
         },
     )
 
@@ -83,7 +76,7 @@ async def convert_form(
             "hl7_text": raw_text,
             "result": outcome.bundle_json,
             "error": error,
-            "sample_message_json": json.dumps(SAMPLE_MESSAGE),
+            "supported_types": list_supported_types(),
         },
     )
 
@@ -101,6 +94,18 @@ async def convert_api(payload: ConvertApiRequest):
             content={"error": {"category": outcome.error_category, "message": outcome.error_message}},
         )
     return JSONResponse(content={"bundle": json.loads(outcome.bundle_json)})
+
+
+@router.get("/api/generate")
+async def generate_sample_api(message_type: str, trigger_event: str, seed: int | None = None):
+    try:
+        hl7_text = generate_sample(message_type, trigger_event, seed=seed)
+    except MappingError as exc:
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"category": "Unknown message type", "message": str(exc)}},
+        )
+    return JSONResponse(content={"hl7_text": hl7_text})
 
 
 @router.get("/healthz")
