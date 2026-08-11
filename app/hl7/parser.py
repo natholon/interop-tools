@@ -28,6 +28,15 @@ def require_segment(message: hl7.Message, name: str):
         raise MissingSegmentError(f"Required segment {name} is missing") from exc
 
 
+def optional_segments(message: hl7.Message, name: str) -> list:
+    """Return every segment with the given name, or [] if none are present.
+    For segments that legitimately repeat zero or more times (e.g. NTE, AIP)."""
+    try:
+        return list(message.segments(name))
+    except KeyError:
+        return []
+
+
 def component_str(repetition_or_str, component: int = 1) -> str:
     """Return a 1-based component from a field repetition.
 

@@ -61,3 +61,15 @@ def test_api_convert_resolves_non_a01_trigger_end_to_end():
     body = response.json()
     encounter = next(e["resource"] for e in body["bundle"]["entry"] if e["resource"]["resourceType"] == "Encounter")
     assert encounter["status"] == "finished"
+
+
+def test_api_convert_resolves_siu_message_end_to_end():
+    # Proves the parse -> pipeline -> route stack resolves a second HL7 message
+    # *type* (SIU, not just another ADT trigger) via the registry.
+    response = client.post("/api/convert", json={"hl7_text": read_fixture("siu_s12_basic.hl7")})
+    assert response.status_code == 200
+    body = response.json()
+    appointment = next(
+        e["resource"] for e in body["bundle"]["entry"] if e["resource"]["resourceType"] == "Appointment"
+    )
+    assert appointment["status"] == "booked"

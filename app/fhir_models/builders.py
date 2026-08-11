@@ -1,10 +1,15 @@
+import re
+
 from fhir.resources.R4B.address import Address
+from fhir.resources.R4B.codeableconcept import CodeableConcept
+from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.contactpoint import ContactPoint
 from fhir.resources.R4B.humanname import HumanName
 
 from app.hl7.parser import component_str, field_repetitions, field_str
 
 _GENDER_MAP = {"M": "male", "F": "female", "O": "other"}
+_CWE_FALLBACK_SYSTEM = "urn:hl7-tools:coded-value"
 
 
 def hl7_sex_to_fhir_gender(code: str) -> str:
@@ -19,15 +24,32 @@ def parse_hl7_date(ts_field: str) -> str | None:
     return f"{digits[0:4]}-{digits[4:6]}-{digits[6:8]}"
 
 
+_TZ_OFFSET_RE = re.compile(r"([+-]\d{4})$")
+
+
 def parse_hl7_datetime(ts_field: str) -> str | None:
-    """Convert an HL7 TS value (YYYYMMDDHHMM[SS]) to a FHIR dateTime (assumes UTC)."""
-    digits = ts_field.strip()
+    """Convert an HL7 TS value (YYYYMMDDHHMM[SS][+/-ZZZZ]) to a FHIR dateTime.
+
+    A trailing HL7-style timezone offset (+/-ZZZZ) is preserved as-is in the
+    output (reformatted to FHIR's +HH:MM shape) rather than being dropped -
+    silently mislabeling an offset time as UTC would be a real scheduling
+    error, not just a cosmetic timestamp issue. Absent an offset, UTC (Z) is
+    assumed, same as before.
+    """
+    raw = ts_field.strip()
+    tz_match = _TZ_OFFSET_RE.search(raw)
+    offset = None
+    if tz_match:
+        offset = tz_match.group(1)
+        raw = raw[: tz_match.start()]
+    digits = raw
     if len(digits) < 12 or not digits[:12].isdigit():
         return None
     year, month, day = digits[0:4], digits[4:6], digits[6:8]
     hour, minute = digits[8:10], digits[10:12]
     second = digits[12:14] if len(digits) >= 14 and digits[12:14].isdigit() else "00"
-    return f"{year}-{month}-{day}T{hour}:{minute}:{second}Z"
+    tz = f"{offset[:3]}:{offset[3:]}" if offset else "Z"
+    return f"{year}-{month}-{day}T{hour}:{minute}:{second}{tz}"
 
 
 def build_human_names(pid_segment) -> list[HumanName]:
@@ -81,3 +103,19 @@ def build_phone_telecom(pid_segment) -> ContactPoint | None:
     if not phone:
         return None
     return ContactPoint(system="phone", use="home", value=phone)
+
+
+def build_codeable_concept_from_cwe(segment, field_num: int) -> CodeableConcept | None:
+    """Build a CodeableConcept from a CWE-shaped field (code=component 1,
+    display=component 2, coding system=component 3, falling back to a
+    urn:hl7-tools system when component 3 is absent). Returns None when the
+    code component is empty."""
+    code = field_str(segment, field_num, component=1)
+    if not code:
+        return None
+    display = field_str(segment, field_num, component=2)
+    system = field_str(segment, field_num, component=3) or _CWE_FALLBACK_SYSTEM
+    coding = Coding(system=system, code=code)
+    if display:
+        coding.display = display
+    return CodeableConcept(coding=[coding])

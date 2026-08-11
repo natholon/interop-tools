@@ -2,7 +2,7 @@ import uuid
 from abc import abstractmethod
 
 import hl7
-from fhir.resources.R4B.bundle import Bundle, BundleEntry
+from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.encounter import (
@@ -12,65 +12,19 @@ from fhir.resources.R4B.encounter import (
     EncounterParticipant,
 )
 from fhir.resources.R4B.identifier import Identifier
-from fhir.resources.R4B.patient import Patient
 from fhir.resources.R4B.period import Period
 from fhir.resources.R4B.reference import Reference
 
-from app.fhir_models.builders import (
-    build_addresses,
-    build_human_names,
-    build_phone_telecom,
-    hl7_sex_to_fhir_gender,
-    parse_hl7_date,
-    parse_hl7_datetime,
-)
+from app.fhir_models.builders import parse_hl7_datetime
 from app.hl7.errors import MappingError, MissingSegmentError
-from app.hl7.parser import component_str, field_repetitions, field_str, require_segment
+from app.hl7.parser import field_str, require_segment
 from app.mappings.base import MessageMapper
+from app.mappings.common import assemble_bundle, build_patient, location_display, person_display
 
 _ENCOUNTER_CLASS_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ActCode"
 _PARTICIPATION_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"
 _DISCHARGE_DISPOSITION_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0112"
 _PATIENT_CLASS_MAP = {"I": "IMP", "O": "AMB", "E": "EMER", "P": "PRENC"}
-
-
-def build_patient(pid) -> Patient:
-    """PID -> Patient. Shared by every ADT trigger event; PID is mapped identically
-    regardless of what triggered the message."""
-    patient_id = str(uuid.uuid4())
-    identifiers = []
-    for repetition in field_repetitions(pid, 3):
-        value = component_str(repetition, 1)
-        if not value:
-            continue
-        system = component_str(repetition, 4) or "urn:hl7-tools:patient-id"
-        identifiers.append(Identifier(system=system, value=value))
-
-    patient = Patient(id=patient_id)
-    if identifiers:
-        patient.identifier = identifiers
-    names = build_human_names(pid)
-    if names:
-        patient.name = names
-    birth_date = parse_hl7_date(field_str(pid, 7))
-    if birth_date:
-        patient.birthDate = birth_date
-    sex = field_str(pid, 8)
-    if sex:
-        patient.gender = hl7_sex_to_fhir_gender(sex)
-    addresses = build_addresses(pid)
-    if addresses:
-        patient.address = addresses
-    telecom = build_phone_telecom(pid)
-    if telecom:
-        patient.telecom = [telecom]
-    return patient
-
-
-def _location_display(pv1, field_num: int) -> str:
-    facility = field_str(pv1, field_num, component=1)
-    room = field_str(pv1, field_num, component=2)
-    return " ".join(part for part in (facility, room) if part)
 
 
 def discharge_datetime(pv1, evn) -> str | None:
@@ -102,13 +56,11 @@ def build_encounter_core(pv1, evn, patient_id: str, status: str) -> Encounter:
     if visit_number:
         encounter.identifier = [Identifier(system="urn:hl7-tools:visit-number", value=visit_number)]
 
-    location_display = _location_display(pv1, 3)
-    if location_display:
-        encounter.location = [EncounterLocation(location=Reference(display=location_display))]
+    current_location_display = location_display(pv1, 3)
+    if current_location_display:
+        encounter.location = [EncounterLocation(location=Reference(display=current_location_display))]
 
-    attending_family = field_str(pv1, 7, component=2)
-    attending_given = field_str(pv1, 7, component=3)
-    attending_display = ", ".join(part for part in (attending_family, attending_given) if part)
+    attending_display = person_display(pv1, 7)
     if attending_display:
         encounter.participant = [
             EncounterParticipant(
@@ -130,21 +82,6 @@ def build_encounter_core(pv1, evn, patient_id: str, status: str) -> Encounter:
         encounter.period = period
 
     return encounter
-
-
-def _assemble_bundle(msh, patient: Patient, encounter: Encounter) -> Bundle:
-    bundle = Bundle(id=str(uuid.uuid4()), type="collection")
-    control_id = field_str(msh, 10)
-    if control_id:
-        bundle.identifier = Identifier(system="urn:hl7-tools:message-control-id", value=control_id)
-    message_timestamp = parse_hl7_datetime(field_str(msh, 7))
-    if message_timestamp:
-        bundle.timestamp = message_timestamp
-    bundle.entry = [
-        BundleEntry(fullUrl=f"urn:uuid:{patient.id}", resource=patient),
-        BundleEntry(fullUrl=f"urn:uuid:{encounter.id}", resource=encounter),
-    ]
-    return bundle
 
 
 class BaseAdtMapper(MessageMapper):
@@ -170,7 +107,7 @@ class BaseAdtMapper(MessageMapper):
 
         patient = build_patient(pid)
         encounter = self.build_encounter(pv1, evn, patient.id)
-        return _assemble_bundle(msh, patient, encounter)
+        return assemble_bundle(msh, patient, encounter)
 
 
 class AdtA01Mapper(BaseAdtMapper):
@@ -201,7 +138,7 @@ class AdtA02Mapper(BaseAdtMapper):
 
     def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
         encounter = build_encounter_core(pv1, evn, patient_id, status="in-progress")
-        prior_display = _location_display(pv1, 6)
+        prior_display = location_display(pv1, 6)
         if prior_display:
             prior_location = EncounterLocation(location=Reference(display=prior_display), status="completed")
             if encounter.location:

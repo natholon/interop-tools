@@ -9,6 +9,7 @@ from app.mappings.adt import (
     AdtA08Mapper,
 )
 from app.mappings.registry import get_mapper
+from app.mappings.siu import SiuS12Mapper, SiuS13Mapper, SiuS14Mapper, SiuS15Mapper
 
 
 @pytest.mark.parametrize(
@@ -26,6 +27,20 @@ def test_get_mapper_resolves_registered_adt_triggers(trigger_event, expected_typ
     assert isinstance(mapper, expected_type)
 
 
+@pytest.mark.parametrize(
+    "trigger_event, expected_type",
+    [
+        ("S12", SiuS12Mapper),
+        ("S13", SiuS13Mapper),
+        ("S14", SiuS14Mapper),
+        ("S15", SiuS15Mapper),
+    ],
+)
+def test_get_mapper_resolves_registered_siu_triggers(trigger_event, expected_type):
+    mapper = get_mapper("SIU", trigger_event)
+    assert isinstance(mapper, expected_type)
+
+
 def test_get_mapper_is_case_insensitive():
     mapper = get_mapper("adt", "a01")
     assert isinstance(mapper, AdtA01Mapper)
@@ -34,3 +49,8 @@ def test_get_mapper_is_case_insensitive():
 def test_get_mapper_raises_for_unregistered_trigger():
     with pytest.raises(MappingError):
         get_mapper("ADT", "A99")
+
+
+def test_get_mapper_raises_for_unregistered_siu_trigger():
+    with pytest.raises(MappingError):
+        get_mapper("SIU", "S99")
