@@ -1,0 +1,86 @@
+:root {
+    color-scheme: light dark;
+    --border: #ccc;
+    --error-bg: #fdecea;
+    --error-border: #c0392b;
+    --output-bg: #f4f6f8;
+}
+
+body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 1.5rem;
+}
+
+header {
+    margin-bottom: 1.5rem;
+}
+
+.subtitle {
+    color: #666;
+    margin-top: -0.5rem;
+}
+
+.field {
+    margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+}
+
+label {
+    font-weight: 600;
+    margin-bottom: 0.35rem;
+}
+
+textarea {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.9rem;
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    resize: vertical;
+}
+
+.actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+button {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: #f0f0f0;
+    cursor: pointer;
+}
+
+button[type="submit"] {
+    background: #2563eb;
+    color: white;
+    border-color: #2563eb;
+}
+
+.panel {
+    border-radius: 6px;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    overflow-x: auto;
+}
+
+.error-panel {
+    background: var(--error-bg);
+    border: 1px solid var(--error-border);
+}
+
+.output-panel {
+    background: var(--output-bg);
+    border: 1px solid var(--border);
+}
+
+pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+}

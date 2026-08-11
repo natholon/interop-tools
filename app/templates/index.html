@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}ADT^A01 &rarr; FHIR | hl7-tools{% endblock %}
+{% block content %}
+<form id="convert-form" method="post" action="/convert" enctype="multipart/form-data">
+    <div class="field">
+        <label for="hl7_text">Raw HL7v2 message</label>
+        <textarea id="hl7_text" name="hl7_text" rows="14" placeholder="MSH|^~\&amp;|...">{{ hl7_text or "" }}</textarea>
+    </div>
+    <div class="field">
+        <label for="hl7_file">Or upload a file (overrides pasted text)</label>
+        <input type="file" id="hl7_file" name="hl7_file" accept=".hl7,.txt">
+    </div>
+    <div class="actions">
+        <button type="button" id="load-sample">Load sample message</button>
+        <button type="submit">Convert to FHIR</button>
+    </div>
+</form>
+
+<section id="error-pane" class="panel error-panel" {% if not error %}hidden{% endif %}>
+    {% if error %}
+    <strong>{{ error.category }}</strong>
+    <pre>{{ error.message }}</pre>
+    {% endif %}
+</section>
+
+<section id="output-pane" class="panel output-panel" {% if not result %}hidden{% endif %}>
+    <h2>FHIR Bundle</h2>
+    <pre><code id="output-code">{{ result or "" }}</code></pre>
+</section>
+
+<script type="application/json" id="sample-message-data">{{ sample_message_json | safe }}</script>
+<script src="/static/app.js"></script>
+{% endblock %}
