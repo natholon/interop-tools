@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`hl7-tools` is a Python/FastAPI web app for converting HL7v2 messages to FHIR R4 Bundles. The long-term goal (see README.md) covers transformation, validation, deduplication, test-data generation, and mapping across HL7v2/FHIR/CDA/C-CDA. Slice 1, currently implemented, converts a single HL7v2 **ADT^A01** message to a FHIR Bundle (Patient + Encounter). The next planned message type is SIU (scheduling).
+`hl7-tools` is a Python/FastAPI web app for converting HL7v2 messages to FHIR R4 Bundles. The long-term goal (see README.md) covers transformation, validation, deduplication, test-data generation, and mapping across HL7v2/FHIR/CDA/C-CDA. Currently implemented: the core ADT workflow — **A01 Admit, A02 Transfer, A03 Discharge, A04 Register, A08 Update** — each converting to a FHIR Bundle (Patient + Encounter). The next planned message type is SIU (scheduling); remaining ADT triggers (A05, A11, A13, ...) can follow the same pattern.
 
 ## Commands
 
@@ -21,7 +21,7 @@ uvicorn app.main:app --reload
 pytest
 
 # run a single test
-pytest tests/test_adt_a01_mapping.py::test_basic_fixture_maps_every_field -v
+pytest tests/test_adt_a03_mapping.py::test_discharge_sets_finished_status_and_period_end -v
 ```
 
 There is no separate lint/build step configured yet.
@@ -30,7 +30,9 @@ There is no separate lint/build step configured yet.
 
 **Request flow:** `app/routes/convert.py` (FastAPI routes for `/`, `/convert`, `/api/convert`, `/healthz`) calls the single pipeline entrypoint `app/hl7/pipeline.py::convert_hl7_to_bundle(raw_text) -> Bundle`. That function: parses raw text via `app/hl7/parser.py`, reads MSH-9 to get the message type/trigger event, looks up a mapper in `app/mappings/registry.py`, and calls `mapper.to_bundle(message)`.
 
-**Extension point for new message types:** `app/mappings/base.py` defines the `MessageMapper` interface (`to_bundle(message) -> Bundle`). Each HL7 message type gets its own module (e.g. `app/mappings/adt_a01.py`) implementing that interface, registered in `app/mappings/registry.py` as `{(message_type, trigger_event): mapper_instance}`. Adding SIU support means adding `app/mappings/siu_s12.py` + one registry line — no changes to routes, the parser, or templates. Generic, reusable FHIR-resource-construction helpers (name/address/datetime/gender parsing) live in `app/fhir_models/builders.py`, shared across mappers; message-type-specific field logic stays in the mapper itself.
+**Extension point for new message types:** `app/mappings/base.py` defines the `MessageMapper` interface (`to_bundle(message) -> Bundle`). Each HL7 message *type* gets its own module (e.g. `app/mappings/adt.py`) implementing that interface, registered in `app/mappings/registry.py` as `{(message_type, trigger_event): mapper_instance}`. Adding SIU support means adding `app/mappings/siu.py` + registry lines for its trigger events — no changes to routes, the parser, or templates. Generic, reusable FHIR-resource-construction helpers (name/address/datetime/gender parsing) live in `app/fhir_models/builders.py`, shared across all message types; message-type-specific field logic stays in that type's module.
+
+**Extension point for trigger events within one message type:** `app/mappings/adt.py` holds the whole ADT family behind a shared `BaseAdtMapper(MessageMapper)`. `BaseAdtMapper.to_bundle()` does the parts identical across every ADT trigger — require MSH/PID/PV1, optional EVN, build the Patient via the shared `build_patient(pid)`, assemble the Bundle via `_assemble_bundle()` — and delegates the one part that actually varies, `build_encounter(pv1, evn, patient_id) -> Encounter`, to each concrete subclass (`AdtA01Mapper`, `AdtA02Mapper`, `AdtA03Mapper`, `AdtA04Mapper`, `AdtA08Mapper`). Most subclasses just call the shared `build_encounter_core(pv1, evn, patient_id, status=...)` with a trigger-appropriate status; `AdtA02Mapper` additionally layers in PV1-6 prior-location history, and `AdtA03Mapper` requires a resolvable discharge time (PV1-45 or EVN-2 fallback) and maps PV1-36 discharge disposition. When adding a new ADT trigger event, add a subclass here rather than a new file — only add a new file for a genuinely different HL7 message type.
 
 **Error taxonomy:** three custom exceptions in `app/hl7/errors.py` — `Hl7ParseError` (unparseable text), `MissingSegmentError` (required segment absent), `MappingError` (no mapper registered for a message type) — plus `pydantic.ValidationError` from FHIR resource construction. `app/routes/convert.py` translates each to an HTTP status + category label, and both the JSON API and the server-rendered form path route through the same `_run_conversion()` helper so error handling only lives in one place. The UI never shows a raw traceback.
 
@@ -45,6 +47,7 @@ The `hl7` package (PyPI: `hl7`, i.e. python-hl7) is used for HL7v2 parsing:
 - Resources are imported from the `R4B` subpackage (`fhir.resources.R4B.*`), not the root package — as of `fhir.resources` v7+, the root package defaults to FHIR R5. R4B did not change `Patient`/`Encounter`/`Bundle`, so it's a safe practical stand-in for R4 here.
 - `Encounter.class` is a required field exposed as the Python attribute `class_fhir` (since `class` is a reserved word) — it must be passed as a constructor kwarg (`Encounter(..., class_fhir=Coding(...))`), not set as an attribute after construction, because required fields are validated eagerly on `__init__`.
 - Bundles use `Bundle.type = "collection"` (not `"transaction"`) since there's no FHIR-server interaction in this app.
+- Before using a resource sub-object you haven't used before (e.g. `EncounterHospitalization`), inspect its real `model_fields` rather than guessing field names/shapes — this was done for `dischargeDisposition` when adding A03 discharge mapping.
 
 ## Testing
 

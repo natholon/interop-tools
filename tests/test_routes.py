@@ -51,3 +51,13 @@ def test_form_convert_renders_error_in_page():
     response = client.post("/convert", data={"hl7_text": read_fixture("adt_a01_malformed.hl7")})
     assert response.status_code == 200
     assert "Parse error" in response.text
+
+
+def test_api_convert_resolves_non_a01_trigger_end_to_end():
+    # Proves the parse -> pipeline -> route stack resolves a non-A01 ADT trigger
+    # via the registry, not just the mapper in isolation.
+    response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a03_basic.hl7")})
+    assert response.status_code == 200
+    body = response.json()
+    encounter = next(e["resource"] for e in body["bundle"]["entry"] if e["resource"]["resourceType"] == "Encounter")
+    assert encounter["status"] == "finished"

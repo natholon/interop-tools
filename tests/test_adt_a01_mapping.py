@@ -3,7 +3,7 @@ from pathlib import Path
 from fhir.resources.R4B.bundle import Bundle
 
 from app.hl7.parser import parse_message
-from app.mappings.adt_a01 import AdtA01Mapper
+from app.mappings.adt import AdtA01Mapper
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

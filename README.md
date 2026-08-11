@@ -4,9 +4,9 @@ Tools to assist with common HL7 processes - transformation, fhir conversion, val
 
 ## Status
 
-**Implemented:** HL7v2 ADT^A01 → FHIR R4 Bundle (Patient + Encounter) conversion, via a web UI and a JSON API.
+**Implemented:** HL7v2 ADT → FHIR R4 Bundle (Patient + Encounter) conversion for the core ADT workflow — A01 Admit, A02 Transfer, A03 Discharge, A04 Register, and A08 Update patient information — via a web UI and a JSON API.
 
-**Planned next:** SIU (scheduling) message conversion, then broader transformation, validation, deduplication, test-data generation, and mapping tooling across HL7v2/FHIR/CDA/C-CDA.
+**Planned next:** remaining ADT trigger events (e.g. A05 pre-admit, A11/A13 cancel), then SIU (scheduling) message conversion, then broader transformation, validation, deduplication, test-data generation, and mapping tooling across HL7v2/FHIR/CDA/C-CDA.
 
 ## Installation (Windows / PowerShell)
 

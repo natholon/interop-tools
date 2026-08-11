@@ -1,9 +1,13 @@
 from app.hl7.errors import MappingError
-from app.mappings.adt_a01 import AdtA01Mapper
+from app.mappings.adt import AdtA01Mapper, AdtA02Mapper, AdtA03Mapper, AdtA04Mapper, AdtA08Mapper
 from app.mappings.base import MessageMapper
 
 _MAPPERS: dict[tuple[str, str], MessageMapper] = {
     ("ADT", "A01"): AdtA01Mapper(),
+    ("ADT", "A02"): AdtA02Mapper(),
+    ("ADT", "A03"): AdtA03Mapper(),
+    ("ADT", "A04"): AdtA04Mapper(),
+    ("ADT", "A08"): AdtA08Mapper(),
 }
 
 
