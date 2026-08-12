@@ -13,10 +13,13 @@ _EXPECTED_TYPES = {
     ("SIU", "S13"),
     ("SIU", "S14"),
     ("SIU", "S15"),
+    ("ORU", "R01"),
+    ("ORU", "R30"),
+    ("ORU", "R40"),
 }
 
 
-def test_list_supported_types_returns_all_nine_combinations():
+def test_list_supported_types_returns_all_twelve_combinations():
     types = {(msg_type, trigger) for msg_type, trigger, _label in list_supported_types()}
     assert types == _EXPECTED_TYPES
 

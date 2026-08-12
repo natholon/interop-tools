@@ -7,6 +7,7 @@ from app.generators.adt import (
     generate_adt_a04,
     generate_adt_a08,
 )
+from app.generators.oru import generate_oru_r01, generate_oru_r30, generate_oru_r40
 from app.generators.siu import generate_siu_s12, generate_siu_s13, generate_siu_s14, generate_siu_s15
 from app.hl7.errors import MappingError
 
@@ -20,6 +21,9 @@ _GENERATORS = {
     ("SIU", "S13"): (generate_siu_s13, "SIU^S13 - Reschedule"),
     ("SIU", "S14"): (generate_siu_s14, "SIU^S14 - Modify"),
     ("SIU", "S15"): (generate_siu_s15, "SIU^S15 - Cancel"),
+    ("ORU", "R01"): (generate_oru_r01, "ORU^R01 - Observation Result"),
+    ("ORU", "R30"): (generate_oru_r30, "ORU^R30 - Point-of-Care Result (New Order)"),
+    ("ORU", "R40"): (generate_oru_r40, "ORU^R40 - Point-of-Care Result (No New Order)"),
 }
 
 

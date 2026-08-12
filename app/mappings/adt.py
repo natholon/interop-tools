@@ -11,7 +11,6 @@ from fhir.resources.R4B.encounter import (
     EncounterLocation,
     EncounterParticipant,
 )
-from fhir.resources.R4B.identifier import Identifier
 from fhir.resources.R4B.period import Period
 from fhir.resources.R4B.reference import Reference
 
@@ -19,12 +18,17 @@ from app.fhir_models.builders import parse_hl7_datetime
 from app.hl7.errors import MappingError, MissingSegmentError
 from app.hl7.parser import field_str, require_segment
 from app.mappings.base import MessageMapper
-from app.mappings.common import assemble_bundle, build_patient, location_display, person_display
+from app.mappings.common import (
+    assemble_bundle,
+    build_patient,
+    build_visit_identifier,
+    location_display,
+    person_display,
+    resolve_encounter_class,
+)
 
-_ENCOUNTER_CLASS_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ActCode"
 _PARTICIPATION_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"
 _DISCHARGE_DISPOSITION_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0112"
-_PATIENT_CLASS_MAP = {"I": "IMP", "O": "AMB", "E": "EMER", "P": "PRENC"}
 
 
 def discharge_datetime(pv1, evn) -> str | None:
@@ -41,20 +45,16 @@ def build_encounter_core(pv1, evn, patient_id: str, status: str) -> Encounter:
     """Shared PV1/EVN -> Encounter mapping: class, identifier, current location,
     attending participant, and admit/discharge period. `status` is supplied by
     the caller since it depends on which trigger event is being mapped."""
-    encounter_id = str(uuid.uuid4())
-    patient_class = field_str(pv1, 2).strip().upper()
-    class_code = _PATIENT_CLASS_MAP.get(patient_class, "AMB")
-
     encounter = Encounter(
-        id=encounter_id,
+        id=str(uuid.uuid4()),
         status=status,
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
-        class_fhir=Coding(system=_ENCOUNTER_CLASS_SYSTEM, code=class_code),
+        class_fhir=resolve_encounter_class(pv1),
     )
 
-    visit_number = field_str(pv1, 19)
-    if visit_number:
-        encounter.identifier = [Identifier(system="urn:hl7-tools:visit-number", value=visit_number)]
+    visit_identifier = build_visit_identifier(pv1)
+    if visit_identifier:
+        encounter.identifier = [visit_identifier]
 
     current_location_display = location_display(pv1, 3)
     if current_location_display:

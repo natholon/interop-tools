@@ -75,12 +75,23 @@ def test_api_convert_resolves_siu_message_end_to_end():
     assert appointment["status"] == "booked"
 
 
+def test_api_convert_resolves_oru_message_end_to_end():
+    # Proves the parse -> pipeline -> route stack resolves a third HL7 message
+    # *type* (ORU, with its OBR/OBX positional grouping) via the registry.
+    response = client.post("/api/convert", json={"hl7_text": read_fixture("oru_r01_basic.hl7")})
+    assert response.status_code == 200
+    body = response.json()
+    report_count = sum(1 for e in body["bundle"]["entry"] if e["resource"]["resourceType"] == "DiagnosticReport")
+    assert report_count == 2
+
+
 def test_index_renders_message_type_dropdown():
     response = client.get("/")
     assert response.status_code == 200
     assert 'id="message-type-select"' in response.text
     assert "ADT^A01 - Admit" in response.text
     assert "SIU^S12 - New Appointment" in response.text
+    assert "ORU^R01" in response.text
 
 
 def test_api_generate_returns_convertible_message():

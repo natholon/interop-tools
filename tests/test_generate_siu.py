@@ -76,7 +76,26 @@ def test_sch_filler_id_varies_across_seeds(generator_fn):
 
 @pytest.mark.parametrize("generator_fn, trigger_event", _ALL_GENERATORS)
 def test_round_trips_through_real_converter(generator_fn, trigger_event):
+    allowed_types = {"Patient", "Appointment", "Practitioner", "Location", "Device"}
     for seed in range(1000, 1020):
         bundle = convert_hl7_to_bundle(generator_fn(random.Random(seed)))
         resource_types = {e.resource.get_resource_type() for e in bundle.entry}
-        assert resource_types == {"Patient", "Appointment"}
+        assert {"Patient", "Appointment"} <= resource_types
+        assert resource_types <= allowed_types
+
+
+@pytest.mark.parametrize("generator_fn", [g for g, _ in _ALL_GENERATORS])
+def test_aip_ail_aig_materialize_as_real_resources_across_seeds(generator_fn):
+    # AIP/AIL/AIG are each independently ~50% present in the generator, so
+    # across enough seeds every one of Practitioner/Location/Device should
+    # show up at least once, each referenced from an Appointment.participant
+    # by urn:uuid - not left as display-only text.
+    seen_types = set()
+    for seed in range(60):
+        bundle = convert_hl7_to_bundle(generator_fn(random.Random(seed)))
+        by_type = {e.resource.get_resource_type(): e.resource for e in bundle.entry}
+        appointment = by_type["Appointment"]
+        for participant in appointment.participant:
+            assert participant.actor.reference is not None, "participant actor must be a real reference, not display text"
+        seen_types.update(by_type.keys())
+    assert {"Practitioner", "Location", "Device"} <= seen_types

@@ -6,15 +6,25 @@ from fhir.resources.R4B.appointment import Appointment, AppointmentParticipant
 from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
+from fhir.resources.R4B.device import Device, DeviceDeviceName
 from fhir.resources.R4B.extension import Extension
 from fhir.resources.R4B.identifier import Identifier
+from fhir.resources.R4B.location import Location
 from fhir.resources.R4B.reference import Reference
+from fhir.resources.R4B.resource import Resource
 
 from app.fhir_models.builders import build_codeable_concept_from_cwe, parse_hl7_datetime
 from app.hl7.errors import MappingError
 from app.hl7.parser import field_str, optional_segments, require_segment
 from app.mappings.base import MessageMapper
-from app.mappings.common import assemble_bundle, build_patient, location_display, person_display
+from app.mappings.common import (
+    assemble_bundle,
+    build_location_from_pl,
+    build_patient,
+    build_practitioner_from_xcn,
+    location_display,
+    person_display,
+)
 
 _PARTICIPATION_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"
 _TRIGGER_EVENT_EXTENSION_URL = "urn:hl7-tools:siu-trigger-event"
@@ -63,39 +73,96 @@ def _build_identifiers(sch) -> list[Identifier]:
     return identifiers
 
 
-def _build_participants(patient, aip_segments, ail_segments, aig_segments) -> list[AppointmentParticipant]:
+_AIG_LOCATION_TYPE_CODES = {"LOCATION", "ROOM"}
+
+
+def _build_aig_resource(aig) -> tuple[Resource, str] | None:
+    """AIG ("general resource") has no single fixed FHIR target in the
+    official mapping - the real resource type depends on what AIG-4
+    (Resource Type, a local/user-defined table) actually says the resource
+    is. We branch on it: a location-ish type code builds a Location, anything
+    else - the common case, equipment - builds a Device, preserving AIG-4's
+    coded value as Device.type so that category information survives (it's
+    otherwise only used to pick the branch and would be lost). Built directly
+    here rather than via build_location_from_pl/build_practitioner_from_xcn:
+    AIG-3/4 is CWE-shaped, not PL, so reusing a PL-scoped helper here would
+    work only by coincidence (the first two CWE components happening to line
+    up with PL's facility/room), not by design. Returns None when AIG-3 is
+    empty; otherwise the resource plus a display string for its participant
+    Reference."""
+    resource_id = field_str(aig, 3, component=1)
+    resource_display = field_str(aig, 3, component=2) or resource_id
+    if not resource_display:
+        return None
+    resource_type_code = field_str(aig, 4, component=1).strip().upper()
+    if resource_type_code in _AIG_LOCATION_TYPE_CODES:
+        location = Location(id=str(uuid.uuid4()), name=resource_display)
+        if resource_id:
+            location.identifier = [Identifier(system="urn:hl7-tools:location-id", value=resource_id)]
+        return location, resource_display
+
+    device = Device(
+        id=str(uuid.uuid4()), deviceName=[DeviceDeviceName(name=resource_display, type="user-friendly-name")]
+    )
+    if resource_id:
+        device.identifier = [Identifier(system="urn:hl7-tools:device-id", value=resource_id)]
+    resource_type = build_codeable_concept_from_cwe(aig, 4)
+    if resource_type:
+        device.type = resource_type
+    return device, resource_display
+
+
+def _build_participants(
+    patient, aip_segments, ail_segments, aig_segments
+) -> tuple[list[AppointmentParticipant], list[Resource]]:
     """Patient first (referencing the real Patient resource), then one entry
     per AIP (personnel), AIL (location), and AIG (general resource/equipment)
-    segment - all display-only references, no separate resources
-    materialized for them. Only AIP gets a `type` (ATND); the participant
-    value set has no fitting code for patient/location/equipment roles."""
+    segment - each materialized as a real Practitioner/Location/Device
+    resource (per the official AIP->Practitioner and AIL->Location v2-to-FHIR
+    mappings) rather than a display-only reference, and returned alongside
+    the participant list so the caller can add them to the Bundle. Each
+    actor Reference carries both `reference` (the real resource) and
+    `display` (human-readable text) - FHIR's own guidance is that `display`
+    SHOULD be populated even when `reference` is present, for consumers that
+    render participant lists without resolving the Bundle. Only AIP gets a
+    `type` (ATND); the participant-type value set has no fitting code for
+    patient/location/equipment roles."""
     participants = [
         AppointmentParticipant(status="accepted", actor=Reference(reference=f"urn:uuid:{patient.id}")),
     ]
-    for aip in aip_segments:
-        display = person_display(aip, 3)
-        if not display:
-            continue
+    extra_resources: list[Resource] = []
+
+    def add_participant(resource: Resource | None, display: str, type_coding: Coding | None = None) -> None:
+        if resource is None:
+            return
+        extra_resources.append(resource)
+        # display is omitted (not passed as "") when unresolvable: FHIR's
+        # Reference.display must be a non-empty string when present.
+        actor_kwargs = {"reference": f"urn:uuid:{resource.id}"}
+        if display:
+            actor_kwargs["display"] = display
         participants.append(
             AppointmentParticipant(
                 status="accepted",
-                actor=Reference(display=display),
-                type=[CodeableConcept(coding=[Coding(system=_PARTICIPATION_TYPE_SYSTEM, code="ATND")])],
+                actor=Reference(**actor_kwargs),
+                type=[CodeableConcept(coding=[type_coding])] if type_coding else None,
             )
         )
+
+    for aip in aip_segments:
+        add_participant(
+            build_practitioner_from_xcn(aip, 3),
+            person_display(aip, 3),
+            Coding(system=_PARTICIPATION_TYPE_SYSTEM, code="ATND"),
+        )
     for ail in ail_segments:
-        display = location_display(ail, 3)
-        if not display:
-            continue
-        participants.append(AppointmentParticipant(status="accepted", actor=Reference(display=display)))
+        add_participant(build_location_from_pl(ail, 3), location_display(ail, 3))
     for aig in aig_segments:
-        resource_id = field_str(aig, 3, component=2) or field_str(aig, 3, component=1)
-        resource_type = field_str(aig, 4, component=2) or field_str(aig, 4, component=1)
-        display = " ".join(part for part in (resource_id, f"({resource_type})" if resource_type else "") if part)
-        if not display:
-            continue
-        participants.append(AppointmentParticipant(status="accepted", actor=Reference(display=display)))
-    return participants
+        result = _build_aig_resource(aig)
+        if result is not None:
+            add_participant(*result)
+
+    return participants, extra_resources
 
 
 def build_appointment_core(
@@ -103,22 +170,20 @@ def build_appointment_core(
     tq1_segments,
     nte_segments,
     ais_segments,
-    aig_segments,
-    ail_segments,
-    aip_segments,
-    patient,
+    participants: list[AppointmentParticipant],
     status: str,
     start: str | None,
     end: str | None,
     trigger_event: str,
 ) -> Appointment:
-    """Shared SCH/TQ1/NTE/AIS/AIG/AIL/AIP -> Appointment mapping. `status`,
-    `start`, and `end` are supplied by the caller since they depend on which
-    trigger event is being mapped."""
+    """Shared SCH/TQ1/NTE/AIS -> Appointment mapping. `participants` is built
+    once by the caller (to_bundle) since it's identical regardless of which
+    trigger event is being mapped; `status`, `start`, and `end` are supplied
+    by the caller since those depend on the trigger event."""
     appointment = Appointment(
         id=str(uuid.uuid4()),
         status=status,
-        participant=_build_participants(patient, aip_segments, ail_segments, aig_segments),
+        participant=participants,
         extension=[Extension(url=_TRIGGER_EVENT_EXTENSION_URL, valueCode=trigger_event)],
     )
 
@@ -158,16 +223,15 @@ def build_appointment_core(
 class BaseSiuMapper(MessageMapper):
     """Shared orchestration for SIU trigger events: require MSH/SCH/PID, read
     the optional repeating segment groups (TQ1, NTE, AIS, AIG, AIL, AIP),
-    build the Patient, delegate Appointment construction to the subclass
-    (the part that actually differs per trigger event), then assemble the
+    build the Patient and the participant list (identical regardless of
+    trigger event), delegate Appointment construction to the subclass (the
+    part that actually differs per trigger event), then assemble the
     Bundle."""
 
     message_type = "SIU"
 
     @abstractmethod
-    def build_appointment(
-        self, sch, tq1_segments, nte_segments, ais_segments, aig_segments, ail_segments, aip_segments, patient
-    ) -> Appointment:
+    def build_appointment(self, sch, tq1_segments, nte_segments, ais_segments, participants) -> Appointment:
         ...
 
     def to_bundle(self, message: hl7.Message) -> Bundle:
@@ -182,16 +246,16 @@ class BaseSiuMapper(MessageMapper):
         aip_segments = optional_segments(message, "AIP")
 
         patient = build_patient(pid)
-        appointment = self.build_appointment(
-            sch, tq1_segments, nte_segments, ais_segments, aig_segments, ail_segments, aip_segments, patient
-        )
+        participants, extra_resources = _build_participants(patient, aip_segments, ail_segments, aig_segments)
+
+        appointment = self.build_appointment(sch, tq1_segments, nte_segments, ais_segments, participants)
         # No persisted "original booking time" exists in this stateless converter,
         # so `created` is best-effort: the message's own timestamp.
         created = parse_hl7_datetime(field_str(msh, 7))
         if created:
             appointment.created = created
 
-        return assemble_bundle(msh, patient, appointment)
+        return assemble_bundle(msh, patient, appointment, *extra_resources)
 
 
 class _BookedSiuMapper(BaseSiuMapper):
@@ -201,9 +265,7 @@ class _BookedSiuMapper(BaseSiuMapper):
     which trigger_event lands in the extension. Requires a resolvable start
     time (TQ1 or SCH-11); raises MappingError otherwise."""
 
-    def build_appointment(
-        self, sch, tq1_segments, nte_segments, ais_segments, aig_segments, ail_segments, aip_segments, patient
-    ) -> Appointment:
+    def build_appointment(self, sch, tq1_segments, nte_segments, ais_segments, participants) -> Appointment:
         start, end = resolve_appointment_timing(sch, tq1_segments)
         if not start:
             raise MappingError(
@@ -214,10 +276,7 @@ class _BookedSiuMapper(BaseSiuMapper):
             tq1_segments,
             nte_segments,
             ais_segments,
-            aig_segments,
-            ail_segments,
-            aip_segments,
-            patient,
+            participants,
             status="booked",
             start=start,
             end=end,
@@ -249,19 +308,14 @@ class SiuS15Mapper(BaseSiuMapper):
 
     trigger_event = "S15"
 
-    def build_appointment(
-        self, sch, tq1_segments, nte_segments, ais_segments, aig_segments, ail_segments, aip_segments, patient
-    ) -> Appointment:
+    def build_appointment(self, sch, tq1_segments, nte_segments, ais_segments, participants) -> Appointment:
         start, end = resolve_appointment_timing(sch, tq1_segments)
         return build_appointment_core(
             sch,
             tq1_segments,
             nte_segments,
             ais_segments,
-            aig_segments,
-            ail_segments,
-            aip_segments,
-            patient,
+            participants,
             status="cancelled",
             start=start,
             end=end,

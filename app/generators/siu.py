@@ -16,6 +16,7 @@ from app.generators.base import (
     random_appointment_type_code,
     random_equipment,
     random_identifier,
+    random_location,
     random_location_field,
     random_nte_comment,
     random_physician_xcn,
@@ -82,10 +83,20 @@ def _resource_group_segments(rng: random.Random) -> list[str]:
         code, display = random_service(rng)
         resource_segments.append(segment("AIS", {1: "1", 3: f"{code}^{display}^LOCAL"}, 12))
     if maybe(rng, p=0.5):
-        resource_id, display = random_equipment(rng)
-        resource_segments.append(
-            segment("AIG", {1: "1", 3: f"{resource_id}^{display}^LOCAL", 4: "EQUIPMENT^Equipment^LOCAL"}, 14)
-        )
+        # AIG-4 (Resource Type) drives which FHIR resource app.mappings.siu
+        # materializes it as - mostly equipment (-> Device), occasionally a
+        # location-typed general resource (-> Location), to exercise both
+        # branches of _build_aig_resource rather than only ever hitting one.
+        if maybe(rng, p=0.2):
+            facility, room = random_location(rng)
+            resource_segments.append(
+                segment("AIG", {1: "1", 3: f"{facility}^{room}^LOCAL", 4: "LOCATION^Location^LOCAL"}, 14)
+            )
+        else:
+            resource_id, display = random_equipment(rng)
+            resource_segments.append(
+                segment("AIG", {1: "1", 3: f"{resource_id}^{display}^LOCAL", 4: "EQUIPMENT^Equipment^LOCAL"}, 14)
+            )
     if maybe(rng, p=0.5):
         resource_segments.append(segment("AIL", {1: "1", 3: random_location_field(rng)}, 12))
     if maybe(rng, p=0.5):

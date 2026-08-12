@@ -22,11 +22,15 @@ def test_basic_fixture_maps_every_field():
     bundle = SiuS12Mapper().to_bundle(message)
 
     assert bundle.type == "collection"
-    assert len(bundle.entry) == 2
+    # Patient + Appointment + materialized Practitioner (AIP) + Location (AIL) + Device (AIG)
+    assert len(bundle.entry) == 5
 
     entries = _entries_by_type(bundle)
     patient = entries["Patient"].resource
     appointment = entries["Appointment"].resource
+    practitioner = entries["Practitioner"].resource
+    location = entries["Location"].resource
+    device = entries["Device"].resource
 
     assert appointment.status == "booked"
     assert appointment.start.isoformat() == "2026-09-01T09:00:00+00:00"
@@ -43,16 +47,32 @@ def test_basic_fixture_maps_every_field():
     assert appointment.extension[0].url == "urn:hl7-tools:siu-trigger-event"
     assert appointment.extension[0].valueCode == "S12"
 
-    # patient participant references the real Patient resource; the rest are display-only
+    # The materialized Practitioner/Location/Device resources themselves
+    assert practitioner.name[0].family == "Smith"
+    assert practitioner.name[0].given == ["John"]
+    assert location.name == "W456 101"
+    assert device.deviceName[0].name == "Portable X-Ray"
+    assert device.identifier[0].value == "EQ001"
+    assert device.type.coding[0].code == "EQUIPMENT"  # AIG-4 category, preserved not just used to pick the branch
+
+    # patient participant references the real Patient resource with a display;
+    # AIP/AIL/AIG participants reference the real materialized resources above
+    # (not display-only text) but still carry a human-readable `display` too,
+    # per FHIR's own guidance that Reference.display SHOULD be set even when
+    # `reference` is present.
     assert len(appointment.participant) == 4
-    patient_participant, practitioner, location, equipment = appointment.participant
+    patient_participant, practitioner_participant, location_participant, device_participant = appointment.participant
     assert patient_participant.actor.reference == f"urn:uuid:{patient.id}"
     assert patient_participant.type is None
-    assert practitioner.actor.display == "Smith, John"
-    assert practitioner.type[0].coding[0].code == "ATND"
-    assert location.actor.display == "W456 101"
-    assert location.type is None
-    assert equipment.actor.display == "Portable X-Ray (Equipment)"
+    assert practitioner_participant.actor.reference == f"urn:uuid:{practitioner.id}"
+    assert practitioner_participant.actor.display == "Smith, John"
+    assert practitioner_participant.type[0].coding[0].code == "ATND"
+    assert location_participant.actor.reference == f"urn:uuid:{location.id}"
+    assert location_participant.actor.display == "W456 101"
+    assert location_participant.type is None
+    assert device_participant.actor.reference == f"urn:uuid:{device.id}"
+    assert device_participant.actor.display == "Portable X-Ray"
+    assert device_participant.type is None
     assert all(p.status == "accepted" for p in appointment.participant)
 
 
@@ -87,6 +107,45 @@ def test_missing_timing_raises_mapping_error():
     message = parse_message(read_fixture("siu_s12_missing_timing.hl7"))
     with pytest.raises(MappingError):
         SiuS12Mapper().to_bundle(message)
+
+
+def test_aig_with_location_type_code_materializes_as_location_not_device():
+    # AIG has no single fixed FHIR target - it depends on AIG-4 (Resource Type).
+    # A location-typed AIG-4 must produce a Location, not the default Device.
+    message = parse_message(read_fixture("siu_s12_aig_location.hl7"))
+    bundle = SiuS12Mapper().to_bundle(message)
+    entries = _entries_by_type(bundle)
+
+    assert "Device" not in entries
+    location = entries["Location"].resource
+    assert location.name == "Operating Room 3"
+    assert location.identifier[0].value == "OR3"
+    appointment = entries["Appointment"].resource
+    aig_participant = appointment.participant[-1]
+    assert aig_participant.actor.reference == f"urn:uuid:{location.id}"
+    assert aig_participant.actor.display == "Operating Room 3"
+
+
+def test_aip_with_id_only_materializes_with_id_as_display():
+    # An XCN field with only an id component (no family/given) must still
+    # produce a valid, non-empty Reference.display - person_display falls
+    # back to the id when there's no name to show. Regression test for a bug
+    # caught by code review: build_practitioner_from_xcn materializes a
+    # Practitioner whenever id/family/given is present, but person_display
+    # used to only look at family/given, producing Reference(display="")
+    # (which FHIR rejects) whenever a segment supplied an id with no name.
+    message = parse_message(read_fixture("siu_s12_aip_id_only.hl7"))
+    bundle = SiuS12Mapper().to_bundle(message)
+    entries = _entries_by_type(bundle)
+
+    practitioner = entries["Practitioner"].resource
+    assert practitioner.identifier[0].value == "5678"
+    assert practitioner.name is None
+
+    appointment = entries["Appointment"].resource
+    aip_participant = appointment.participant[-1]
+    assert aip_participant.actor.reference == f"urn:uuid:{practitioner.id}"
+    assert aip_participant.actor.display == "5678"
 
 
 def test_partial_tq1_falls_back_to_sch11_per_field():

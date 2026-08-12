@@ -37,6 +37,34 @@ def optional_segments(message: hl7.Message, name: str) -> list:
         return []
 
 
+def group_segments_by_leader(message: hl7.Message, leader_name: str, member_names) -> list[tuple]:
+    """Walk the message's segments in order and group them by a repeating
+    leader-then-members structure (e.g. ORU's OBR followed by its OBX
+    result segments; a future ORM's ORC followed by its OBR). Every
+    occurrence of `leader_name` starts a new group; each subsequent segment
+    whose name is in `member_names` is appended to that group until the next
+    leader (or end of message). Segments before the first leader, or whose
+    name is neither the leader nor a member, are skipped - `optional_segments`
+    (a flat "give me every segment with this name" lookup) is not sufficient
+    here because which OBX belongs to which OBR is meaningful: it determines
+    which Observations a given DiagnosticReport should reference.
+
+    Returns a list of (leader_segment, [member_segments]) tuples, one per
+    leader occurrence, in message order.
+    """
+    member_names = set(member_names)
+    groups: list[tuple] = []
+    current_members: list | None = None
+    for raw_segment in message:
+        name = field_str(raw_segment, 0)
+        if name == leader_name:
+            current_members = []
+            groups.append((raw_segment, current_members))
+        elif name in member_names and current_members is not None:
+            current_members.append(raw_segment)
+    return groups
+
+
 def component_str(repetition_or_str, component: int = 1) -> str:
     """Return a 1-based component from a field repetition.
 

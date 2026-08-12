@@ -73,6 +73,34 @@ _NTE_COMMENTS = [
     "Wheelchair access needed",
 ]
 
+# (code, display, unit, reference_low, reference_high) - numeric lab tests.
+_OBSERVATION_TESTS = [
+    ("WBC", "White Blood Cell Count", "10*3/uL", 4.0, 11.0),
+    ("HGB", "Hemoglobin", "g/dL", 12.0, 16.0),
+    ("GLUCOSE", "Glucose", "mg/dL", 70, 100),
+    ("NA", "Sodium", "mmol/L", 136, 145),
+    ("K", "Potassium", "mmol/L", 3.5, 5.1),
+    ("CREAT", "Creatinine", "mg/dL", 0.6, 1.3),
+]
+# (code, display) - free-text/coded (non-numeric) results, for OBX-2 value-type variety.
+_TEXT_OBSERVATION_TESTS = [
+    ("URINE-CULTURE", "Urine Culture Result"),
+    ("STREP-A", "Strep A Rapid Test"),
+    ("COVID-19", "SARS-CoV-2 Result"),
+]
+_TEXT_RESULT_VALUES = ["Negative", "Positive", "Not detected", "Inconclusive"]
+_REPORT_PANELS = [
+    ("CBC", "Complete Blood Count"),
+    ("BMP", "Basic Metabolic Panel"),
+    ("GLU", "Glucose Panel"),
+    ("MICRO", "Microbiology Panel"),
+]
+_ABNORMAL_FLAGS = ["N", "H", "L", "A"]
+# Codes this project's OBX-11/OBR-25 result-status mapping actually recognizes
+# (see app.mappings.oru._RESULT_STATUS_MAP) - excludes D/W (deleted/wrong
+# patient), which aren't realistic defaults for generated sample data.
+_RESULT_STATUS_CODES = ["F", "P", "C", "A"]
+
 
 def maybe(rng: random.Random, p: float = 0.6) -> bool:
     """True with probability p. The one place "should this optional field be
@@ -182,6 +210,30 @@ def random_nte_comment(rng: random.Random) -> str:
     return rng.choice(_NTE_COMMENTS)
 
 
+def random_observation_test(rng: random.Random) -> tuple[str, str, str, float, float]:
+    return rng.choice(_OBSERVATION_TESTS)
+
+
+def random_text_observation_test(rng: random.Random) -> tuple[str, str]:
+    return rng.choice(_TEXT_OBSERVATION_TESTS)
+
+
+def random_text_result_value(rng: random.Random) -> str:
+    return rng.choice(_TEXT_RESULT_VALUES)
+
+
+def random_report_panel(rng: random.Random) -> tuple[str, str]:
+    return rng.choice(_REPORT_PANELS)
+
+
+def random_abnormal_flag(rng: random.Random) -> str:
+    return rng.choice(_ABNORMAL_FLAGS)
+
+
+def random_result_status(rng: random.Random) -> str:
+    return rng.choice(_RESULT_STATUS_CODES)
+
+
 def segment(name: str, fields: dict[int, str], count: int) -> str:
     """Build a segment as a list of positional fields joined with '|', the
     same programmatic construction used for every test fixture in this repo
@@ -226,3 +278,18 @@ def generate_pid_segment(rng: random.Random) -> str:
     if maybe(rng):
         fields[13] = random_phone(rng)
     return segment("PID", fields, 13)
+
+
+def build_minimal_pv1_fields(rng: random.Random, patient_class: str) -> dict:
+    """The PV1 fields common to every generator that includes a PV1 segment:
+    PV1-1 (set id), PV1-2 (patient class), optional PV1-7 (attending
+    physician) and PV1-19 (visit number). Shared by app.generators.adt and
+    app.generators.oru so their PV1 generation doesn't independently drift -
+    callers add any further trigger-specific fields (location, discharge
+    time, etc.) on top of the returned dict."""
+    fields = {1: "1", 2: patient_class}
+    if maybe(rng):
+        fields[7] = random_physician_xcn(rng)
+    if maybe(rng):
+        fields[19] = f"V{random_identifier(rng, 4)}"
+    return fields

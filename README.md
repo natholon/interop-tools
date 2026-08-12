@@ -6,12 +6,13 @@ Tools to assist with common HL7 processes - transformation, fhir conversion, val
 
 **Implemented:**
 - HL7v2 ADT → FHIR R4 Bundle (Patient + Encounter) for the core ADT workflow — A01 Admit, A02 Transfer, A03 Discharge, A04 Register, A08 Update patient information.
-- HL7v2 SIU → FHIR R4 Bundle (Patient + Appointment) for the core scheduling workflow — S12 New booking, S13 Reschedule, S14 Modify, S15 Cancel.
-- A synthetic test-data generator covering all 9 combinations above, with realistic field-level randomization (required fields always populated, optional fields randomly included or omitted), selectable from a dropdown in the web UI or via the JSON API.
+- HL7v2 SIU → FHIR R4 Bundle (Patient + Appointment, plus real Practitioner/Location/Device resources for the appointment's personnel/location/equipment participants) for the core scheduling workflow — S12 New booking, S13 Reschedule, S14 Modify, S15 Cancel.
+- HL7v2 ORU → FHIR R4 Bundle (Patient + optional Encounter + DiagnosticReport + Observation per result, with positional OBR/OBX grouping so each report only references its own results) — R01 Observation result, R30/R40 point-of-care result.
+- A synthetic test-data generator covering all 12 combinations above, with realistic field-level randomization (required fields always populated, optional fields randomly included or omitted), selectable from a dropdown in the web UI or via the JSON API.
 
 Both conversion and generation are available through the same web UI and JSON API.
 
-**Planned next:** remaining ADT trigger events (e.g. A05 pre-admit, A11/A13 cancel), remaining SIU trigger events (e.g. S17 delete, S26 patient did-not-show), then broader transformation, validation, deduplication, and mapping tooling across HL7v2/FHIR/CDA/C-CDA.
+**Planned next:** remaining ADT trigger events (e.g. A05 pre-admit, A11/A13 cancel), remaining SIU trigger events (e.g. S17 delete, S26 patient did-not-show), then broader transformation, validation, deduplication, and mapping tooling across HL7v2/FHIR/CDA/C-CDA (including MDM, planned as TXA → DocumentReference with content referenced via a Binary resource).
 
 ## Installation (Windows / PowerShell)
 
