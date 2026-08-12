@@ -12,10 +12,13 @@ from fhir.resources.R4B.reference import Reference
 from app.cda.common import build_codeable_concept_from_cd, parse_partial_ts
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
 
+# Public (not module-private) - reused by app/cda/generator.py (to build
+# realistic synthetic Problems entries) and app/cda/validation.py (to walk
+# a document's Problems section for its own rules), not just this module.
 SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.5.1"
-_CONCERN_ACT_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.3"
-_PROBLEM_OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.4"
-_STATUS_OBSERVATION_CODE = "33999-4"  # LOINC "Status"
+CONCERN_ACT_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.3"
+PROBLEM_OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.4"
+STATUS_OBSERVATION_CODE = "33999-4"  # LOINC "Status"
 
 _CLINICAL_STATUS_SYSTEM = "http://terminology.hl7.org/CodeSystem/condition-clinical"
 # Two SEPARATE vocabularies feed clinicalStatus, checked in priority order -
@@ -31,7 +34,7 @@ _ACT_STATUS_TO_CLINICAL_STATUS = {
 }
 # Disclosed, extensible - not IG-published as an exhaustive table; covers
 # the common SNOMED CT problem-status concepts.
-_STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS = {
+STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS = {
     "55561003": "active",
     "73425007": "inactive",
     "413322009": "resolved",
@@ -46,11 +49,11 @@ def _resolve_clinical_status(act, problem_observation) -> CodeableConcept | None
         if status_observation is None:
             continue
         code_element = find_child(status_observation, "code")
-        if code_element is None or code_element.get("code") != _STATUS_OBSERVATION_CODE:
+        if code_element is None or code_element.get("code") != STATUS_OBSERVATION_CODE:
             continue
         value_element = find_child(status_observation, "value")
         value_code = value_element.get("code") if value_element is not None else None
-        mapped = _STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS.get(value_code) if value_code else None
+        mapped = STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS.get(value_code) if value_code else None
         if mapped:
             return CodeableConcept(coding=[Coding(system=_CLINICAL_STATUS_SYSTEM, code=mapped)])
 
@@ -98,13 +101,13 @@ def build_conditions(section, patient_id: str) -> list[Condition]:
     conditions = []
     for entry in find_all(section, "entry"):
         act = find_child(entry, "act")
-        if act is None or not has_template_id(act, _CONCERN_ACT_TEMPLATE_ID):
+        if act is None or not has_template_id(act, CONCERN_ACT_TEMPLATE_ID):
             continue
         for relationship in find_all(act, "entryRelationship"):
             if relationship.get("typeCode") != "SUBJ":
                 continue
             observation = find_child(relationship, "observation")
-            if observation is None or not has_template_id(observation, _PROBLEM_OBSERVATION_TEMPLATE_ID):
+            if observation is None or not has_template_id(observation, PROBLEM_OBSERVATION_TEMPLATE_ID):
                 continue
             condition = _build_condition(act, observation, patient_id)
             if condition is not None:

@@ -24,6 +24,7 @@ _EXPECTED_TYPES = {
     ("MDM", "T02"),
     ("MDM", "T04"),
     ("MDM", "T06"),
+    ("CDA", "CCD"),
 }
 
 

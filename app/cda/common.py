@@ -46,7 +46,7 @@ _OID_TO_FHIR_SYSTEM = {
     "2.16.840.1.113883.6.88": "http://www.nlm.nih.gov/research/umls/rxnorm",
     "2.16.840.1.113883.6.90": "http://hl7.org/fhir/sid/icd-10-cm",
 }
-_CD_FALLBACK_SYSTEM = "urn:hl7-tools:coded-value"
+_CD_FALLBACK_SYSTEM = "urn:interop-tools:coded-value"
 
 _TELECOM_SCHEME_TO_SYSTEM = {"tel": "phone", "mailto": "email", "fax": "fax"}
 # A representative subset of HL7 AddressUse/TelecomUse codes - disclosed,
@@ -121,7 +121,7 @@ def _build_identifiers(id_elements, fallback_system: str) -> list[Identifier]:
 
 
 def _build_patient_identifiers(patient_role) -> list[Identifier]:
-    return _build_identifiers(find_all(patient_role, "id"), "urn:hl7-tools:cda-patient-id")
+    return _build_identifiers(find_all(patient_role, "id"), "urn:interop-tools:cda-patient-id")
 
 
 def _build_patient_names(patient_element) -> list[HumanName]:
@@ -240,7 +240,10 @@ _DEFAULT_ENCOUNTER_CLASS = "AMB"
 # (2.16.840.1.113883.5.4), the same source vocabulary FHIR's own
 # Encounter.class binding (v3-ActCode) mirrors - a genuine near-direct
 # mapping, not a guess, with a disclosed default when absent/unrecognized.
-_RECOGNIZED_ENCOUNTER_CLASSES = {"AMB", "EMER", "IMP", "ACUTE", "NONAC", "PRENC", "SS", "VR"}
+# Public (not module-private) - reused by app/cda/validation.py so its
+# "unrecognized encounter class" rule can never drift from what this
+# mapper actually treats as recognized.
+RECOGNIZED_ENCOUNTER_CLASSES = {"AMB", "EMER", "IMP", "ACUTE", "NONAC", "PRENC", "SS", "VR"}
 
 
 def build_encounter_from_header(document, patient_id: str) -> Encounter | None:
@@ -260,7 +263,7 @@ def build_encounter_from_header(document, patient_id: str) -> Encounter | None:
     code_element = find_child(encompassing_encounter, "code")
     if code_element is not None:
         raw_code = (code_element.get("code") or "").strip().upper()
-        if raw_code in _RECOGNIZED_ENCOUNTER_CLASSES:
+        if raw_code in RECOGNIZED_ENCOUNTER_CLASSES:
             class_code = raw_code
 
     encounter = Encounter(
@@ -270,7 +273,7 @@ def build_encounter_from_header(document, patient_id: str) -> Encounter | None:
         class_fhir=Coding(system=_ENCOUNTER_CLASS_SYSTEM, code=class_code),
     )
 
-    identifiers = _build_identifiers(find_all(encompassing_encounter, "id"), "urn:hl7-tools:cda-encounter-id")
+    identifiers = _build_identifiers(find_all(encompassing_encounter, "id"), "urn:interop-tools:cda-encounter-id")
     if identifiers:
         encounter.identifier = identifiers
 
@@ -299,7 +302,7 @@ def assemble_bundle(document, patient: Patient, *resources: Resource) -> Bundle:
     CLAUDE.md)."""
     bundle = Bundle(id=str(uuid.uuid4()), type="collection")
 
-    identifier = _build_identifier(find_child(document, "id"), "urn:hl7-tools:cda-document-id")
+    identifier = _build_identifier(find_child(document, "id"), "urn:interop-tools:cda-document-id")
     if identifier:
         bundle.identifier = identifier
 

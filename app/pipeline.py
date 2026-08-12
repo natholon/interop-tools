@@ -9,8 +9,9 @@ level up, not a reason to branch the UI.
 
 from fhir.resources.R4B.bundle import Bundle
 
-from app.cda.pipeline import convert_cda_to_bundle
-from app.hl7.pipeline import convert_hl7_to_bundle
+from app.cda.pipeline import convert_cda_to_bundle, validate_cda
+from app.hl7.pipeline import convert_hl7_to_bundle, validate_hl7
+from app.validation.models import ValidationReport
 
 _BOM = "﻿"
 
@@ -38,3 +39,16 @@ def convert_to_bundle(raw_text: str) -> Bundle:
     if is_xml(raw_text):
         return convert_cda_to_bundle(raw_text)
     return convert_hl7_to_bundle(raw_text)
+
+
+def validate_any(raw_text: str) -> ValidationReport:
+    """Sniff the input format and delegate to the matching validator,
+    mirroring convert_to_bundle's exact sniff-then-dispatch shape.
+
+    Raises the same exception shapes either underlying validator raises
+    (CdaParseError, or Hl7ParseError/MissingSegmentError for HL7v2) -
+    app/routes/convert.py handles both via one shared dispatch table.
+    """
+    if is_xml(raw_text):
+        return validate_cda(raw_text)
+    return validate_hl7(raw_text)

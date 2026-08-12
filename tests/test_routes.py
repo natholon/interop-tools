@@ -194,17 +194,65 @@ def test_api_convert_cda_malformed_returns_parse_error():
     assert response.json()["error"]["category"] == "Parse error"
 
 
-def test_api_validate_cda_input_returns_unsupported_error():
-    # validate_hl7() has no CDA counterpart yet - pasting XML into Validate
-    # must return a clean "Unsupported" error, not a confusing HL7-parse
-    # failure from trying to parse XML as pipe-delimited text.
+def test_api_validate_resolves_cda_message_end_to_end():
+    # Proves the format-sniff in app/pipeline.py::validate_any actually
+    # routes XML through the same /api/validate endpoint as HL7v2, not just
+    # that the CDA validator works in isolation.
     response = client.post("/api/validate", json={"hl7_text": read_fixture("ccd_basic.xml")})
-    assert response.status_code == 422
+    assert response.status_code == 200
     body = response.json()
-    assert body["error"]["category"] == "Unsupported"
+    assert body["report"]["is_valid"] is True
+    assert body["report"]["message_type"] == "CDA"
+    assert body["report"]["trigger_event"] == "CCD"
 
 
-def test_form_validate_renders_cda_unsupported_error_in_page():
+def test_api_validate_cda_message_with_error_still_returns_200():
+    response = client.post(
+        "/api/validate", json={"hl7_text": read_fixture("ccd_problem_status_observation_overrides_act_status.xml")}
+    )
+    assert response.status_code == 200
+    assert response.json()["report"]["is_valid"] is True
+
+
+def test_api_validate_cda_malformed_returns_parse_error():
+    response = client.post("/api/validate", json={"hl7_text": read_fixture("ccd_malformed.xml")})
+    assert response.status_code == 400
+    assert response.json()["error"]["category"] == "Parse error"
+
+
+def test_form_validate_renders_cda_report_in_page():
     response = client.post("/validate", data={"hl7_text": read_fixture("ccd_basic.xml")})
     assert response.status_code == 200
-    assert "not yet supported" in response.text
+    # Jinja2 autoescapes the JSON in <pre><code>, so check for unescaped words rather than quotes.
+    assert "is_valid" in response.text
+    assert "true" in response.text
+
+
+def test_api_generate_cda_returns_convertible_and_valid_document():
+    # Full-stack smoke test for the CDA generator, mirroring
+    # test_api_generate_returns_convertible_message for HL7v2: generated
+    # text must itself round-trip through /api/convert and /api/validate.
+    response = client.get("/api/generate", params={"message_type": "CDA", "trigger_event": "CCD"})
+    assert response.status_code == 200
+    xml_text = response.json()["hl7_text"]
+    assert xml_text
+
+    convert_response = client.post("/api/convert", json={"hl7_text": xml_text})
+    assert convert_response.status_code == 200
+    assert convert_response.json()["bundle"]["resourceType"] == "Bundle"
+
+    validate_response = client.post("/api/validate", json={"hl7_text": xml_text})
+    assert validate_response.status_code == 200
+    assert validate_response.json()["report"]["is_valid"] is True
+
+
+def test_api_generate_cda_is_reproducible_with_seed():
+    first = client.get("/api/generate", params={"message_type": "CDA", "trigger_event": "CCD", "seed": 5})
+    second = client.get("/api/generate", params={"message_type": "CDA", "trigger_event": "CCD", "seed": 5})
+    assert first.json()["hl7_text"] == second.json()["hl7_text"]
+
+
+def test_index_message_type_dropdown_includes_cda():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "CDA^CCD - Continuity of Care Document" in response.text

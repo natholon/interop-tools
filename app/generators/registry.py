@@ -1,5 +1,6 @@
 import random
 
+from app.cda.generator import generate_ccd
 from app.generators.adt import (
     generate_adt_a01,
     generate_adt_a02,
@@ -43,6 +44,12 @@ _GENERATORS = {
     ("MDM", "T02"): (generate_mdm_t02, "MDM^T02 - New Document"),
     ("MDM", "T04"): (generate_mdm_t04, "MDM^T04 - Document Status Update"),
     ("MDM", "T06"): (generate_mdm_t06, "MDM^T06 - Document Addendum"),
+    # "CCD" stands in for trigger_event even though C-CDA has no real
+    # trigger-event concept - reusing this flat (message_type, trigger)
+    # registry costs zero UI/route changes (list_supported_types(),
+    # /api/generate, the dropdown, and app.js's click handler all work
+    # unchanged) versus introducing a genuine third axis for one entry.
+    ("CDA", "CCD"): (generate_ccd, "CDA^CCD - Continuity of Care Document"),
 }
 
 

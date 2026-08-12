@@ -8,23 +8,10 @@ visible to whoever is looking at this message."""
 from datetime import datetime, timezone
 
 from app.hl7.parser import field_str, optional_segment
-from app.validation.common import has_time_precision, not_in_future, parse_comparable_datetime
+from app.validation.common import is_before, not_in_future, parse_comparable_datetime
 from app.validation.models import ValidationFinding
 
 _RECOGNIZED_PATIENT_CLASSES = {"I", "O", "E", "P"}
-
-
-def _is_before(earlier_raw: str, earlier_dt: datetime, later_raw: str, later_dt: datetime) -> bool:
-    """Whether `earlier_dt` is unambiguously before `later_dt`. If either
-    side is a date-only value (no time component - see
-    has_time_precision()), a same-calendar-day pair is indeterminate rather
-    than a violation: a date-only "2024-01-15" could represent any time on
-    that day, so it can't be shown to be before a same-day "2024-01-15
-    08:30" - only compare at date granularity in that case. With full time
-    precision on both sides, compare exactly."""
-    if not has_time_precision(earlier_raw) or not has_time_precision(later_raw):
-        return earlier_dt.date() < later_dt.date()
-    return earlier_dt < later_dt
 
 
 def _rule_admit_discharge_order(pv1) -> list[ValidationFinding]:
@@ -34,7 +21,7 @@ def _rule_admit_discharge_order(pv1) -> list[ValidationFinding]:
         return []
     admit_dt = parse_comparable_datetime(admit)
     discharge_dt = parse_comparable_datetime(discharge)
-    if admit_dt is not None and discharge_dt is not None and _is_before(discharge, discharge_dt, admit, admit_dt):
+    if admit_dt is not None and discharge_dt is not None and is_before(discharge, discharge_dt, admit, admit_dt):
         return [
             ValidationFinding(
                 severity="error",
@@ -73,7 +60,7 @@ def _rule_birth_before_admit(pid, pv1) -> list[ValidationFinding]:
         return []
     birth_dt = parse_comparable_datetime(birth_date)
     admit_dt = parse_comparable_datetime(admit)
-    if birth_dt is not None and admit_dt is not None and _is_before(admit, admit_dt, birth_date, birth_dt):
+    if birth_dt is not None and admit_dt is not None and is_before(admit, admit_dt, birth_date, birth_dt):
         return [
             ValidationFinding(
                 severity="error",

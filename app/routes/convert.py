@@ -9,8 +9,7 @@ from app.cda.errors import CdaParseError
 from app.generators.registry import generate as generate_sample
 from app.generators.registry import list_supported_types
 from app.hl7.errors import Hl7ParseError, MappingError, MissingSegmentError
-from app.hl7.pipeline import validate_hl7
-from app.pipeline import convert_to_bundle, is_xml
+from app.pipeline import convert_to_bundle, validate_any
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -23,10 +22,12 @@ _ERROR_STATUS = {
     ValidationError: ("FHIR validation error", 422),
 }
 
-# validate_hl7() only ever raises these two - every other failure mode is
-# caught inside validate_message() and turned into a finding instead.
+# validate_any() only ever raises a parse-level error - every other failure
+# mode is caught inside validate_document()/validate_message() and turned
+# into a finding instead.
 _VALIDATION_ERROR_STATUS = {
     Hl7ParseError: ("Parse error", 400),
+    CdaParseError: ("Parse error", 400),
     MissingSegmentError: ("Missing segment", 400),
 }
 
@@ -64,17 +65,8 @@ def _run_conversion(raw_text: str) -> ConvertResult:
 
 
 def _run_validation(raw_text: str) -> ValidationResult:
-    if is_xml(raw_text):
-        # validate_hl7() has no CDA counterpart yet - without this guard,
-        # pasting XML into Validate would hit a confusing HL7-parse failure
-        # instead of an honest "not supported yet" message.
-        return ValidationResult(
-            error_category="Unsupported",
-            error_message="C-CDA validation is not yet supported.",
-            status_code=422,
-        )
     try:
-        report = validate_hl7(raw_text)
+        report = validate_any(raw_text)
     except tuple(_VALIDATION_ERROR_STATUS) as exc:
         category, status_code = _VALIDATION_ERROR_STATUS[type(exc)]
         return ValidationResult(error_category=category, error_message=str(exc), status_code=status_code)

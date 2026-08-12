@@ -70,6 +70,23 @@ def parse_comparable_fhir_datetime(dt_str: str | None) -> datetime | None:
     return _parse_fhir_datetime(dt_str) if dt_str else None
 
 
+def is_before(earlier_raw: str, earlier_dt: datetime, later_raw: str, later_dt: datetime) -> bool:
+    """Whether `earlier_dt` is unambiguously before `later_dt`. If either
+    side is a date-only value (no time component - see
+    has_time_precision()), a same-calendar-day pair is indeterminate rather
+    than a violation: a date-only "2024-01-15" could represent any time on
+    that day, so it can't be shown to be before a same-day "2024-01-15
+    08:30" - only compare at date granularity in that case. With full time
+    precision on both sides, compare exactly. Shared by app/validation/adt.py
+    and app/cda/validation.py - promoted here once a second real consumer
+    needed the exact same date-only-aware ordering logic, mirroring this
+    project's established "extract once duplication would otherwise occur"
+    pattern (see CLAUDE.md on build_minimal_pv1_fields/build_minimal_encounter)."""
+    if not has_time_precision(earlier_raw) or not has_time_precision(later_raw):
+        return earlier_dt.date() < later_dt.date()
+    return earlier_dt < later_dt
+
+
 def not_in_future(raw_value: str, now: datetime) -> bool | None:
     """Whether a raw HL7 TS field parses to a datetime that is not after
     `now`. Returns None (not True/False) when the field is empty or

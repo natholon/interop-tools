@@ -1,0 +1,276 @@
+"""Synthetic CCD (Continuity of Care Document) generator - the app/cda/
+mirror of app/generators/{adt,siu,oru,mdm}.py, but living inside app/cda/
+rather than app/generators/: app/cda/ is already the one-stop package for
+everything CDA-specific (parser + conversion), and there's only one C-CDA
+document type so far, so a separate app/generators/cda.py with its own
+sub-registry would be premature relative to HL7v2's real 4-type/20-trigger
+registry need.
+
+Reuses app.generators.base's format-agnostic primitives (maybe(),
+random_person_name(), random_address(), random_phone(), random_sex(),
+random_identifier(), random_datetime_near_now()/format_hl7_datetime()) -
+format_hl7_datetime()'s YYYYMMDDHHMMSS output is exactly CDA's own @value
+TS digit shape (CDA and HL7v2 TS fields share the identical digit shape,
+already established for parse_hl7_date/parse_hl7_datetime reuse in
+app/cda/common.py). Net-new here is only the SNOMED problem-code pool and
+the XML-shaped field builders.
+
+Built via f-string templates, the same construction style as this
+project's hand-authored tests/fixtures/ccd_*.xml, rather than
+xml.etree.ElementTree tree-building - consistent with how the HL7v2
+generator builds segments via plain string joins rather than the hl7
+library. Self-checked by parsing the result back via
+app.cda.parser.parse_document() before returning, mirroring the HL7v2
+generators' parse_message() self-check - a generator bug should raise
+CdaParseError, not return broken XML. Full-conversion-success is left to
+the test suite's round-trip check (tests/test_generate_cda.py), matching
+the HL7v2 generators' precedent exactly.
+"""
+
+import random
+
+from app.cda.ccd import CCD_TEMPLATE_ID
+from app.cda.parser import parse_document
+from app.cda.problems import (
+    CONCERN_ACT_TEMPLATE_ID,
+    PROBLEM_OBSERVATION_TEMPLATE_ID,
+    STATUS_OBSERVATION_CODE,
+    STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS,
+)
+from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
+from app.generators.base import (
+    format_hl7_datetime,
+    maybe,
+    random_address,
+    random_datetime_near_now,
+    random_identifier,
+    random_person_name,
+    random_phone,
+    random_sex,
+    random_time_range,
+)
+
+_US_HEADER_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.1.1"
+_HEX_DIGITS = "0123456789abcdef"
+
+# A representative SNOMED CT problem pool - overlaps with the codes used in
+# tests/fixtures/ccd_*.xml plus a few more, for realistic fuzz variety.
+_PROBLEM_CODES = [
+    ("38341003", "Hypertensive disorder"),
+    ("44054006", "Type 2 diabetes mellitus"),
+    ("195967001", "Asthma"),
+    ("271737000", "Anemia"),
+    ("396275006", "Osteoarthritis"),
+    ("444814009", "Viral sinusitis"),
+    ("10509002", "Acute bronchitis"),
+    ("367498001", "Seasonal allergic rhinitis"),
+    ("370143000", "Major depressive disorder"),
+    ("235595009", "Gastroesophageal reflux disease"),
+    ("55822004", "Hyperlipidemia"),
+    ("37796009", "Migraine"),
+]
+_RECOGNIZED_ENCOUNTER_CLASS_CODES = ["AMB", "EMER", "IMP"]
+_UNRECOGNIZED_ENCOUNTER_CLASS_CODES = ["XYZ", "ZZZ", "UNK"]
+
+
+def _random_uuid_like(rng: random.Random) -> str:
+    """A UUID-shaped root string, driven entirely by `rng` (unlike
+    uuid.uuid4(), which uses its own unseeded internal randomness and would
+    silently break this generator's "same seed -> same output byte-for-
+    byte" guarantee - every generator function in this project must take
+    all its randomness from the passed-in rng, never a global source)."""
+
+    def group(n: int) -> str:
+        return "".join(rng.choice(_HEX_DIGITS) for _ in range(n))
+
+    return f"{group(8)}-{group(4)}-{group(4)}-{group(4)}-{group(12)}"
+
+
+def _random_id_element(rng: random.Random) -> str:
+    """Randomly root-only or root+extension (~50/50) - direct fuzz coverage
+    of both II identifier shapes app/cda/common.py::_build_identifier
+    handles."""
+    root = _random_uuid_like(rng)
+    if maybe(rng, 0.5):
+        return f'<id root="{root}"/>'
+    return f'<id root="{root}" extension="{random_identifier(rng, digits=6)}"/>'
+
+
+def _random_name_element(rng: random.Random, sex: str | None, use: str) -> str:
+    family, given = random_person_name(rng, sex=sex)
+    return f'<name use="{use}"><given>{given}</given><family>{family}</family></name>'
+
+
+def _random_addr_element(rng: random.Random, use: str) -> str:
+    line1, city, state, zip_code = random_address(rng)
+    return (
+        f'<addr use="{use}"><streetAddressLine>{line1}</streetAddressLine>'
+        f"<city>{city}</city><state>{state}</state>"
+        f'<postalCode>{zip_code}</postalCode><country>US</country></addr>'
+    )
+
+
+def _random_telecom_element(rng: random.Random, use: str) -> str:
+    return f'<telecom use="{use}" value="tel:{random_phone(rng)}"/>'
+
+
+def _random_ivl_ts(rng: random.Random, start, end) -> str:
+    """One of the three legal IVL_TS shapes (bare @value, low-only,
+    low+high), split ~20/40/40 - direct fuzz coverage of all three shapes
+    app.cda.parser.ivl_ts_bounds() handles. `end` is always start + a
+    positive duration (from random_time_range), so the low+high shape can
+    never accidentally produce an inverted (high < low) interval."""
+    choice = rng.random()
+    if choice < 0.2:
+        return f'<effectiveTime value="{format_hl7_datetime(start)}"/>'
+    if choice < 0.6:
+        return f'<effectiveTime><low value="{format_hl7_datetime(start)}"/></effectiveTime>'
+    return (
+        f'<effectiveTime><low value="{format_hl7_datetime(start)}"/>'
+        f'<high value="{format_hl7_datetime(end)}"/></effectiveTime>'
+    )
+
+
+def _random_encounter(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.5):
+        return None
+    ids = "".join(_random_id_element(rng) for _ in range(rng.choice((1, 2))))
+    if maybe(rng, 0.85):
+        class_code = rng.choice(_RECOGNIZED_ENCOUNTER_CLASS_CODES)
+    else:
+        class_code = rng.choice(_UNRECOGNIZED_ENCOUNTER_CLASS_CODES)
+    # A wide-ish window (including a bit of future) gives fuzz coverage of
+    # the "period start in the future" warning without ever risking start >
+    # end (random_time_range always derives end = start + a positive
+    # duration), so this can never trip the (error-severity) "period end
+    # before start" rule.
+    start, end = random_time_range(rng, min_days=-30, max_days=10)
+    return (
+        f'<componentOf><encompassingEncounter>{ids}'
+        f'<code code="{class_code}" codeSystem="2.16.840.1.113883.5.4"/>'
+        f"{_random_ivl_ts(rng, start, end)}"
+        f"</encompassingEncounter></componentOf>"
+    )
+
+
+def _random_problem_entry(rng: random.Random) -> str:
+    act_id = _random_uuid_like(rng)
+    obs_id = _random_uuid_like(rng)
+    act_status = "active" if maybe(rng, 0.7) else rng.choice(("suspended", "aborted", "completed"))
+    code, display = rng.choice(_PROBLEM_CODES)
+    negated = maybe(rng, 0.1)
+
+    # Onset/abatement stay within the last ~300 days through 10 days into
+    # the future - always safely after even the earliest possible generated
+    # birthTime (at least ~364 days ago, since random_datetime_near_now adds
+    # up to +23:59 on top of the -365-day floor before truncating to a date
+    # - see _random_patient below), so this can never trip the (error-
+    # severity) "onset before birth" rule, while still occasionally landing
+    # in the future to exercise the (warning-severity) "onset in the
+    # future" rule.
+    start, end = random_time_range(rng, min_days=-300, max_days=10)
+    effective_time = _random_ivl_ts(rng, start, end)
+
+    if negated:
+        value = '<value xsi:type="CD" nullFlavor="NA"/>'
+    else:
+        value = f'<value xsi:type="CD" code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
+    negation_attr = ' negationInd="true"' if negated else ""
+
+    # ~50/50: rely on the Concern Act's own statusCode alone, or add a
+    # nested Status Observation (typeCode="REFR") - direct fuzz coverage of
+    # the two-vocabulary clinicalStatus resolution path in
+    # app/cda/problems.py::_resolve_clinical_status.
+    status_observation = ""
+    if maybe(rng, 0.5):
+        status_code = rng.choice(list(STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS))
+        status_observation = (
+            '<entryRelationship typeCode="REFR"><observation classCode="OBS" moodCode="EVN">'
+            f'<code code="{STATUS_OBSERVATION_CODE}" codeSystem="2.16.840.1.113883.6.1" displayName="Status"/>'
+            '<statusCode code="completed"/>'
+            f'<value xsi:type="CD" code="{status_code}" codeSystem="2.16.840.1.113883.6.96"/>'
+            "</observation></entryRelationship>"
+        )
+
+    return (
+        f'<entry typeCode="DRIV"><act classCode="ACT" moodCode="EVN">'
+        f'<templateId root="{CONCERN_ACT_TEMPLATE_ID}"/><id root="{act_id}"/>'
+        '<code code="CONC" codeSystem="2.16.840.1.113883.5.6" displayName="Concern"/>'
+        f'<statusCode code="{act_status}"/>'
+        f'<entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN"{negation_attr}>'
+        f'<templateId root="{PROBLEM_OBSERVATION_TEMPLATE_ID}"/><id root="{obs_id}"/>'
+        '<code code="55607006" codeSystem="2.16.840.1.113883.6.96" displayName="Problem"/>'
+        '<statusCode code="completed"/>'
+        f"{effective_time}{value}{status_observation}"
+        "</observation></entryRelationship></act></entry>"
+    )
+
+
+def _random_problems_section(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.85):
+        return None
+    entries = "".join(_random_problem_entry(rng) for _ in range(rng.randint(1, 3)))
+    return (
+        f'<component><section><templateId root="{PROBLEMS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="11450-4" codeSystem="2.16.840.1.113883.6.1" displayName="Problem List"/>'
+        f"<title>Problems</title>{entries}</section></component>"
+    )
+
+
+def _random_patient(rng: random.Random) -> str:
+    sex = random_sex(rng) if maybe(rng) else None
+    ids = "".join(_random_id_element(rng) for _ in range(rng.choice((1, 2))))
+    addr = _random_addr_element(rng, "HP") if maybe(rng, 0.55) else ""
+    telecom = _random_telecom_element(rng, "HP") if maybe(rng, 0.55) else ""
+    names = _random_name_element(rng, sex, "L")
+    if maybe(rng, 0.2):
+        names += _random_name_element(rng, sex, "P")
+    gender = ""
+    if sex and maybe(rng, 0.6):
+        gender = f'<administrativeGenderCode code="{sex}" codeSystem="2.16.840.1.113883.5.1"/>'
+    birth_time = ""
+    if maybe(rng, 0.6):
+        # At least ~364 days ago - see _random_problem_entry's onset window
+        # comment for why this lower bound on patient age matters.
+        dob = random_datetime_near_now(rng, min_days=-365 * 80, max_days=-365)
+        birth_time = f'<birthTime value="{dob.strftime("%Y%m%d")}"/>'
+    return (
+        f"<recordTarget><patientRole>{ids}{addr}{telecom}"
+        f"<patient>{names}{gender}{birth_time}</patient>"
+        "</patientRole></recordTarget>"
+    )
+
+
+def generate_ccd(rng: random.Random) -> str:
+    ids = "".join(_random_id_element(rng) for _ in range(1))
+    # A ~10-day window around "now" (rather than always-past) exercises the
+    # (warning-severity) "document date in the future" rule about half the
+    # time without any error-severity consequence.
+    doc_dt = random_datetime_near_now(rng, min_days=-5, max_days=5)
+    if maybe(rng, 0.7):
+        effective_time = f'<effectiveTime value="{format_hl7_datetime(doc_dt)}"/>'
+    else:
+        # Date-only - direct fuzz coverage of the Bundle.timestamp-is-
+        # FHIR-instant fix (must convert cleanly with no timestamp, never
+        # crash on a date-only ClinicalDocument/effectiveTime).
+        effective_time = f'<effectiveTime value="{doc_dt.strftime("%Y%m%d")}"/>'
+
+    encounter = _random_encounter(rng) or ""
+    problems_section = _random_problems_section(rng)
+    body = f"<component><structuredBody>{problems_section}</structuredBody></component>" if problems_section else ""
+
+    xml_text = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        f'<templateId root="{_US_HEADER_TEMPLATE_ID}"/><templateId root="{CCD_TEMPLATE_ID}"/>'
+        f"{ids}"
+        '<code code="34133-9" codeSystem="2.16.840.1.113883.6.1" displayName="Summarization of Episode Note"/>'
+        "<title>Continuity of Care Document</title>"
+        f"{effective_time}"
+        '<confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>'
+        '<languageCode code="en-US"/>'
+        f"{_random_patient(rng)}{encounter}{body}"
+        "</ClinicalDocument>"
+    )
+    parse_document(xml_text)  # self-check: a generator bug should raise, not return broken XML
+    return xml_text
