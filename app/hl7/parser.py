@@ -37,6 +37,18 @@ def optional_segments(message: hl7.Message, name: str) -> list:
         return []
 
 
+def optional_segment(message: hl7.Message, name: str):
+    """Return the first segment with the given name, or None if absent - the
+    non-raising counterpart to require_segment, for callers that want to
+    check for a segment's presence without treating its absence as fatal
+    (e.g. app/validation/*.py, which reports a missing segment as a finding
+    rather than raising)."""
+    try:
+        return message.segment(name)
+    except KeyError:
+        return None
+
+
 def group_segments_by_leader(message: hl7.Message, leader_name: str, member_names) -> list[tuple]:
     """Walk the message's segments in order and group them by a repeating
     leader-then-members structure (e.g. ORU's OBR followed by its OBX

@@ -3,6 +3,10 @@
     --border: #ccc;
     --error-bg: #fdecea;
     --error-border: #c0392b;
+    --warning-bg: #fff8e1;
+    --warning-border: #b58105;
+    --info-bg: #e8f4fd;
+    --info-border: #2980b9;
     --output-bg: #f4f6f8;
 }
 
@@ -74,7 +78,8 @@ button[type="submit"] {
     border: 1px solid var(--error-border);
 }
 
-.output-panel {
+.output-panel,
+.validation-panel {
     background: var(--output-bg);
     border: 1px solid var(--border);
 }
@@ -83,4 +88,49 @@ pre {
     white-space: pre-wrap;
     word-break: break-word;
     margin: 0;
+}
+
+.findings-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.finding {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+    border-radius: 4px;
+    border-left: 4px solid;
+}
+
+.finding-error {
+    background: var(--error-bg);
+    border-color: var(--error-border);
+}
+
+.finding-warning {
+    background: var(--warning-bg);
+    border-color: var(--warning-border);
+}
+
+.finding-info {
+    background: var(--info-bg);
+    border-color: var(--info-border);
+}
+
+.finding .finding-severity {
+    font-weight: 700;
+}
+
+.finding .finding-location {
+    font-family: ui-monospace, Consolas, monospace;
+    color: #555;
+}
+
+.finding .finding-message {
+    flex: 1 1 auto;
 }

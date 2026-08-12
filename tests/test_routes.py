@@ -128,3 +128,49 @@ def test_api_generate_unsupported_combination_returns_404():
     response = client.get("/api/generate", params={"message_type": "ADT", "trigger_event": "A99"})
     assert response.status_code == 404
     assert response.json()["error"]["category"] == "Unknown message type"
+
+
+def test_api_validate_clean_message_returns_200_with_is_valid_true():
+    response = client.post("/api/validate", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report"]["is_valid"] is True
+    assert body["report"]["findings"] == []
+
+
+def test_api_validate_message_with_error_still_returns_200():
+    # A validation report concluding is_valid=false is itself a *successful*
+    # analysis, not an API error - this must NOT be a 4xx response, unlike
+    # /api/convert's error-status mapping.
+    response = client.post(
+        "/api/validate", json={"hl7_text": read_fixture("validation_adt_pv1_missing.hl7")}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report"]["is_valid"] is False
+    assert any(f["severity"] == "error" for f in body["report"]["findings"])
+
+
+def test_api_validate_malformed_text_returns_400():
+    response = client.post("/api/validate", json={"hl7_text": read_fixture("adt_a01_malformed.hl7")})
+    assert response.status_code == 400
+    assert response.json()["error"]["category"] == "Parse error"
+
+
+def test_form_validate_renders_report_in_page():
+    response = client.post("/validate", data={"hl7_text": read_fixture("validation_adt_pv1_missing.hl7")})
+    assert response.status_code == 200
+    assert "adt.pv1-missing" in response.text
+
+
+def test_form_validate_renders_error_in_page():
+    response = client.post("/validate", data={"hl7_text": read_fixture("adt_a01_malformed.hl7")})
+    assert response.status_code == 200
+    assert "Parse error" in response.text
+
+
+def test_index_has_validate_button_and_pane():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'formaction="/validate"' in response.text
+    assert 'id="validation-pane"' in response.text

@@ -10,10 +10,11 @@ Tools to assist with common HL7 processes - transformation, fhir conversion, val
 - HL7v2 ORU → FHIR R4 Bundle (Patient + optional Encounter + DiagnosticReport + Observation per result, with positional OBR/OBX grouping so each report only references its own results) — R01 Observation result, R30/R40 point-of-care result.
 - HL7v2 MDM → FHIR R4 Bundle (Patient + optional Encounter + DocumentReference, with document text content carried via a separate Binary resource) — T02 New document, T04 Document status update, T06 Document addendum.
 - A synthetic test-data generator covering all 20 combinations above, with realistic field-level randomization (required fields always populated, optional fields randomly included or omitted), selectable from a dropdown in the web UI or via the JSON API.
+- An HL7v2 message **validator**, independent of conversion — checks any message (supported for conversion or not) and returns a report of `error`/`warning`/`info` findings, each pointing at the offending segment/field, covering structural correctness (required segments, well-formed MSH/PID fields) as well as healthcare data-quality plausibility (a birth date in the future, a discharge before an admit, an appointment ending before it starts, a lab value outside its own reference range).
 
-Both conversion and generation are available through the same web UI and JSON API.
+Conversion, generation, and validation are all available through the same web UI and JSON API.
 
-**Planned next:** remaining trigger events for the message types above (e.g. ADT A38 cancel pre-admit, ORU R32, MDM T08/T10/T11), then broader transformation, validation, deduplication, and mapping tooling across HL7v2/FHIR/CDA/C-CDA.
+**Planned next:** remaining trigger events for the message types above (e.g. ADT A38 cancel pre-admit, ORU R32, MDM T08/T10/T11), then broader deduplication and mapping tooling across HL7v2/FHIR/CDA/C-CDA.
 
 ## Installation (Windows / PowerShell)
 
@@ -35,11 +36,12 @@ Start the app:
 uvicorn app.main:app --reload
 ```
 
-Then open [http://127.0.0.1:8000](http://127.0.0.1:8000) in a browser. Paste a raw HL7v2 message (any supported ADT, SIU, ORU, or MDM trigger event, see Status above) into the text box, pick a message type from the dropdown and click **Generate sample** for a fresh randomized example, or upload a `.hl7`/`.txt` file — then click **Convert to FHIR** to see the resulting FHIR Bundle JSON. Parse, mapping, and validation errors are shown as clear categorized messages rather than raw errors.
+Then open [http://127.0.0.1:8000](http://127.0.0.1:8000) in a browser. Paste a raw HL7v2 message (any supported ADT, SIU, ORU, or MDM trigger event, see Status above) into the text box, pick a message type from the dropdown and click **Generate sample** for a fresh randomized example, or upload a `.hl7`/`.txt` file — then click **Convert to FHIR** to see the resulting FHIR Bundle JSON, or **Validate** to see a report of error/warning/info findings instead. Parse errors and mapping/FHIR-construction errors are shown as clear categorized messages rather than raw errors; a validation report is returned even for messages with issues — it's an analysis result, not an error.
 
 A JSON API is also available:
 ```powershell
 curl -X POST http://127.0.0.1:8000/api/convert -H "Content-Type: application/json" -d '{\"hl7_text\": \"MSH|...\"}'
+curl -X POST http://127.0.0.1:8000/api/validate -H "Content-Type: application/json" -d '{\"hl7_text\": \"MSH|...\"}'
 curl "http://127.0.0.1:8000/api/generate?message_type=ADT&trigger_event=A01"
 ```
 Pass `&seed=<int>` to `/api/generate` for a reproducible message instead of a fresh random one.

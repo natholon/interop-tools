@@ -88,13 +88,17 @@ def generate_adt_a08(rng: random.Random) -> str:
     pid = generate_pid_segment(rng)
     fields = build_minimal_pv1_fields(rng, "I")
     fields[3] = random_location_field(rng)
+    # admit and discharge are drawn from the same random_time_range() call
+    # (matching generate_adt_a03/a13) rather than two independent ones, so
+    # that when both happen to be included they stay chronologically
+    # consistent - two independent draws could otherwise land discharge
+    # before admit, which app.validation now correctly flags as an error.
+    admit, discharge = random_time_range(rng)
     if maybe(rng):
-        start, _ = random_time_range(rng)
-        fields[44] = format_hl7_datetime(start)
+        fields[44] = format_hl7_datetime(admit)
     # deliberately ~50%, not the general optional rate: this is what exercises
     # AdtA08Mapper's finished-vs-in-progress status inference in both directions
     if maybe(rng, p=0.5):
-        _, discharge = random_time_range(rng)
         fields[45] = format_hl7_datetime(discharge)
     return _assemble(msh, evn, pid, segment("PV1", fields, 45))
 

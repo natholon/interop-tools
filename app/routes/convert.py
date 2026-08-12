@@ -8,7 +8,7 @@ from pydantic import BaseModel, ValidationError
 from app.generators.registry import generate as generate_sample
 from app.generators.registry import list_supported_types
 from app.hl7.errors import Hl7ParseError, MappingError, MissingSegmentError
-from app.hl7.pipeline import convert_hl7_to_bundle
+from app.hl7.pipeline import convert_hl7_to_bundle, validate_hl7
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -20,12 +20,35 @@ _ERROR_STATUS = {
     ValidationError: ("FHIR validation error", 422),
 }
 
+# validate_hl7() only ever raises these two - every other failure mode is
+# caught inside validate_message() and turned into a finding instead.
+_VALIDATION_ERROR_STATUS = {
+    Hl7ParseError: ("Parse error", 400),
+    MissingSegmentError: ("Missing segment", 400),
+}
+
 
 class ConvertResult(BaseModel):
     bundle_json: str | None = None
     error_category: str | None = None
     error_message: str | None = None
     status_code: int = 200
+
+
+class ValidationResult(BaseModel):
+    report_json: str | None = None
+    error_category: str | None = None
+    error_message: str | None = None
+    status_code: int = 200
+
+
+async def _resolve_raw_text(hl7_text: str, hl7_file: UploadFile | None) -> str:
+    raw_text = hl7_text
+    if hl7_file is not None and hl7_file.filename:
+        content = await hl7_file.read()
+        if content:
+            raw_text = content.decode("utf-8", errors="replace")
+    return raw_text
 
 
 def _run_conversion(raw_text: str) -> ConvertResult:
@@ -37,6 +60,15 @@ def _run_conversion(raw_text: str) -> ConvertResult:
     return ConvertResult(bundle_json=bundle.model_dump_json(indent=2, exclude_none=True))
 
 
+def _run_validation(raw_text: str) -> ValidationResult:
+    try:
+        report = validate_hl7(raw_text)
+    except tuple(_VALIDATION_ERROR_STATUS) as exc:
+        category, status_code = _VALIDATION_ERROR_STATUS[type(exc)]
+        return ValidationResult(error_category=category, error_message=str(exc), status_code=status_code)
+    return ValidationResult(report_json=report.model_dump_json(indent=2, exclude_none=True))
+
+
 @router.get("/")
 async def index(request: Request):
     return templates.TemplateResponse(
@@ -46,6 +78,8 @@ async def index(request: Request):
             "hl7_text": "",
             "result": None,
             "error": None,
+            "validation_result": None,
+            "validation_error": None,
             "supported_types": list_supported_types(),
         },
     )
@@ -57,11 +91,7 @@ async def convert_form(
     hl7_text: str = Form(""),
     hl7_file: UploadFile | None = File(None),
 ):
-    raw_text = hl7_text
-    if hl7_file is not None and hl7_file.filename:
-        content = await hl7_file.read()
-        if content:
-            raw_text = content.decode("utf-8", errors="replace")
+    raw_text = await _resolve_raw_text(hl7_text, hl7_file)
 
     outcome = _run_conversion(raw_text)
     error = (
@@ -76,6 +106,36 @@ async def convert_form(
             "hl7_text": raw_text,
             "result": outcome.bundle_json,
             "error": error,
+            "validation_result": None,
+            "validation_error": None,
+            "supported_types": list_supported_types(),
+        },
+    )
+
+
+@router.post("/validate")
+async def validate_form(
+    request: Request,
+    hl7_text: str = Form(""),
+    hl7_file: UploadFile | None = File(None),
+):
+    raw_text = await _resolve_raw_text(hl7_text, hl7_file)
+
+    outcome = _run_validation(raw_text)
+    validation_error = (
+        {"category": outcome.error_category, "message": outcome.error_message}
+        if outcome.error_category
+        else None
+    )
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "hl7_text": raw_text,
+            "result": None,
+            "error": None,
+            "validation_result": outcome.report_json,
+            "validation_error": validation_error,
             "supported_types": list_supported_types(),
         },
     )
@@ -94,6 +154,25 @@ async def convert_api(payload: ConvertApiRequest):
             content={"error": {"category": outcome.error_category, "message": outcome.error_message}},
         )
     return JSONResponse(content={"bundle": json.loads(outcome.bundle_json)})
+
+
+class ValidateApiRequest(BaseModel):
+    hl7_text: str
+
+
+@router.post("/api/validate")
+async def validate_api(payload: ValidateApiRequest):
+    outcome = _run_validation(payload.hl7_text)
+    if outcome.error_category:
+        # Only the two propagated parse-level exceptions land here. A
+        # report concluding is_valid=False is itself a *successful*
+        # analysis, not an API error - it's returned below with a normal
+        # 200, same as an is_valid=True report.
+        return JSONResponse(
+            status_code=outcome.status_code,
+            content={"error": {"category": outcome.error_category, "message": outcome.error_message}},
+        )
+    return JSONResponse(content={"report": json.loads(outcome.report_json)})
 
 
 @router.get("/api/generate")

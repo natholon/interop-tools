@@ -20,6 +20,7 @@
     </div>
     <div class="actions">
         <button type="button" id="generate-sample">Generate sample</button>
+        <button type="submit" formaction="/validate">Validate</button>
         <button type="submit">Convert to FHIR</button>
     </div>
 </form>
@@ -28,6 +29,16 @@
     {% if error %}
     <strong>{{ error.category }}</strong>
     <pre>{{ error.message }}</pre>
+    {% endif %}
+</section>
+
+<section id="validation-pane" class="panel validation-panel" {% if not validation_result and not validation_error %}hidden{% endif %}>
+    <h2>Validation Report</h2>
+    {% if validation_error %}
+    <strong>{{ validation_error.category }}</strong>
+    <pre>{{ validation_error.message }}</pre>
+    {% else %}
+    <pre><code id="validation-code">{{ validation_result or "" }}</code></pre>
     {% endif %}
 </section>
 

@@ -4,7 +4,7 @@ import pytest
 
 from app.generators.mdm import generate_mdm_t02, generate_mdm_t04, generate_mdm_t06
 from app.hl7.parser import field_str, parse_message, require_segment
-from app.hl7.pipeline import convert_hl7_to_bundle
+from app.hl7.pipeline import convert_hl7_to_bundle, validate_hl7
 
 _GENERATORS = [
     (generate_mdm_t02, "T02"),
@@ -79,3 +79,10 @@ def test_round_trips_through_real_converter(generator_fn, trigger_event):
         resource_types = {e.resource.get_resource_type() for e in bundle.entry}
         assert {"Patient", "DocumentReference"} <= resource_types
         assert resource_types <= allowed_types
+
+
+@pytest.mark.parametrize("generator_fn, trigger_event", _GENERATORS)
+def test_generated_message_has_no_validation_errors(generator_fn, trigger_event):
+    for seed in range(1000, 1020):
+        report = validate_hl7(generator_fn(random.Random(seed)))
+        assert report.is_valid, f"seed={seed} findings={report.findings}"

@@ -4,7 +4,7 @@ import pytest
 
 from app.generators.oru import generate_oru_r01, generate_oru_r30, generate_oru_r40
 from app.hl7.parser import field_str, group_segments_by_leader, parse_message, require_segment
-from app.hl7.pipeline import convert_hl7_to_bundle
+from app.hl7.pipeline import convert_hl7_to_bundle, validate_hl7
 
 _GENERATORS = [
     (generate_oru_r01, "R01"),
@@ -71,6 +71,16 @@ def test_round_trips_through_real_converter(generator_fn, trigger_event):
         resource_types = {e.resource.get_resource_type() for e in bundle.entry}
         assert {"Patient", "DiagnosticReport", "Observation"} <= resource_types
         assert resource_types <= {"Patient", "Encounter", "DiagnosticReport", "Observation", "Practitioner"}
+
+
+@pytest.mark.parametrize("generator_fn, trigger_event", _GENERATORS)
+def test_generated_message_has_no_validation_errors(generator_fn, trigger_event):
+    # Not zero *findings*: the generator deliberately produces OBX-5 values
+    # outside their OBX-7 reference range ~30% of the time, which is a real
+    # (info-severity) finding, not a bug - only error-severity is asserted.
+    for seed in range(1000, 1020):
+        report = validate_hl7(generator_fn(random.Random(seed)))
+        assert report.is_valid, f"seed={seed} findings={report.findings}"
 
 
 @pytest.mark.parametrize("generator_fn, trigger_event", _GENERATORS)

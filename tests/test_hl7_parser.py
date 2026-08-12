@@ -4,7 +4,14 @@ import pytest
 
 from app.generators.base import segment
 from app.hl7.errors import Hl7ParseError, MissingSegmentError
-from app.hl7.parser import field_str, group_segments_by_leader, parse_message, raw_field_str, require_segment
+from app.hl7.parser import (
+    field_str,
+    group_segments_by_leader,
+    optional_segment,
+    parse_message,
+    raw_field_str,
+    require_segment,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -64,6 +71,18 @@ def test_raw_field_str_missing_field_returns_empty():
     msg = parse_message(read_fixture("adt_a01_minimal.hl7"))
     pid = require_segment(msg, "PID")
     assert raw_field_str(pid, 13) == ""
+
+
+def test_optional_segment_returns_the_segment_when_present():
+    msg = parse_message(read_fixture("adt_a01_basic.hl7"))
+    pid = optional_segment(msg, "PID")
+    assert pid is not None
+    assert field_str(pid, 3) == "123456"
+
+
+def test_optional_segment_returns_none_when_absent():
+    msg = parse_message(read_fixture("adt_a01_basic.hl7"))
+    assert optional_segment(msg, "OBX") is None
 
 
 def test_group_segments_by_leader_associates_members_with_correct_leader():
