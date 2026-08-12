@@ -28,7 +28,7 @@ from app.mappings.common import (
 )
 
 _PARTICIPATION_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"
-_TRIGGER_EVENT_EXTENSION_URL = "urn:hl7-tools:siu-trigger-event"
+_TRIGGER_EVENT_EXTENSION_URL = "urn:interop-tools:siu-trigger-event"
 
 
 def resolve_appointment_timing(sch, tq1_segments) -> tuple[str | None, str | None]:
@@ -67,10 +67,10 @@ def _build_identifiers(sch) -> list[Identifier]:
     identifiers = []
     placer_id = field_str(sch, 1)
     if placer_id:
-        identifiers.append(Identifier(system="urn:hl7-tools:placer-appointment-id", value=placer_id))
+        identifiers.append(Identifier(system="urn:interop-tools:placer-appointment-id", value=placer_id))
     filler_id = field_str(sch, 2)
     if filler_id:
-        identifiers.append(Identifier(system="urn:hl7-tools:filler-appointment-id", value=filler_id))
+        identifiers.append(Identifier(system="urn:interop-tools:filler-appointment-id", value=filler_id))
     return identifiers
 
 
@@ -99,14 +99,14 @@ def _build_aig_resource(aig) -> tuple[Resource, str] | None:
     if resource_type_code in _AIG_LOCATION_TYPE_CODES:
         location = Location(id=str(uuid.uuid4()), name=resource_display)
         if resource_id:
-            location.identifier = [Identifier(system="urn:hl7-tools:location-id", value=resource_id)]
+            location.identifier = [Identifier(system="urn:interop-tools:location-id", value=resource_id)]
         return location, resource_display
 
     device = Device(
         id=str(uuid.uuid4()), deviceName=[DeviceDeviceName(name=resource_display, type="user-friendly-name")]
     )
     if resource_id:
-        device.identifier = [Identifier(system="urn:hl7-tools:device-id", value=resource_id)]
+        device.identifier = [Identifier(system="urn:interop-tools:device-id", value=resource_id)]
     resource_type = build_codeable_concept_from_cwe(aig, 4)
     if resource_type:
         device.type = resource_type

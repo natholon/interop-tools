@@ -34,7 +34,7 @@ def build_patient(pid) -> Patient:
         value = component_str(repetition, 1)
         if not value:
             continue
-        system = component_str(repetition, 4) or "urn:hl7-tools:patient-id"
+        system = component_str(repetition, 4) or "urn:interop-tools:patient-id"
         identifiers.append(Identifier(system=system, value=value))
 
     patient = Patient(id=patient_id)
@@ -95,7 +95,7 @@ def build_practitioner_from_xcn(segment, field_num: int) -> Practitioner | None:
         return None
     practitioner = Practitioner(id=str(uuid.uuid4()))
     if practitioner_id:
-        practitioner.identifier = [Identifier(system="urn:hl7-tools:practitioner-id", value=practitioner_id)]
+        practitioner.identifier = [Identifier(system="urn:interop-tools:practitioner-id", value=practitioner_id)]
     if family or given:
         name = HumanName()
         if family:
@@ -134,7 +134,7 @@ def build_visit_identifier(pv1) -> Identifier | None:
     visit_number = field_str(pv1, 19)
     if not visit_number:
         return None
-    return Identifier(system="urn:hl7-tools:visit-number", value=visit_number)
+    return Identifier(system="urn:interop-tools:visit-number", value=visit_number)
 
 
 def build_minimal_encounter(pv1, patient_id: str) -> Encounter:
@@ -179,7 +179,7 @@ def assemble_bundle(msh, patient: Patient, *resources: Resource) -> Bundle:
     bundle = Bundle(id=str(uuid.uuid4()), type="collection")
     control_id = field_str(msh, 10)
     if control_id:
-        bundle.identifier = Identifier(system="urn:hl7-tools:message-control-id", value=control_id)
+        bundle.identifier = Identifier(system="urn:interop-tools:message-control-id", value=control_id)
     message_timestamp = parse_hl7_datetime(field_str(msh, 7))
     if message_timestamp:
         bundle.timestamp = message_timestamp

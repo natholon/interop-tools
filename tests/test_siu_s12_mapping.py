@@ -41,10 +41,10 @@ def test_basic_fixture_maps_every_field():
     assert appointment.reasonCode[0].coding[0].code == "CHECKUP"
     assert appointment.serviceType[0].coding[0].code == "MRI"
     assert [i.system for i in appointment.identifier] == [
-        "urn:hl7-tools:placer-appointment-id",
-        "urn:hl7-tools:filler-appointment-id",
+        "urn:interop-tools:placer-appointment-id",
+        "urn:interop-tools:filler-appointment-id",
     ]
-    assert appointment.extension[0].url == "urn:hl7-tools:siu-trigger-event"
+    assert appointment.extension[0].url == "urn:interop-tools:siu-trigger-event"
     assert appointment.extension[0].valueCode == "S12"
 
     # The materialized Practitioner/Location/Device resources themselves

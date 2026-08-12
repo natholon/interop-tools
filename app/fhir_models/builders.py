@@ -9,7 +9,7 @@ from fhir.resources.R4B.humanname import HumanName
 from app.hl7.parser import component_str, field_repetitions, field_str
 
 _GENDER_MAP = {"M": "male", "F": "female", "O": "other"}
-_CWE_FALLBACK_SYSTEM = "urn:hl7-tools:coded-value"
+_CWE_FALLBACK_SYSTEM = "urn:interop-tools:coded-value"
 
 
 def hl7_sex_to_fhir_gender(code: str) -> str:
@@ -108,7 +108,7 @@ def build_phone_telecom(pid_segment) -> ContactPoint | None:
 def build_codeable_concept_from_cwe(segment, field_num: int) -> CodeableConcept | None:
     """Build a CodeableConcept from a CWE-shaped field (code=component 1,
     display=component 2, coding system=component 3, falling back to a
-    urn:hl7-tools system when component 3 is absent). Returns None when the
+    urn:interop-tools system when component 3 is absent). Returns None when the
     code component is empty."""
     code = field_str(segment, field_num, component=1)
     if not code:

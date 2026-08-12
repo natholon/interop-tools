@@ -157,11 +157,11 @@ def build_document_reference(
 
     master_id = field_str(txa, 12)
     if master_id:
-        document_reference.masterIdentifier = Identifier(system="urn:hl7-tools:document-number", value=master_id)
+        document_reference.masterIdentifier = Identifier(system="urn:interop-tools:document-number", value=master_id)
 
     file_name = field_str(txa, 16)
     if file_name:
-        document_reference.identifier = [Identifier(system="urn:hl7-tools:document-file-name", value=file_name)]
+        document_reference.identifier = [Identifier(system="urn:interop-tools:document-file-name", value=file_name)]
 
     origination_dt = parse_hl7_datetime(field_str(txa, 6))
     if origination_dt:

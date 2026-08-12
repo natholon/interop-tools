@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hl7-tools"
+name = "interop-tools"
 version = "0.1.0"
-description = "Tools to assist with common HL7 processes - transformation, FHIR conversion, validation"
+description = "Healthcare interoperability toolkit - HL7v2/C-CDA/EDI to FHIR transformation, validation, and test-data generation"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115",
