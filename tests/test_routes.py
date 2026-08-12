@@ -174,3 +174,37 @@ def test_index_has_validate_button_and_pane():
     assert response.status_code == 200
     assert 'formaction="/validate"' in response.text
     assert 'id="validation-pane"' in response.text
+
+
+def test_api_convert_resolves_cda_message_end_to_end():
+    # Proves the format-sniff in app/pipeline.py actually routes XML through
+    # the same /api/convert endpoint as HL7v2, not just that the CDA
+    # pipeline works in isolation.
+    response = client.post("/api/convert", json={"hl7_text": read_fixture("ccd_basic.xml")})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bundle"]["resourceType"] == "Bundle"
+    condition_count = sum(1 for e in body["bundle"]["entry"] if e["resource"]["resourceType"] == "Condition")
+    assert condition_count == 2
+
+
+def test_api_convert_cda_malformed_returns_parse_error():
+    response = client.post("/api/convert", json={"hl7_text": read_fixture("ccd_malformed.xml")})
+    assert response.status_code == 400
+    assert response.json()["error"]["category"] == "Parse error"
+
+
+def test_api_validate_cda_input_returns_unsupported_error():
+    # validate_hl7() has no CDA counterpart yet - pasting XML into Validate
+    # must return a clean "Unsupported" error, not a confusing HL7-parse
+    # failure from trying to parse XML as pipe-delimited text.
+    response = client.post("/api/validate", json={"hl7_text": read_fixture("ccd_basic.xml")})
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["category"] == "Unsupported"
+
+
+def test_form_validate_renders_cda_unsupported_error_in_page():
+    response = client.post("/validate", data={"hl7_text": read_fixture("ccd_basic.xml")})
+    assert response.status_code == 200
+    assert "not yet supported" in response.text

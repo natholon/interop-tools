@@ -11,10 +11,11 @@ Tools to assist with common HL7 processes - transformation, fhir conversion, val
 - HL7v2 MDM → FHIR R4 Bundle (Patient + optional Encounter + DocumentReference, with document text content carried via a separate Binary resource) — T02 New document, T04 Document status update, T06 Document addendum.
 - A synthetic test-data generator covering all 20 combinations above, with realistic field-level randomization (required fields always populated, optional fields randomly included or omitted), selectable from a dropdown in the web UI or via the JSON API.
 - An HL7v2 message **validator**, independent of conversion — checks any message (supported for conversion or not) and returns a report of `error`/`warning`/`info` findings, each pointing at the offending segment/field, covering structural correctness (required segments, well-formed MSH/PID fields) as well as healthcare data-quality plausibility (a birth date in the future, a discharge before an admit, an appointment ending before it starts, a lab value outside its own reference range).
+- **C-CDA → FHIR R4 Bundle** (the app's first non-HL7v2 input format): CCD (Continuity of Care Document) header → Patient + optional Encounter, and the Problems section → Condition (SNOMED CT-coded, with clinical status resolved from either the Concern Act or a nested Problem Status Observation, honoring `negationInd`). Input format is auto-detected — paste or upload either HL7v2 or C-CDA XML into the same textarea/file field and **Convert to FHIR** routes to the right pipeline automatically. Medications, Allergies, and other document types/sections are a planned follow-up on the same section-dispatch infrastructure; C-CDA validation isn't implemented yet (**Validate** returns a clear "not yet supported" message for XML input rather than a confusing HL7v2-parse error).
 
-Conversion, generation, and validation are all available through the same web UI and JSON API.
+Conversion is available for both input formats; generation and validation currently remain HL7v2-only. All of the above are available through the same web UI and JSON API.
 
-**Planned next:** remaining trigger events for the message types above (e.g. ADT A38 cancel pre-admit, ORU R32, MDM T08/T10/T11), then broader deduplication and mapping tooling across HL7v2/FHIR/CDA/C-CDA.
+**Planned next:** remaining trigger events for the HL7v2 message types above (e.g. ADT A38 cancel pre-admit, ORU R32, MDM T08/T10/T11); more C-CDA document types and sections (Medications, Allergies) on the same infrastructure; then EDI support.
 
 ## Installation (Windows / PowerShell)
 
@@ -36,7 +37,7 @@ Start the app:
 uvicorn app.main:app --reload
 ```
 
-Then open [http://127.0.0.1:8000](http://127.0.0.1:8000) in a browser. Paste a raw HL7v2 message (any supported ADT, SIU, ORU, or MDM trigger event, see Status above) into the text box, pick a message type from the dropdown and click **Generate sample** for a fresh randomized example, or upload a `.hl7`/`.txt` file — then click **Convert to FHIR** to see the resulting FHIR Bundle JSON, or **Validate** to see a report of error/warning/info findings instead. Parse errors and mapping/FHIR-construction errors are shown as clear categorized messages rather than raw errors; a validation report is returned even for messages with issues — it's an analysis result, not an error.
+Then open [http://127.0.0.1:8000](http://127.0.0.1:8000) in a browser. Paste a raw HL7v2 message (any supported ADT, SIU, ORU, or MDM trigger event, see Status above) or a C-CDA XML document (currently: a CCD) into the text box, pick a message type from the dropdown and click **Generate sample** for a fresh randomized HL7v2 example, or upload a `.hl7`/`.txt`/`.xml` file — then click **Convert to FHIR** to see the resulting FHIR Bundle JSON (input format is auto-detected), or **Validate** to see a report of error/warning/info findings instead (HL7v2 input only for now). Parse errors and mapping/FHIR-construction errors are shown as clear categorized messages rather than raw errors; a validation report is returned even for messages with issues — it's an analysis result, not an error.
 
 A JSON API is also available:
 ```powershell

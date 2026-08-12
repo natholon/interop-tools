@@ -3,12 +3,12 @@
 {% block content %}
 <form id="convert-form" method="post" action="/convert" enctype="multipart/form-data">
     <div class="field">
-        <label for="hl7_text">Raw HL7v2 message</label>
-        <textarea id="hl7_text" name="hl7_text" rows="14" placeholder="MSH|^~\&amp;|...">{{ hl7_text or "" }}</textarea>
+        <label for="hl7_text">Raw HL7v2 message or C-CDA XML document</label>
+        <textarea id="hl7_text" name="hl7_text" rows="14" placeholder="MSH|^~\&amp;|... or &lt;ClinicalDocument xmlns=&quot;urn:hl7-org:v3&quot;&gt;...">{{ hl7_text or "" }}</textarea>
     </div>
     <div class="field">
         <label for="hl7_file">Or upload a file (overrides pasted text)</label>
-        <input type="file" id="hl7_file" name="hl7_file" accept=".hl7,.txt">
+        <input type="file" id="hl7_file" name="hl7_file" accept=".hl7,.txt,.xml">
     </div>
     <div class="field">
         <label for="message-type-select">Sample message type</label>

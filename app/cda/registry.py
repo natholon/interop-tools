@@ -1,0 +1,44 @@
+"""Document-type and section dispatch tables - the app/mappings/registry.py
+equivalent for C-CDA. DOCUMENT_BUILDERS is keyed like MessageMapper's
+registry (different document types are genuinely different shapes).
+SECTION_BUILDERS is keyed like the generator registry (every section
+builder shares one signature, no polymorphism needed) - and lives here
+rather than inline in ccd.py because section templateIds (Problems,
+Medications, Allergies, ...) are standardized across C-CDA document types
+generally, not CCD-specific: a future Discharge Summary/H&P builder reuses
+this exact dispatch table.
+
+Note on import direction: this module imports the concrete document
+builder (ccd.CcdBuilder) at module load time, same as
+app/mappings/registry.py imports AdtA01Mapper etc. - but unlike the HL7v2
+mappers, a CdaDocumentBuilder genuinely needs to look up SECTION_BUILDERS
+(to dispatch each section it walks), which would be a circular import if
+ccd.py imported this module at its own top level. ccd.py instead imports
+SECTION_BUILDERS lazily, inside the method that needs it - by the time
+that method actually runs, this module has finished loading."""
+
+from collections.abc import Callable
+from xml.etree.ElementTree import Element
+
+from fhir.resources.R4B.resource import Resource
+
+from app.cda import problems
+from app.cda.base import CdaDocumentBuilder
+from app.cda.ccd import CcdBuilder
+from app.cda.parser import has_template_id
+from app.hl7.errors import MappingError
+
+SECTION_BUILDERS: dict[str, Callable[[Element, str], list[Resource]]] = {
+    problems.SECTION_TEMPLATE_ID: problems.build_conditions,
+}
+
+_DOCUMENT_BUILDERS: dict[str, CdaDocumentBuilder] = {
+    CcdBuilder.template_id: CcdBuilder(),
+}
+
+
+def get_document_builder(document: Element) -> CdaDocumentBuilder:
+    for template_id, builder in _DOCUMENT_BUILDERS.items():
+        if has_template_id(document, template_id):
+            return builder
+    raise MappingError("No builder registered for this document's templateId(s)")

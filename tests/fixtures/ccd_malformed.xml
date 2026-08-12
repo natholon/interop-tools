@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ClinicalDocument xmlns="urn:hl7-org:v3">
+  <recordTarget>
+    <patientRole>
+      <patient>
+        <name><given>Mal</given><family>Formed</name>
+      </patient>
+    </patientRole>
+</ClinicalDocument>
