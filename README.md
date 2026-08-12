@@ -1,7 +1,5 @@
 # interop-tools
 
-*(formerly `hl7-tools`, renamed as scope expanded beyond HL7v2)*
-
 A healthcare interoperability toolkit - transformation, FHIR conversion, validation, and synthetic test-data generation across HL7v2, C-CDA, and (planned) EDI.
 
 ## Status
