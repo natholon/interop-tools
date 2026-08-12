@@ -2,8 +2,9 @@ from pathlib import Path
 
 import pytest
 
+from app.generators.base import segment
 from app.hl7.errors import Hl7ParseError, MissingSegmentError
-from app.hl7.parser import field_str, group_segments_by_leader, parse_message, require_segment
+from app.hl7.parser import field_str, group_segments_by_leader, parse_message, raw_field_str, require_segment
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -39,6 +40,30 @@ def test_field_str_missing_field_returns_empty():
     msg = parse_message(read_fixture("adt_a01_minimal.hl7"))
     pid = require_segment(msg, "PID")
     assert field_str(pid, 13) == ""
+
+
+def test_raw_field_str_preserves_a_caret_that_field_str_would_truncate():
+    # field_str defaults to component=1, which is correct for HL7-composite
+    # fields (XCN/CWE/PL/...) but wrong for unstructured free text (TX/FT/
+    # ST) where a literal '^' is just a character, not a component
+    # separator - raw_field_str must return the text whole.
+    text = "Grade II^ tear noted; follow up"
+    raw = "MSH|^~\\&|A|B|C|D|20260812120000||ORU^R01|M1|P|2.5\r" + segment("OBX", {1: "1", 2: "FT", 5: text}, 18) + "\r"
+    obx = parse_message(raw).segment("OBX")
+    assert field_str(obx, 5) == "Grade II"
+    assert raw_field_str(obx, 5) == text
+
+
+def test_raw_field_str_matches_field_str_when_no_component_separator_present():
+    raw = "MSH|^~\\&|A|B|C|D|20260812120000||ORU^R01|M1|P|2.5\r" + segment("OBX", {1: "1", 2: "FT", 5: "plain text"}, 18) + "\r"
+    obx = parse_message(raw).segment("OBX")
+    assert raw_field_str(obx, 5) == "plain text" == field_str(obx, 5)
+
+
+def test_raw_field_str_missing_field_returns_empty():
+    msg = parse_message(read_fixture("adt_a01_minimal.hl7"))
+    pid = require_segment(msg, "PID")
+    assert raw_field_str(pid, 13) == ""
 
 
 def test_group_segments_by_leader_associates_members_with_correct_leader():

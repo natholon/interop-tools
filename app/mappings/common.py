@@ -2,11 +2,13 @@ import uuid
 
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
 from fhir.resources.R4B.coding import Coding
+from fhir.resources.R4B.encounter import Encounter
 from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.identifier import Identifier
 from fhir.resources.R4B.location import Location
 from fhir.resources.R4B.patient import Patient
 from fhir.resources.R4B.practitioner import Practitioner
+from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.resource import Resource
 
 from app.fhir_models.builders import (
@@ -133,6 +135,41 @@ def build_visit_identifier(pv1) -> Identifier | None:
     if not visit_number:
         return None
     return Identifier(system="urn:hl7-tools:visit-number", value=visit_number)
+
+
+def build_minimal_encounter(pv1, patient_id: str) -> Encounter:
+    """A minimal Encounter for message types whose PV1 (when present) gives
+    context rather than an admit/discharge lifecycle event - ORU's optional
+    result-reporting encounter and MDM's optional document-context encounter
+    both need exactly this shape. Status is honestly "unknown" rather than
+    guessed, since neither message type's trigger carries any real
+    lifecycle signal the way ADT's does. This was independently duplicated
+    once (byte-for-byte) between oru.py and mdm.py before being extracted
+    here - the same kind of silent-duplication risk build_minimal_pv1_fields
+    (in app/generators/base.py) was created to avoid on the generator side."""
+    encounter = Encounter(
+        id=str(uuid.uuid4()),
+        status="unknown",
+        subject=Reference(reference=f"urn:uuid:{patient_id}"),
+        class_fhir=resolve_encounter_class(pv1),
+    )
+    visit_identifier = build_visit_identifier(pv1)
+    if visit_identifier:
+        encounter.identifier = [visit_identifier]
+    return encounter
+
+
+def build_reference_with_optional_display(resource_id: str, display: str) -> Reference:
+    """A Reference to a materialized resource, with `display` omitted
+    (rather than passed as an empty string) when the display text couldn't
+    be resolved - FHIR's Reference.display must be a non-empty string when
+    present. First needed for SIU's AIP/AIL/AIG participants (an XCN field
+    with only an id, no name, would otherwise pair a real Practitioner with
+    an empty display and crash), reused by MDM's TXA-9/TXA-10 originator/
+    authenticator references for the identical failure mode."""
+    if display:
+        return Reference(reference=f"urn:uuid:{resource_id}", display=display)
+    return Reference(reference=f"urn:uuid:{resource_id}")
 
 
 def assemble_bundle(msh, patient: Patient, *resources: Resource) -> Bundle:

@@ -31,6 +31,23 @@ _PARTICIPATION_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-Participa
 _DISCHARGE_DISPOSITION_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0112"
 
 
+def _drop_evn2_period_start_fallback(encounter: Encounter, pv1) -> None:
+    """build_encounter_core falls back to EVN-2 for period.start whenever
+    PV1-44 is absent - correct for admission-lifecycle triggers (A01/A02/
+    A04/A05/A08) where EVN-2 genuinely is the encounter's own event time,
+    but wrong for cancel-trigger messages (A11/A13): EVN-2 there is when the
+    *cancel* notification itself was recorded, not any real start time for
+    the (cancelled) encounter, so the fallback would mislabel the
+    cancel-event time as an admission start. Resets period.start to PV1-44
+    only, dropping the EVN-2 fallback; clears period entirely if nothing is
+    left in it."""
+    if encounter.period is None:
+        return
+    encounter.period.start = parse_hl7_datetime(field_str(pv1, 44))
+    if encounter.period.start is None and encounter.period.end is None:
+        encounter.period = None
+
+
 def discharge_datetime(pv1, evn) -> str | None:
     """Resolve a discharge/end datetime from PV1-45, falling back to EVN-2."""
     value = parse_hl7_datetime(field_str(pv1, 45))
@@ -187,3 +204,60 @@ class AdtA08Mapper(BaseAdtMapper):
     def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
         status = "finished" if field_str(pv1, 45) else "in-progress"
         return build_encounter_core(pv1, evn, patient_id, status=status)
+
+
+class AdtA05Mapper(BaseAdtMapper):
+    """A05 - Pre-admit a patient. Encounter is planned - it hasn't started
+    yet, unlike A01/A04's already-open encounter."""
+
+    trigger_event = "A05"
+
+    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
+        return build_encounter_core(pv1, evn, patient_id, status="planned")
+
+
+class AdtA11Mapper(BaseAdtMapper):
+    """A11 - Cancel Admit/Visit Notification: backs out an erroneous A01/A04.
+    This converter is stateless - there's no persisted prior Encounter to
+    actually cancel - so status="entered-in-error" is the only way to signal
+    in the output that this Encounter represents a backed-out admission
+    rather than a real one. This is a deliberate choice, not IG-mandated: the
+    v2-to-FHIR IG's own A11 guidance applies no special handling at all (just
+    "PV1 processing creates a new Encounter"), which would make an
+    A11-derived Encounter indistinguishable from a plain A01 one in the FHIR
+    output - judged not useful enough for a conversion tool whose purpose is
+    to make exactly this kind of information visible."""
+
+    trigger_event = "A11"
+
+    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
+        encounter = build_encounter_core(pv1, evn, patient_id, status="entered-in-error")
+        _drop_evn2_period_start_fallback(encounter, pv1)
+        return encounter
+
+
+class AdtA13Mapper(BaseAdtMapper):
+    """A13 - Cancel Discharge: backs out an erroneous A03. Same
+    entered-in-error rationale as A11. Unlike A03, a discharge date/time is
+    not required - asserting entered-in-error doesn't depend on having one -
+    but discharge disposition is still populated from PV1-36 when present,
+    since the message backing out a discharge will typically still carry
+    the fields that were in the erroneous A03. period.end is already
+    PV1-45-only via build_encounter_core (it never falls back to EVN-2 for
+    period.end, regardless of trigger, so no extra handling is needed
+    there) - but period.start does need correcting, same as A11, via
+    _drop_evn2_period_start_fallback."""
+
+    trigger_event = "A13"
+
+    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
+        encounter = build_encounter_core(pv1, evn, patient_id, status="entered-in-error")
+        _drop_evn2_period_start_fallback(encounter, pv1)
+        disposition_code = field_str(pv1, 36)
+        if disposition_code:
+            encounter.hospitalization = EncounterHospitalization(
+                dischargeDisposition=CodeableConcept(
+                    coding=[Coding(system=_DISCHARGE_DISPOSITION_SYSTEM, code=disposition_code)]
+                )
+            )
+        return encounter

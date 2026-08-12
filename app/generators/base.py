@@ -72,6 +72,26 @@ _NTE_COMMENTS = [
     "Interpreter requested",
     "Wheelchair access needed",
 ]
+# TXA-2 (Document Type) - a representative subset, CWE-shaped (code, display).
+_DOCUMENT_TYPES = [
+    ("CN", "Consultation Note"), ("DS", "Discharge Summary"),
+    ("HP", "History and Physical"), ("OP", "Operative Report"),
+    ("PN", "Progress Note"), ("RA", "Radiology Report"),
+]
+# TXA-3 (Document Content Presentation, HL7 table 0191) - only codes with a
+# recognized MIME mapping in app.mappings.mdm are used, so every generated
+# message exercises a real contentType rather than the text/plain fallback.
+_CONTENT_PRESENTATION_CODES = ["TEXT", "FORMATTED", "HTML"]
+# Plausible synthetic clinical-note lines, plain-text (TX-typed OBX-5 values).
+_DOCUMENT_BODY_LINES = [
+    "Patient seen for scheduled follow-up.",
+    "No acute distress noted on exam.",
+    "Vitals stable, within normal limits.",
+    "Reviewed prior imaging; no new findings.",
+    "Recommend continued monitoring and follow-up in 2 weeks.",
+    "Medication list reviewed and unchanged.",
+    "Patient counseled on lifestyle modifications.",
+]
 
 # (code, display, unit, reference_low, reference_high) - numeric lab tests.
 _OBSERVATION_TESTS = [
@@ -113,7 +133,14 @@ def format_hl7_datetime(dt: datetime) -> str:
 
 
 def random_datetime_near_now(rng: random.Random, min_days: int = -2, max_days: int = 30) -> datetime:
-    return datetime.now(timezone.utc) + timedelta(
+    # Truncated to the minute: only days/hours/minutes are seeded below, so
+    # leaving real seconds/microseconds in the base would let unseeded
+    # wall-clock entropy leak into the result - two calls with the same
+    # seed a fraction of a second apart could otherwise produce different
+    # output, breaking the "same seed always reproduces the same message"
+    # guarantee whenever they straddle a real second boundary.
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    return now + timedelta(
         days=rng.randint(min_days, max_days),
         hours=rng.randint(0, 23),
         minutes=rng.randint(0, 59),
@@ -208,6 +235,18 @@ def random_discharge_disposition(rng: random.Random) -> str:
 
 def random_nte_comment(rng: random.Random) -> str:
     return rng.choice(_NTE_COMMENTS)
+
+
+def random_document_type(rng: random.Random) -> tuple[str, str]:
+    return rng.choice(_DOCUMENT_TYPES)
+
+
+def random_content_presentation_code(rng: random.Random) -> str:
+    return rng.choice(_CONTENT_PRESENTATION_CODES)
+
+
+def random_document_body_line(rng: random.Random) -> str:
+    return rng.choice(_DOCUMENT_BODY_LINES)
 
 
 def random_observation_test(rng: random.Random) -> tuple[str, str, str, float, float]:

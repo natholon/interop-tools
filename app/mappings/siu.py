@@ -15,13 +15,14 @@ from fhir.resources.R4B.resource import Resource
 
 from app.fhir_models.builders import build_codeable_concept_from_cwe, parse_hl7_datetime
 from app.hl7.errors import MappingError
-from app.hl7.parser import field_str, optional_segments, require_segment
+from app.hl7.parser import field_str, optional_segments, raw_field_str, require_segment
 from app.mappings.base import MessageMapper
 from app.mappings.common import (
     assemble_bundle,
     build_location_from_pl,
     build_patient,
     build_practitioner_from_xcn,
+    build_reference_with_optional_display,
     location_display,
     person_display,
 )
@@ -136,15 +137,10 @@ def _build_participants(
         if resource is None:
             return
         extra_resources.append(resource)
-        # display is omitted (not passed as "") when unresolvable: FHIR's
-        # Reference.display must be a non-empty string when present.
-        actor_kwargs = {"reference": f"urn:uuid:{resource.id}"}
-        if display:
-            actor_kwargs["display"] = display
         participants.append(
             AppointmentParticipant(
                 status="accepted",
-                actor=Reference(**actor_kwargs),
+                actor=build_reference_with_optional_display(resource.id, display),
                 type=[CodeableConcept(coding=[type_coding])] if type_coding else None,
             )
         )
@@ -212,10 +208,24 @@ def build_appointment_core(
     if service_types:
         appointment.serviceType = service_types
 
-    if nte_segments:
-        comment = field_str(nte_segments[0], 3)
-        if comment:
-            appointment.comment = comment
+    # Every NTE in the message is treated as appointment-scoped and
+    # concatenated - not just the first one found. NTEs can trail SCH or a
+    # resource-group segment (AIS/AIG/AIL/AIP), but Appointment.comment is a
+    # single field with no place to preserve which segment each note
+    # actually followed, and no separate field exists for per-participant
+    # notes - so every note's text is folded into one comment rather than
+    # arbitrarily keeping only the first (which used to pick whichever NTE
+    # happened to appear first in the message, not necessarily the most
+    # relevant one). Joined with a newline rather than "; " - NTE-3 is FT
+    # (Formatted Text, unstructured free text - read via raw_field_str, not
+    # field_str, for the same reason OBX-5 free-text values are: a literal
+    # '^' in the comment is just a character, not a component separator),
+    # and a newline is far less likely to collide with a note's own content
+    # than "; " would be, though it doesn't fully eliminate the ambiguity of
+    # folding multiple notes into one field with no boundary markers.
+    comments = [text for nte in nte_segments if (text := raw_field_str(nte, 3))]
+    if comments:
+        appointment.comment = "\n".join(comments)
 
     return appointment
 
@@ -259,11 +269,16 @@ class BaseSiuMapper(MessageMapper):
 
 
 class _BookedSiuMapper(BaseSiuMapper):
-    """Shared behavior for S12/S13/S14: this stateless converter has no prior
-    state to diff a 'reschedule' or 'modify' against, so all three produce
-    the same shape - a currently-booked Appointment - differing only in
-    which trigger_event lands in the extension. Requires a resolvable start
-    time (TQ1 or SCH-11); raises MappingError otherwise."""
+    """Shared behavior for S12/S13/S14/S26: requires a resolvable start time
+    (TQ1 or SCH-11), raising MappingError otherwise - a no-show (S26) refers
+    to a specific already-scheduled time, same as a booking. `status` is a
+    class attribute so subclasses vary only that: S12/S13/S14 have no
+    persisted state to diff a 'reschedule' or 'modify' against, so all three
+    produce the same booked shape, differing only in which trigger_event
+    lands in the extension; S26 produces the same shape but with
+    status="noshow"."""
+
+    status = "booked"
 
     def build_appointment(self, sch, tq1_segments, nte_segments, ais_segments, participants) -> Appointment:
         start, end = resolve_appointment_timing(sch, tq1_segments)
@@ -277,7 +292,7 @@ class _BookedSiuMapper(BaseSiuMapper):
             nte_segments,
             ais_segments,
             participants,
-            status="booked",
+            status=self.status,
             start=start,
             end=end,
             trigger_event=self.trigger_event,
@@ -302,11 +317,22 @@ class SiuS14Mapper(_BookedSiuMapper):
     trigger_event = "S14"
 
 
-class SiuS15Mapper(BaseSiuMapper):
-    """S15 - Notification of appointment cancellation. Unlike S12/S13/S14, a
-    cancellation is valid to record even without resolvable timing."""
+class SiuS26Mapper(_BookedSiuMapper):
+    """S26 - Notification that patient did not show up for a scheduled
+    appointment. "noshow" is a real, near-exact-match FHIR AppointmentStatus
+    code for this HL7 semantics."""
 
-    trigger_event = "S15"
+    trigger_event = "S26"
+    status = "noshow"
+
+
+class _UntimedSiuMapper(BaseSiuMapper):
+    """Shared behavior for S15/S17: timing is resolved but not required,
+    unlike the _BookedSiuMapper family - a cancellation or deletion is valid
+    to record even without resolvable timing. `status` is a class attribute
+    so subclasses vary only that."""
+
+    status = "cancelled"
 
     def build_appointment(self, sch, tq1_segments, nte_segments, ais_segments, participants) -> Appointment:
         start, end = resolve_appointment_timing(sch, tq1_segments)
@@ -316,8 +342,25 @@ class SiuS15Mapper(BaseSiuMapper):
             nte_segments,
             ais_segments,
             participants,
-            status="cancelled",
+            status=self.status,
             start=start,
             end=end,
             trigger_event=self.trigger_event,
         )
+
+
+class SiuS15Mapper(_UntimedSiuMapper):
+    """S15 - Notification of appointment cancellation."""
+
+    trigger_event = "S15"
+
+
+class SiuS17Mapper(_UntimedSiuMapper):
+    """S17 - Notification of appointment deletion: removes an appointment
+    that was entered in error, as distinct from S15's cancellation of a
+    valid request (the HL7 standard draws this distinction explicitly).
+    status="entered-in-error" preserves that distinction in the FHIR output
+    rather than collapsing S17 into the same "cancelled" status as S15."""
+
+    trigger_event = "S17"
+    status = "entered-in-error"

@@ -13,7 +13,6 @@ from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.diagnosticreport import DiagnosticReport
-from fhir.resources.R4B.encounter import Encounter
 from fhir.resources.R4B.observation import Observation, ObservationReferenceRange
 from fhir.resources.R4B.period import Period
 from fhir.resources.R4B.practitioner import Practitioner
@@ -23,14 +22,13 @@ from fhir.resources.R4B.resource import Resource
 
 from app.fhir_models.builders import build_codeable_concept_from_cwe, parse_hl7_datetime
 from app.hl7.errors import MissingSegmentError
-from app.hl7.parser import field_str, group_segments_by_leader, require_segment
+from app.hl7.parser import field_str, group_segments_by_leader, raw_field_str, require_segment
 from app.mappings.base import MessageMapper
 from app.mappings.common import (
     assemble_bundle,
+    build_minimal_encounter,
     build_patient,
     build_practitioner_from_xcn,
-    build_visit_identifier,
-    resolve_encounter_class,
 )
 
 _INTERPRETATION_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0078"
@@ -61,8 +59,17 @@ def _build_observation_value(obx) -> dict:
     OBX-2 (value type). An unrecognized/unsupported value type (SN, NA, ED,
     ...) leaves the value unset rather than guess - the NM/string/coded
     fallbacks below cover the overwhelming majority of real-world ORU
-    traffic, and an Observation without a value is still valid FHIR."""
+    traffic, and an Observation without a value is still valid FHIR.
+
+    ST/FT/TX are unstructured free text, not HL7-composite - a literal '^'
+    in the text is just a character, not a component separator, so this
+    branch reads the field via raw_field_str (whole field) rather than
+    field_str (component 1 only), which would otherwise silently truncate
+    any free-text value containing a caret."""
     value_type = field_str(obx, 2).strip().upper()
+    if value_type in ("ST", "FT", "TX"):
+        text = raw_field_str(obx, 5)
+        return {"valueString": text} if text else {}
     raw_value = field_str(obx, 5)
     if not raw_value:
         return {}
@@ -76,8 +83,6 @@ def _build_observation_value(obx) -> dict:
         if units:
             quantity.unit = units
         return {"valueQuantity": quantity}
-    if value_type in ("ST", "FT", "TX"):
-        return {"valueString": raw_value}
     if value_type in ("CE", "CWE", "CNE", "IS"):
         concept = build_codeable_concept_from_cwe(obx, 5)
         return {"valueCodeableConcept": concept} if concept else {}
@@ -179,23 +184,6 @@ def build_diagnostic_report(
     return report
 
 
-def _build_minimal_encounter(pv1, patient_id: str) -> Encounter:
-    """ORU's PV1 (when present) gives result-reporting context, not an
-    admit/discharge lifecycle event - unlike ADT, there's no trigger telling
-    us the encounter's actual status, so status is honestly "unknown" rather
-    than guessed."""
-    encounter = Encounter(
-        id=str(uuid.uuid4()),
-        status="unknown",
-        subject=Reference(reference=f"urn:uuid:{patient_id}"),
-        class_fhir=resolve_encounter_class(pv1),
-    )
-    visit_identifier = build_visit_identifier(pv1)
-    if visit_identifier:
-        encounter.identifier = [visit_identifier]
-    return encounter
-
-
 class BaseOruMapper(MessageMapper):
     """Shared (in fact total - see module docstring) behavior for every ORU
     trigger event. Requires MSH/PID; PV1 is optional (builds a minimal
@@ -215,7 +203,7 @@ class BaseOruMapper(MessageMapper):
         except MissingSegmentError:
             pv1 = None
         if pv1 is not None:
-            encounter = _build_minimal_encounter(pv1, patient.id)
+            encounter = build_minimal_encounter(pv1, patient.id)
         encounter_id = encounter.id if encounter is not None else None
 
         groups = group_segments_by_leader(message, "OBR", ["OBX"])

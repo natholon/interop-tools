@@ -95,3 +95,21 @@ def field_repetitions(segment, field_num: int):
         return list(segment[field_num])
     except IndexError:
         return []
+
+
+def raw_field_str(segment, field_num: int, repetition: int = 0) -> str:
+    """Return a field's full raw text, or '' if absent - unlike field_str,
+    this does NOT extract a single component. Use this (not field_str's
+    component=1 default) for unstructured free-text field types like TX/FT/
+    ST, where a literal '^' in the text is just a character, not an HL7
+    component separator: the hl7 library still splits on it the same way it
+    would for a genuinely composite field, so field_str(segment, n) would
+    silently truncate the text at the first '^'. str() on the raw
+    repetition reconstructs the original text in both cases - already a
+    bare string when the library didn't split it, and rejoined with '^'
+    when it did."""
+    try:
+        rep = segment[field_num][repetition]
+    except IndexError:
+        return ""
+    return str(rep)

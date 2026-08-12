@@ -7,7 +7,10 @@ from app.generators.adt import (
     generate_adt_a02,
     generate_adt_a03,
     generate_adt_a04,
+    generate_adt_a05,
     generate_adt_a08,
+    generate_adt_a11,
+    generate_adt_a13,
 )
 from app.hl7.parser import field_str, parse_message, require_segment
 from app.hl7.pipeline import convert_hl7_to_bundle
@@ -17,7 +20,10 @@ _GENERATORS = [
     (generate_adt_a02, "A02"),
     (generate_adt_a03, "A03"),
     (generate_adt_a04, "A04"),
+    (generate_adt_a05, "A05"),
     (generate_adt_a08, "A08"),
+    (generate_adt_a11, "A11"),
+    (generate_adt_a13, "A13"),
 ]
 
 
@@ -88,3 +94,34 @@ def test_a08_status_hits_both_branches_across_seeds():
         encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
         statuses.add(encounter.status)
     assert statuses == {"in-progress", "finished"}
+
+
+def test_a05_always_produces_planned_status():
+    for seed in range(20):
+        bundle = convert_hl7_to_bundle(generate_adt_a05(random.Random(seed)))
+        encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
+        assert encounter.status == "planned"
+
+
+@pytest.mark.parametrize("generator_fn, trigger_event", [(generate_adt_a11, "A11"), (generate_adt_a13, "A13")])
+def test_cancel_triggers_always_produce_entered_in_error_status(generator_fn, trigger_event):
+    for seed in range(20):
+        bundle = convert_hl7_to_bundle(generator_fn(random.Random(seed)))
+        encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
+        assert encounter.status == "entered-in-error"
+
+
+def test_a13_discharge_fields_vary_across_seeds():
+    # A13 doesn't require discharge fields (unlike A03) - the generator
+    # deliberately exercises both the populated and absent branches of
+    # AdtA13Mapper's optional discharge period/disposition handling.
+    present = absent = 0
+    for seed in range(60):
+        message = parse_message(generate_adt_a13(random.Random(seed)))
+        pv1 = require_segment(message, "PV1")
+        if field_str(pv1, 45):
+            present += 1
+        else:
+            absent += 1
+    assert present > 0
+    assert absent > 0

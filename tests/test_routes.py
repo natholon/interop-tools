@@ -85,6 +85,18 @@ def test_api_convert_resolves_oru_message_end_to_end():
     assert report_count == 2
 
 
+def test_api_convert_resolves_mdm_message_end_to_end():
+    # Proves the parse -> pipeline -> route stack resolves a fourth HL7
+    # message *type* (MDM, TXA -> DocumentReference + Binary) via the registry.
+    response = client.post("/api/convert", json={"hl7_text": read_fixture("mdm_t02_basic.hl7")})
+    assert response.status_code == 200
+    body = response.json()
+    document_reference = next(
+        e["resource"] for e in body["bundle"]["entry"] if e["resource"]["resourceType"] == "DocumentReference"
+    )
+    assert document_reference["status"] == "current"
+
+
 def test_index_renders_message_type_dropdown():
     response = client.get("/")
     assert response.status_code == 200

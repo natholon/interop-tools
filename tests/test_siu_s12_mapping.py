@@ -148,6 +148,20 @@ def test_aip_with_id_only_materializes_with_id_as_display():
     assert aip_participant.actor.display == "5678"
 
 
+def test_multiple_nte_segments_are_concatenated_into_comment():
+    # Regression test: Appointment.comment used to take only the *first* NTE
+    # found anywhere in the message (nte_segments[0]), regardless of which
+    # segment it actually trailed. This fixture has one NTE right after SCH
+    # (appointment-level) and one right after an AIP occurrence
+    # (personnel-level) - both should now be folded into one comment, since
+    # there's no separate field for per-participant notes.
+    message = parse_message(read_fixture("siu_s12_multiple_nte.hl7"))
+    bundle = SiuS12Mapper().to_bundle(message)
+    appointment = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Appointment")
+
+    assert appointment.comment == "Patient prefers morning slots\nDr. Smith requested a 15 min buffer before this slot"
+
+
 def test_partial_tq1_falls_back_to_sch11_per_field():
     # TQ1 supplies only a start time; SCH-11 has a full start+end. The missing
     # TQ1 end must fall back to SCH-11 rather than being left blank just

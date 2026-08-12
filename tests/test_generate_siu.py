@@ -2,7 +2,14 @@ import random
 
 import pytest
 
-from app.generators.siu import generate_siu_s12, generate_siu_s13, generate_siu_s14, generate_siu_s15
+from app.generators.siu import (
+    generate_siu_s12,
+    generate_siu_s13,
+    generate_siu_s14,
+    generate_siu_s15,
+    generate_siu_s17,
+    generate_siu_s26,
+)
 from app.hl7.parser import field_str, parse_message, require_segment
 from app.hl7.pipeline import convert_hl7_to_bundle
 
@@ -11,7 +18,17 @@ _BOOKED_GENERATORS = [
     (generate_siu_s13, "S13"),
     (generate_siu_s14, "S14"),
 ]
-_ALL_GENERATORS = _BOOKED_GENERATORS + [(generate_siu_s15, "S15")]
+_TIMING_REQUIRED_GENERATORS = _BOOKED_GENERATORS + [(generate_siu_s26, "S26")]
+_UNTIMED_GENERATORS = [(generate_siu_s15, "S15"), (generate_siu_s17, "S17")]
+_ALL_GENERATORS = _TIMING_REQUIRED_GENERATORS + _UNTIMED_GENERATORS
+_EXPECTED_STATUS = {
+    "S12": "booked",
+    "S13": "booked",
+    "S14": "booked",
+    "S15": "cancelled",
+    "S17": "entered-in-error",
+    "S26": "noshow",
+}
 
 
 @pytest.mark.parametrize("generator_fn, trigger_event", _ALL_GENERATORS)
@@ -34,30 +51,31 @@ def test_required_fields_always_present(generator_fn, trigger_event):
         assert field_str(sch, 1), "SCH-1 placer appointment ID must always be present"
 
 
-@pytest.mark.parametrize("generator_fn, trigger_event", _BOOKED_GENERATORS)
-def test_booked_triggers_always_have_resolvable_timing(generator_fn, trigger_event):
+@pytest.mark.parametrize("generator_fn, trigger_event", _TIMING_REQUIRED_GENERATORS)
+def test_timing_required_triggers_always_have_resolvable_timing(generator_fn, trigger_event):
     # Would raise MappingError if timing were ever unresolved for these triggers.
     for seed in range(30):
         bundle = convert_hl7_to_bundle(generator_fn(random.Random(seed)))
         appointment = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Appointment")
-        assert appointment.status == "booked"
+        assert appointment.status == _EXPECTED_STATUS[trigger_event]
         assert appointment.start is not None
         assert appointment.end is not None
         assert appointment.extension[0].valueCode == trigger_event
 
 
-def test_s15_succeeds_with_and_without_timing():
+@pytest.mark.parametrize("generator_fn, trigger_event", _UNTIMED_GENERATORS)
+def test_untimed_triggers_succeed_with_and_without_timing(generator_fn, trigger_event):
     has_timing = no_timing = 0
     for seed in range(60):
-        bundle = convert_hl7_to_bundle(generate_siu_s15(random.Random(seed)))
+        bundle = convert_hl7_to_bundle(generator_fn(random.Random(seed)))
         appointment = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Appointment")
-        assert appointment.status == "cancelled"
+        assert appointment.status == _EXPECTED_STATUS[trigger_event]
         if appointment.start is not None:
             has_timing += 1
         else:
             no_timing += 1
-    assert has_timing > 0, "some S15 messages should include timing"
-    assert no_timing > 0, "some S15 messages should omit timing entirely"
+    assert has_timing > 0, f"some {trigger_event} messages should include timing"
+    assert no_timing > 0, f"some {trigger_event} messages should omit timing entirely"
 
 
 @pytest.mark.parametrize("generator_fn", [g for g, _ in _ALL_GENERATORS])

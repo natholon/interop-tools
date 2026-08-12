@@ -91,6 +91,17 @@ def test_shared_performer_deduped_across_observations():
         assert observation.performer[0].reference == f"urn:uuid:{practitioner.id}"
 
 
+def test_ft_value_with_caret_is_not_truncated():
+    # Regression test: FT/TX/ST are unstructured free text, not HL7
+    # composite - a literal '^' in the text used to get silently truncated
+    # because _build_observation_value read it via field_str (component 1
+    # only) instead of the whole field.
+    message = parse_message(read_fixture("oru_r01_ft_with_caret.hl7"))
+    bundle = OruR01Mapper().to_bundle(message)
+    observation = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Observation")
+    assert observation.valueString == "Grade II^ tear noted; recommend follow-up"
+
+
 def test_missing_obr_raises_missing_segment_error():
     message = parse_message(read_fixture("oru_r01_missing_obr.hl7"))
     with pytest.raises(MissingSegmentError):

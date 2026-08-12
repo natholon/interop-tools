@@ -5,14 +5,15 @@ Tools to assist with common HL7 processes - transformation, fhir conversion, val
 ## Status
 
 **Implemented:**
-- HL7v2 ADT → FHIR R4 Bundle (Patient + Encounter) for the core ADT workflow — A01 Admit, A02 Transfer, A03 Discharge, A04 Register, A08 Update patient information.
-- HL7v2 SIU → FHIR R4 Bundle (Patient + Appointment, plus real Practitioner/Location/Device resources for the appointment's personnel/location/equipment participants) for the core scheduling workflow — S12 New booking, S13 Reschedule, S14 Modify, S15 Cancel.
+- HL7v2 ADT → FHIR R4 Bundle (Patient + Encounter) for the core ADT workflow — A01 Admit, A02 Transfer, A03 Discharge, A04 Register, A05 Pre-admit, A08 Update patient information, A11 Cancel Admit, A13 Cancel Discharge.
+- HL7v2 SIU → FHIR R4 Bundle (Patient + Appointment, plus real Practitioner/Location/Device resources for the appointment's personnel/location/equipment participants) for the core scheduling workflow — S12 New booking, S13 Reschedule, S14 Modify, S15 Cancel, S17 Delete, S26 Patient No-Show.
 - HL7v2 ORU → FHIR R4 Bundle (Patient + optional Encounter + DiagnosticReport + Observation per result, with positional OBR/OBX grouping so each report only references its own results) — R01 Observation result, R30/R40 point-of-care result.
-- A synthetic test-data generator covering all 12 combinations above, with realistic field-level randomization (required fields always populated, optional fields randomly included or omitted), selectable from a dropdown in the web UI or via the JSON API.
+- HL7v2 MDM → FHIR R4 Bundle (Patient + optional Encounter + DocumentReference, with document text content carried via a separate Binary resource) — T02 New document, T04 Document status update, T06 Document addendum.
+- A synthetic test-data generator covering all 20 combinations above, with realistic field-level randomization (required fields always populated, optional fields randomly included or omitted), selectable from a dropdown in the web UI or via the JSON API.
 
 Both conversion and generation are available through the same web UI and JSON API.
 
-**Planned next:** remaining ADT trigger events (e.g. A05 pre-admit, A11/A13 cancel), remaining SIU trigger events (e.g. S17 delete, S26 patient did-not-show), then broader transformation, validation, deduplication, and mapping tooling across HL7v2/FHIR/CDA/C-CDA (including MDM, planned as TXA → DocumentReference with content referenced via a Binary resource).
+**Planned next:** remaining trigger events for the message types above (e.g. ADT A38 cancel pre-admit, ORU R32, MDM T08/T10/T11), then broader transformation, validation, deduplication, and mapping tooling across HL7v2/FHIR/CDA/C-CDA.
 
 ## Installation (Windows / PowerShell)
 
@@ -34,7 +35,7 @@ Start the app:
 uvicorn app.main:app --reload
 ```
 
-Then open [http://127.0.0.1:8000](http://127.0.0.1:8000) in a browser. Paste a raw HL7v2 message (any supported ADT or SIU trigger event, see Status above) into the text box, pick a message type from the dropdown and click **Generate sample** for a fresh randomized example, or upload a `.hl7`/`.txt` file — then click **Convert to FHIR** to see the resulting FHIR Bundle JSON. Parse, mapping, and validation errors are shown as clear categorized messages rather than raw errors.
+Then open [http://127.0.0.1:8000](http://127.0.0.1:8000) in a browser. Paste a raw HL7v2 message (any supported ADT, SIU, ORU, or MDM trigger event, see Status above) into the text box, pick a message type from the dropdown and click **Generate sample** for a fresh randomized example, or upload a `.hl7`/`.txt` file — then click **Convert to FHIR** to see the resulting FHIR Bundle JSON. Parse, mapping, and validation errors are shown as clear categorized messages rather than raw errors.
 
 A JSON API is also available:
 ```powershell

@@ -139,10 +139,25 @@ def generate_siu_s14(rng: random.Random) -> str:
     return _generate_booked(rng, "S14")
 
 
-def generate_siu_s15(rng: random.Random) -> str:
-    msh, _ = generate_msh_segment(rng, "SIU", "S15")
+def generate_siu_s26(rng: random.Random) -> str:
+    # S26 (patient no-show) requires resolvable timing, same as S12/S13/S14 -
+    # a no-show necessarily refers to a specific already-scheduled time.
+    return _generate_booked(rng, "S26")
+
+
+def _generate_untimed(rng: random.Random, trigger_event: str) -> str:
+    msh, _ = generate_msh_segment(rng, "SIU", trigger_event)
     sch_fields = _sch_common_fields(rng)
     timing_segments = _apply_optional_timing(rng)
     pid = generate_pid_segment(rng)
     resource_segments = _resource_group_segments(rng)
     return _assemble(msh, sch_fields, timing_segments, pid, resource_segments)
+
+
+def generate_siu_s15(rng: random.Random) -> str:
+    return _generate_untimed(rng, "S15")
+
+
+def generate_siu_s17(rng: random.Random) -> str:
+    # S17 (delete) doesn't require resolvable timing, same as S15's cancel.
+    return _generate_untimed(rng, "S17")
