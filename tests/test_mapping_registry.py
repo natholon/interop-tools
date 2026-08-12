@@ -10,9 +10,17 @@ from app.mappings.adt import (
     AdtA08Mapper,
     AdtA11Mapper,
     AdtA13Mapper,
+    AdtA38Mapper,
 )
-from app.mappings.mdm import MdmT02Mapper, MdmT04Mapper, MdmT06Mapper
-from app.mappings.oru import OruR01Mapper, OruR30Mapper, OruR40Mapper
+from app.mappings.mdm import (
+    MdmT02Mapper,
+    MdmT04Mapper,
+    MdmT06Mapper,
+    MdmT08Mapper,
+    MdmT10Mapper,
+    MdmT11Mapper,
+)
+from app.mappings.oru import OruR01Mapper, OruR30Mapper, OruR31Mapper, OruR32Mapper, OruR40Mapper
 from app.mappings.registry import get_mapper
 from app.mappings.siu import SiuS12Mapper, SiuS13Mapper, SiuS14Mapper, SiuS15Mapper, SiuS17Mapper, SiuS26Mapper
 
@@ -28,6 +36,7 @@ from app.mappings.siu import SiuS12Mapper, SiuS13Mapper, SiuS14Mapper, SiuS15Map
         ("A08", AdtA08Mapper),
         ("A11", AdtA11Mapper),
         ("A13", AdtA13Mapper),
+        ("A38", AdtA38Mapper),
     ],
 )
 def test_get_mapper_resolves_registered_adt_triggers(trigger_event, expected_type):
@@ -56,6 +65,8 @@ def test_get_mapper_resolves_registered_siu_triggers(trigger_event, expected_typ
     [
         ("R01", OruR01Mapper),
         ("R30", OruR30Mapper),
+        ("R31", OruR31Mapper),
+        ("R32", OruR32Mapper),
         ("R40", OruR40Mapper),
     ],
 )
@@ -70,6 +81,9 @@ def test_get_mapper_resolves_registered_oru_triggers(trigger_event, expected_typ
         ("T02", MdmT02Mapper),
         ("T04", MdmT04Mapper),
         ("T06", MdmT06Mapper),
+        ("T08", MdmT08Mapper),
+        ("T10", MdmT10Mapper),
+        ("T11", MdmT11Mapper),
     ],
 )
 def test_get_mapper_resolves_registered_mdm_triggers(trigger_event, expected_type):

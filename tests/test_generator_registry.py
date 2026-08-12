@@ -12,6 +12,7 @@ _EXPECTED_TYPES = {
     ("ADT", "A08"),
     ("ADT", "A11"),
     ("ADT", "A13"),
+    ("ADT", "A38"),
     ("SIU", "S12"),
     ("SIU", "S13"),
     ("SIU", "S14"),
@@ -20,10 +21,15 @@ _EXPECTED_TYPES = {
     ("SIU", "S26"),
     ("ORU", "R01"),
     ("ORU", "R30"),
+    ("ORU", "R31"),
+    ("ORU", "R32"),
     ("ORU", "R40"),
     ("MDM", "T02"),
     ("MDM", "T04"),
     ("MDM", "T06"),
+    ("MDM", "T08"),
+    ("MDM", "T10"),
+    ("MDM", "T11"),
     ("CDA", "CCD"),
 }
 

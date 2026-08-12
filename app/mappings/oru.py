@@ -1,10 +1,11 @@
 """ORU (observation result) -> FHIR mapping.
 
-R01, R30, and R40 all produce identical output here: the trigger events
-differ in upstream *ordering* workflow semantics (whether a new order should
-be placed for an unsolicited point-of-care result) which this stateless
-converter doesn't model - it only converts the result data itself, which is
-shaped identically across all three.
+R01, R30, R31, R32, and R40 all produce identical output here: the trigger
+events differ in upstream *ordering* workflow semantics (whether a new order
+should be placed for an unsolicited point-of-care result, or whether an
+existing order should be searched for) which this stateless converter
+doesn't model - it only converts the result data itself, which is shaped
+identically across all five.
 """
 
 import uuid
@@ -242,3 +243,15 @@ class OruR40Mapper(BaseOruMapper):
     """R40 - Unsolicited point-of-care observation message without existing order - do not create a new order."""
 
     trigger_event = "R40"
+
+
+class OruR31Mapper(BaseOruMapper):
+    """R31 - Unsolicited new point-of-care observation message - search for an order."""
+
+    trigger_event = "R31"
+
+
+class OruR32Mapper(BaseOruMapper):
+    """R32 - Unsolicited pre-ordered point-of-care observation."""
+
+    trigger_event = "R32"

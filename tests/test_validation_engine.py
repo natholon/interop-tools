@@ -44,11 +44,14 @@ def test_unsupported_message_type_produces_info_not_error():
 
 
 def test_unsupported_trigger_with_registered_type_reports_type_specific_checks_ran():
-    # Regression test: ADT^A38 has a registered TYPE (ADT) but no mapped
+    # Regression test: ADT^A12 has a registered TYPE (ADT) but no mapped
     # TRIGGER, so adt.py's rules already ran and found a real issue before
     # the convertibility check ever runs - the "unsupported message type"
     # finding's message used to always say "only generic checks were run"
-    # regardless, which was factually wrong here.
+    # regardless, which was factually wrong here. (Originally used ADT^A38
+    # for this - A38 became a real mapped trigger once it shipped, so this
+    # now uses A12, a still-unmapped ADT trigger, to keep exercising the
+    # same registered-type/unmapped-trigger scenario.)
     report = validate_hl7(read_fixture("validation_adt_unmapped_trigger_with_type_specific_issue.hl7"))
     assert "adt.patient-class-unrecognized" in [f.rule_id for f in report.findings]
     finding = next(f for f in report.findings if f.rule_id == "engine.unsupported-message-type")

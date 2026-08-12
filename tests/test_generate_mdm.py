@@ -2,7 +2,14 @@ import random
 
 import pytest
 
-from app.generators.mdm import generate_mdm_t02, generate_mdm_t04, generate_mdm_t06
+from app.generators.mdm import (
+    generate_mdm_t02,
+    generate_mdm_t04,
+    generate_mdm_t06,
+    generate_mdm_t08,
+    generate_mdm_t10,
+    generate_mdm_t11,
+)
 from app.hl7.parser import field_str, parse_message, require_segment
 from app.hl7.pipeline import convert_hl7_to_bundle, validate_hl7
 
@@ -10,6 +17,9 @@ _GENERATORS = [
     (generate_mdm_t02, "T02"),
     (generate_mdm_t04, "T04"),
     (generate_mdm_t06, "T06"),
+    (generate_mdm_t08, "T08"),
+    (generate_mdm_t10, "T10"),
+    (generate_mdm_t11, "T11"),
 ]
 
 

@@ -236,6 +236,21 @@ class AdtA11Mapper(BaseAdtMapper):
         return encounter
 
 
+class AdtA38Mapper(BaseAdtMapper):
+    """A38 - Cancel Pre-Admit: backs out an erroneous A05. Same
+    entered-in-error rationale and EVN-2 period.start hazard as A11/A13 - A38
+    is A05's cancel-pattern sibling the same way A11 is A01/A04's and A13 is
+    A03's. No discharge disposition handling (unlike A13): a pre-admit was
+    never discharged, so PV1-36 has no relevance here."""
+
+    trigger_event = "A38"
+
+    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
+        encounter = build_encounter_core(pv1, evn, patient_id, status="entered-in-error")
+        _drop_evn2_period_start_fallback(encounter, pv1)
+        return encounter
+
+
 class AdtA13Mapper(BaseAdtMapper):
     """A13 - Cancel Discharge: backs out an erroneous A03. Same
     entered-in-error rationale as A11. Unlike A03, a discharge date/time is

@@ -127,6 +127,18 @@ def generate_adt_a11(rng: random.Random) -> str:
     return _assemble(msh, evn, pid, segment("PV1", fields, 45))
 
 
+def generate_adt_a38(rng: random.Random) -> str:
+    msh, dt = generate_msh_segment(rng, "ADT", "A38")
+    evn = segment("EVN", {1: "A38", 2: dt}, 2)
+    pid = generate_pid_segment(rng)
+    fields = build_minimal_pv1_fields(rng, "I")
+    fields[3] = random_location_field(rng)
+    if maybe(rng):
+        start, _ = random_time_range(rng)
+        fields[44] = format_hl7_datetime(start)
+    return _assemble(msh, evn, pid, segment("PV1", fields, 45))
+
+
 def generate_adt_a13(rng: random.Random) -> str:
     msh, dt = generate_msh_segment(rng, "ADT", "A13")
     evn = segment("EVN", {1: "A13", 2: dt}, 2)

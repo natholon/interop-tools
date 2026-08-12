@@ -4,7 +4,7 @@ import pytest
 
 from app.hl7.errors import MissingSegmentError
 from app.hl7.parser import parse_message
-from app.mappings.oru import OruR01Mapper, OruR30Mapper, OruR40Mapper
+from app.mappings.oru import OruR01Mapper, OruR30Mapper, OruR31Mapper, OruR32Mapper, OruR40Mapper
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -113,9 +113,11 @@ def test_missing_obr_raises_missing_segment_error():
     [
         (OruR30Mapper, "oru_r30_basic.hl7"),
         (OruR40Mapper, "oru_r40_basic.hl7"),
+        (OruR31Mapper, "oru_r31_basic.hl7"),
+        (OruR32Mapper, "oru_r32_basic.hl7"),
     ],
 )
-def test_r30_and_r40_produce_same_shape_as_r01(mapper_cls, fixture_name):
+def test_point_of_care_triggers_produce_same_shape_as_r01(mapper_cls, fixture_name):
     message = parse_message(read_fixture(fixture_name))
     bundle = mapper_cls().to_bundle(message)
     by_type = _entries_by_type(bundle)

@@ -11,6 +11,7 @@ from app.generators.adt import (
     generate_adt_a08,
     generate_adt_a11,
     generate_adt_a13,
+    generate_adt_a38,
 )
 from app.hl7.parser import field_str, parse_message, require_segment
 from app.hl7.pipeline import convert_hl7_to_bundle, validate_hl7
@@ -24,6 +25,7 @@ _GENERATORS = [
     (generate_adt_a08, "A08"),
     (generate_adt_a11, "A11"),
     (generate_adt_a13, "A13"),
+    (generate_adt_a38, "A38"),
 ]
 
 
@@ -110,7 +112,10 @@ def test_a05_always_produces_planned_status():
         assert encounter.status == "planned"
 
 
-@pytest.mark.parametrize("generator_fn, trigger_event", [(generate_adt_a11, "A11"), (generate_adt_a13, "A13")])
+@pytest.mark.parametrize(
+    "generator_fn, trigger_event",
+    [(generate_adt_a11, "A11"), (generate_adt_a13, "A13"), (generate_adt_a38, "A38")],
+)
 def test_cancel_triggers_always_produce_entered_in_error_status(generator_fn, trigger_event):
     for seed in range(20):
         bundle = convert_hl7_to_bundle(generator_fn(random.Random(seed)))

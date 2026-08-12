@@ -10,9 +10,23 @@ from app.generators.adt import (
     generate_adt_a08,
     generate_adt_a11,
     generate_adt_a13,
+    generate_adt_a38,
 )
-from app.generators.mdm import generate_mdm_t02, generate_mdm_t04, generate_mdm_t06
-from app.generators.oru import generate_oru_r01, generate_oru_r30, generate_oru_r40
+from app.generators.mdm import (
+    generate_mdm_t02,
+    generate_mdm_t04,
+    generate_mdm_t06,
+    generate_mdm_t08,
+    generate_mdm_t10,
+    generate_mdm_t11,
+)
+from app.generators.oru import (
+    generate_oru_r01,
+    generate_oru_r30,
+    generate_oru_r31,
+    generate_oru_r32,
+    generate_oru_r40,
+)
 from app.generators.siu import (
     generate_siu_s12,
     generate_siu_s13,
@@ -32,6 +46,7 @@ _GENERATORS = {
     ("ADT", "A08"): (generate_adt_a08, "ADT^A08 - Update"),
     ("ADT", "A11"): (generate_adt_a11, "ADT^A11 - Cancel Admit"),
     ("ADT", "A13"): (generate_adt_a13, "ADT^A13 - Cancel Discharge"),
+    ("ADT", "A38"): (generate_adt_a38, "ADT^A38 - Cancel Pre-Admit"),
     ("SIU", "S12"): (generate_siu_s12, "SIU^S12 - New Appointment"),
     ("SIU", "S13"): (generate_siu_s13, "SIU^S13 - Reschedule"),
     ("SIU", "S14"): (generate_siu_s14, "SIU^S14 - Modify"),
@@ -40,10 +55,15 @@ _GENERATORS = {
     ("SIU", "S26"): (generate_siu_s26, "SIU^S26 - Patient No-Show"),
     ("ORU", "R01"): (generate_oru_r01, "ORU^R01 - Observation Result"),
     ("ORU", "R30"): (generate_oru_r30, "ORU^R30 - Point-of-Care Result (New Order)"),
+    ("ORU", "R31"): (generate_oru_r31, "ORU^R31 - Point-of-Care Result (Search for Order)"),
+    ("ORU", "R32"): (generate_oru_r32, "ORU^R32 - Point-of-Care Result (Pre-Ordered)"),
     ("ORU", "R40"): (generate_oru_r40, "ORU^R40 - Point-of-Care Result (No New Order)"),
     ("MDM", "T02"): (generate_mdm_t02, "MDM^T02 - New Document"),
     ("MDM", "T04"): (generate_mdm_t04, "MDM^T04 - Document Status Update"),
     ("MDM", "T06"): (generate_mdm_t06, "MDM^T06 - Document Addendum"),
+    ("MDM", "T08"): (generate_mdm_t08, "MDM^T08 - Document Edit"),
+    ("MDM", "T10"): (generate_mdm_t10, "MDM^T10 - Document Replacement"),
+    ("MDM", "T11"): (generate_mdm_t11, "MDM^T11 - Document Cancel"),
     # "CCD" stands in for trigger_event even though C-CDA has no real
     # trigger-event concept - reusing this flat (message_type, trigger)
     # registry costs zero UI/route changes (list_supported_types(),

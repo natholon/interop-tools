@@ -2,13 +2,15 @@ import random
 
 import pytest
 
-from app.generators.oru import generate_oru_r01, generate_oru_r30, generate_oru_r40
+from app.generators.oru import generate_oru_r01, generate_oru_r30, generate_oru_r31, generate_oru_r32, generate_oru_r40
 from app.hl7.parser import field_str, group_segments_by_leader, parse_message, require_segment
 from app.hl7.pipeline import convert_hl7_to_bundle, validate_hl7
 
 _GENERATORS = [
     (generate_oru_r01, "R01"),
     (generate_oru_r30, "R30"),
+    (generate_oru_r31, "R31"),
+    (generate_oru_r32, "R32"),
     (generate_oru_r40, "R40"),
 ]
 

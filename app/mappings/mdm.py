@@ -1,12 +1,28 @@
 """MDM (Medical Document Management) -> FHIR mapping.
 
-T02/T04/T06 all produce identical output here, matching ORU's pattern
-(BaseOruMapper handling R01/R30/R40 identically): the official v2-to-FHIR IG
-ships exactly one MDM ConceptMap (MDM_T02 -> Bundle) and treats the TXA
-segment map as trigger-agnostic, so "new document" (T02), "status update"
-(T04), and "addendum" (T06) all convert through the same TXA/OBX shape - this
-stateless converter doesn't model the different document-lifecycle semantics
-those triggers imply upstream, only the document data itself.
+T02/T04/T06/T08/T10/T11 all produce identical output here, matching ORU's
+pattern (BaseOruMapper handling R01/R30/R31/R32/R40 identically): the
+official v2-to-FHIR IG ships exactly one MDM ConceptMap (MDM_T02 -> Bundle)
+and treats the TXA segment map as trigger-agnostic, so "new document" (T02),
+"status update" (T04), "addendum" (T06), "edit notification" (T08),
+"replacement notification" (T10), and "cancel notification" (T11) all
+convert through the same TXA/OBX shape - this stateless converter doesn't
+model the different document-lifecycle semantics those triggers imply
+upstream, only the document data itself.
+
+T10/T11 are semantically status-change events (replace/cancel) and were
+initially a candidate for trigger-specific FHIR status handling (e.g. T10 ->
+"superseded", T11 -> "entered-in-error", mirroring ADT A11/A13's deliberate
+cancel-pattern override) - but unlike A11/A13 (where the IG's silence was a
+deliberate reason to *add* fidelity the IG doesn't provide), here the
+decision was to defer to the IG as the authoritative source: the segment-txa-
+to-documentreference ConceptMap (build.fhir.org/ig/HL7/v2-to-fhir) has no
+trigger-event-specific guidance at all, and TXA-13 (Unique Document Number of
+the Original - the field that would carry T10's "replaces" pointer) has no
+mapped FHIR target in that ConceptMap. So status stays 100% TXA-19-driven for
+every trigger, and TXA-13 is left unmapped, same as every other IG-silent
+field in this module - a real difference in disclosed rationale from A11/A13
+even though the *code* ends up looking the same as T02/T04/T06.
 
 TXA -> DocumentReference field map (per the v2-to-FHIR IG's
 segment-txa-to-documentreference ConceptMap, verified via build.fhir.org):
@@ -259,3 +275,21 @@ class MdmT06Mapper(BaseMdmMapper):
     """T06 - Document addendum notification and content."""
 
     trigger_event = "T06"
+
+
+class MdmT08Mapper(BaseMdmMapper):
+    """T08 - Document edit notification and content."""
+
+    trigger_event = "T08"
+
+
+class MdmT10Mapper(BaseMdmMapper):
+    """T10 - Document replacement notification and content."""
+
+    trigger_event = "T10"
+
+
+class MdmT11Mapper(BaseMdmMapper):
+    """T11 - Document cancel notification."""
+
+    trigger_event = "T11"

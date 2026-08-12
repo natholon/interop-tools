@@ -7,8 +7,8 @@ populated - TXA-3 is the IG's 1..1 target for contentType, and TXA-19 is
 fixed to "AV" (the one verified availability code) so the generator never
 exercises an unverified corner of _resolve_status. TXA-2 (Document Type) is
 also always populated since it's what gives a document notification any
-real meaning. T02/T04/T06 are generated identically since app.mappings.mdm
-treats them identically.
+real meaning. T02/T04/T06/T08/T10/T11 are generated identically since
+app.mappings.mdm treats them identically.
 """
 
 import random
@@ -93,3 +93,15 @@ def generate_mdm_t04(rng: random.Random) -> str:
 
 def generate_mdm_t06(rng: random.Random) -> str:
     return _generate_mdm(rng, "T06")
+
+
+def generate_mdm_t08(rng: random.Random) -> str:
+    return _generate_mdm(rng, "T08")
+
+
+def generate_mdm_t10(rng: random.Random) -> str:
+    return _generate_mdm(rng, "T10")
+
+
+def generate_mdm_t11(rng: random.Random) -> str:
+    return _generate_mdm(rng, "T11")

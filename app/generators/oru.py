@@ -4,8 +4,8 @@ Same required/optional philosophy as the other generators: a generated
 message must always convert successfully through app.mappings.oru, so OBR-4
 (report code), OBR-25 (result status), and every OBX's OBX-2/3/5/11 are
 always present - Observation.code/DiagnosticReport.code are FHIR-required,
-and an OBX with no usable value isn't a useful generated sample. R01/R30/R40
-are generated identically since app.mappings.oru treats them identically.
+and an OBX with no usable value isn't a useful generated sample. R01/R30/R31/
+R32/R40 are generated identically since app.mappings.oru treats them identically.
 """
 
 import random
@@ -108,3 +108,11 @@ def generate_oru_r30(rng: random.Random) -> str:
 
 def generate_oru_r40(rng: random.Random) -> str:
     return _generate_oru(rng, "R40")
+
+
+def generate_oru_r31(rng: random.Random) -> str:
+    return _generate_oru(rng, "R31")
+
+
+def generate_oru_r32(rng: random.Random) -> str:
+    return _generate_oru(rng, "R32")

@@ -5,7 +5,7 @@ import pytest
 
 from app.hl7.errors import MissingSegmentError
 from app.hl7.parser import parse_message
-from app.mappings.mdm import MdmT02Mapper, MdmT04Mapper, MdmT06Mapper
+from app.mappings.mdm import MdmT02Mapper, MdmT04Mapper, MdmT06Mapper, MdmT08Mapper, MdmT10Mapper, MdmT11Mapper
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -113,10 +113,12 @@ def test_missing_txa_raises_missing_segment_error():
         MdmT02Mapper().to_bundle(message)
 
 
-@pytest.mark.parametrize("mapper_cls", [MdmT04Mapper, MdmT06Mapper])
-def test_t04_and_t06_produce_same_shape_as_t02(mapper_cls):
-    # T02/T04/T06 are field-identical per the v2-to-FHIR IG's single,
-    # trigger-agnostic TXA ConceptMap.
+@pytest.mark.parametrize("mapper_cls", [MdmT04Mapper, MdmT06Mapper, MdmT08Mapper, MdmT10Mapper, MdmT11Mapper])
+def test_other_triggers_produce_same_shape_as_t02(mapper_cls):
+    # T02/T04/T06/T08/T10/T11 are field-identical per the v2-to-FHIR IG's
+    # single, trigger-agnostic TXA ConceptMap - including T10/T11, which are
+    # semantically status-change events but have no trigger-specific target
+    # in the IG's own ConceptMap (see app/mappings/mdm.py's module docstring).
     message = parse_message(read_fixture("mdm_t02_basic.hl7"))
     bundle = mapper_cls().to_bundle(message)
     by_type = _entries_by_type(bundle)
