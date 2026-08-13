@@ -42,6 +42,9 @@ from app.cda.allergies import (
 )
 from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
 from app.cda.ccd import CCD_TEMPLATE_ID
+from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID
+from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
+from app.cda.immunizations import STATUS_MAP as IMMUNIZATION_STATUS_MAP
 from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.parser import parse_document
@@ -127,6 +130,17 @@ _REACTION_CODES = [
     ("422587007", "Nausea"),
     ("21522001", "Abdominal pain"),
 ]
+
+# A representative CVX vaccine-code pool (codeSystem 2.16.840.1.113883.12.292).
+_VACCINE_CODES = [
+    ("88", "influenza virus vaccine, unspecified formulation"),
+    ("187", "zoster vaccine, live"),
+    ("115", "Tdap"),
+    ("133", "pneumococcal conjugate vaccine, 13 valent"),
+    ("08", "hepatitis B vaccine, pediatric or pediatric/adolescent dosage"),
+    ("03", "MMR"),
+]
+_IMMUNIZATION_ROUTES = [("C28161", "INTRAMUSCULAR"), ("C38299", "TOPICAL"), ("C38304", "SUBCUTANEOUS")]
 
 
 def _random_uuid_like(rng: random.Random) -> str:
@@ -449,6 +463,56 @@ def _random_allergies_section(rng: random.Random) -> str | None:
     )
 
 
+def _random_immunization_entry(rng: random.Random, start, end) -> str:
+    sub_id = _random_uuid_like(rng)
+    # ~80% EVN (administered/refused - what this section converts), ~20%
+    # INT (planned - deliberately out of scope, direct fuzz coverage of
+    # build_immunizations()'s mood-based skip).
+    mood_code = "EVN" if maybe(rng, 0.8) else "INT"
+    negated = mood_code == "EVN" and maybe(rng, 0.15)
+    negation_attr = ' negationInd="true"' if negated else ""
+    # Mostly a recognized statusCode (exercising STATUS_MAP's branches),
+    # rarely an unrecognized one, exercising _resolve_status's default.
+    status_code = rng.choice(list(IMMUNIZATION_STATUS_MAP)) if maybe(rng, 0.85) else "draft"
+    code, display = rng.choice(_VACCINE_CODES)
+
+    effective_time = _random_ivl_ts(rng, start, end) if maybe(rng, 0.7) else ""
+
+    dosing = ""
+    if maybe(rng, 0.5):
+        route_code, route_display = rng.choice(_IMMUNIZATION_ROUTES)
+        dose_value = rng.choice((0.25, 0.5, 1.0))
+        dosing = (
+            f'<routeCode code="{route_code}" codeSystem="2.16.840.1.113883.3.26.1.1" displayName="{route_display}"/>'
+            f'<doseQuantity value="{dose_value}" unit="mL"/>'
+        )
+
+    lot_number = f"<lotNumberText>{random_identifier(rng, 6)}</lotNumberText>" if maybe(rng, 0.6) else ""
+
+    return (
+        f'<entry typeCode="DRIV"><substanceAdministration classCode="SBADM" moodCode="{mood_code}"{negation_attr}>'
+        f'<templateId root="{IMMUNIZATION_ACTIVITY_TEMPLATE_ID}"/><id root="{sub_id}"/>'
+        f'<statusCode code="{status_code}"/>{effective_time}{dosing}'
+        '<consumable><manufacturedProduct classCode="MANU">'
+        '<templateId root="2.16.840.1.113883.10.20.22.4.54"/>'
+        f'<manufacturedMaterial><code code="{code}" codeSystem="2.16.840.1.113883.12.292" codeSystemName="CVX" displayName="{display}"/>{lot_number}</manufacturedMaterial>'
+        "</manufacturedProduct></consumable>"
+        "</substanceAdministration></entry>"
+    )
+
+
+def _random_immunizations_section(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.85):
+        return None
+    start, end = random_time_range(rng, min_days=-300, max_days=10)
+    entries = "".join(_random_immunization_entry(rng, start, end) for _ in range(rng.randint(1, 3)))
+    return (
+        f'<component><section><templateId root="{IMMUNIZATIONS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="11369-6" codeSystem="2.16.840.1.113883.6.1" displayName="History of immunizations"/>'
+        f"<title>Immunizations</title>{entries}</section></component>"
+    )
+
+
 def _random_patient(rng: random.Random) -> str:
     sex = random_sex(rng) if maybe(rng) else None
     ids = "".join(_random_id_element(rng) for _ in range(rng.choice((1, 2))))
@@ -491,7 +555,8 @@ def generate_ccd(rng: random.Random) -> str:
     problems_section = _random_problems_section(rng) or ""
     medications_section = _random_medications_section(rng) or ""
     allergies_section = _random_allergies_section(rng) or ""
-    sections = problems_section + medications_section + allergies_section
+    immunizations_section = _random_immunizations_section(rng) or ""
+    sections = problems_section + medications_section + allergies_section + immunizations_section
     body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 
     xml_text = (

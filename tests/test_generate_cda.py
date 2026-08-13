@@ -392,6 +392,83 @@ def test_allergy_criticality_and_reaction_vary_across_seeds():
     assert reaction_present > 0 and reaction_absent > 0
 
 
+_IMMUNIZATIONS_SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.2.1"
+_IMMUNIZATION_ACTIVITY_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.52"
+
+
+def _immunization_activities(document):
+    for section in find_all(document, "component/structuredBody/component/section"):
+        if not has_template_id(section, _IMMUNIZATIONS_SECTION_TEMPLATE_ID):
+            continue
+        for entry in find_all(section, "entry"):
+            substance_administration = find_child(entry, "substanceAdministration")
+            if substance_administration is not None and has_template_id(
+                substance_administration, _IMMUNIZATION_ACTIVITY_TEMPLATE_ID
+            ):
+                yield substance_administration
+
+
+def test_immunizations_section_varies_across_seeds():
+    def has_immunizations_section(document):
+        return any(True for _ in _immunization_activities(document))
+
+    present, absent = _present_absent(range(60), has_immunizations_section)
+    assert present > 0 and absent > 0
+
+
+def test_immunization_count_varies_across_seeds():
+    counts = set()
+    for seed in range(60):
+        counts.add(sum(1 for _ in _immunization_activities(_document(seed))))
+    assert {0, 1, 2, 3} & counts, f"expected some immunization-entry counts of 0/1/2/3, got {counts}"
+
+
+def test_immunization_mood_and_negation_vary_across_seeds():
+    evn_asserted = evn_negated = int_mood = 0
+    for seed in range(80):
+        for substance_administration in _immunization_activities(_document(seed)):
+            if substance_administration.get("moodCode") == "INT":
+                int_mood += 1
+            elif substance_administration.get("negationInd") == "true":
+                evn_negated += 1
+            else:
+                evn_asserted += 1
+    assert evn_asserted > 0 and evn_negated > 0 and int_mood > 0
+
+
+def test_immunization_status_code_varies_across_seeds():
+    recognized = unrecognized = 0
+    for seed in range(80):
+        for substance_administration in _immunization_activities(_document(seed)):
+            status = find_child(substance_administration, "statusCode").get("code")
+            if status in {"completed", "nullified", "aborted", "cancelled", "held", "new", "obsolete", "suspended"}:
+                recognized += 1
+            else:
+                unrecognized += 1
+    assert recognized > 0 and unrecognized > 0
+
+
+def test_immunization_dosing_and_lot_number_vary_across_seeds():
+    dosing_present = dosing_absent = 0
+    lot_present = lot_absent = 0
+    for seed in range(60):
+        for substance_administration in _immunization_activities(_document(seed)):
+            if find_child(substance_administration, "routeCode") is not None:
+                dosing_present += 1
+            else:
+                dosing_absent += 1
+            manufactured_material = find_child(
+                find_child(find_child(substance_administration, "consumable"), "manufacturedProduct"),
+                "manufacturedMaterial",
+            )
+            if manufactured_material is not None and find_child(manufactured_material, "lotNumberText") is not None:
+                lot_present += 1
+            else:
+                lot_absent += 1
+    assert dosing_present > 0 and dosing_absent > 0
+    assert lot_present > 0 and lot_absent > 0
+
+
 def test_round_trips_through_real_converter():
     for seed in range(1000, 1020):
         xml_text = generate_ccd(random.Random(seed))

@@ -30,6 +30,8 @@ from app.cda.allergies import ALLERGY_CONCERN_ACT_TEMPLATE_ID, ALLERGY_OBSERVATI
 from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.common import RECOGNIZED_ENCOUNTER_CLASSES, build_codeable_concept_from_cd
+from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP as IMMUNIZATION_STATUS_MAP
+from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
 from app.cda.medications import MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP as MEDICATION_STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
@@ -67,6 +69,13 @@ def _find_medications_section(document):
 def _find_allergies_section(document):
     for section in find_all(document, "component/structuredBody/component/section"):
         if has_template_id(section, ALLERGIES_SECTION_TEMPLATE_ID):
+            return section
+    return None
+
+
+def _find_immunizations_section(document):
+    for section in find_all(document, "component/structuredBody/component/section"):
+        if has_template_id(section, IMMUNIZATIONS_SECTION_TEMPLATE_ID):
             return section
     return None
 
@@ -438,6 +447,73 @@ def _rule_allergies(section, patient, now: datetime) -> list[ValidationFinding]:
     return findings
 
 
+def _iter_evn_immunization_activities(section):
+    """Yield each EVN-mood Immunization Activity substanceAdministration
+    element - the same walk (including the mood filter)
+    app.cda.immunizations.build_immunizations() uses, so validation can
+    never see a different set of entries than conversion does. INT-mood
+    entries are out of scope for this slice (see that module's docstring)
+    and are excluded here too, not flagged - the same "silently out of
+    scope, not a data-quality issue" treatment an unrecognized section
+    already gets."""
+    for entry in find_all(section, "entry"):
+        substance_administration = find_child(entry, "substanceAdministration")
+        if substance_administration is None or not has_template_id(
+            substance_administration, IMMUNIZATION_ACTIVITY_TEMPLATE_ID
+        ):
+            continue
+        if substance_administration.get("moodCode") != "EVN":
+            continue
+        yield substance_administration
+
+
+def _rule_immunizations(section, now: datetime) -> list[ValidationFinding]:
+    findings = []
+    for substance_administration in _iter_evn_immunization_activities(section):
+        consumable = find_child(substance_administration, "consumable")
+        manufactured_product = find_child(consumable, "manufacturedProduct") if consumable is not None else None
+        manufactured_material = (
+            find_child(manufactured_product, "manufacturedMaterial") if manufactured_product is not None else None
+        )
+        code_element = find_child(manufactured_material, "code") if manufactured_material is not None else None
+        if build_codeable_concept_from_cd(code_element) is None:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.immunization-missing-vaccine-code",
+                    segment="Immunizations/.../substanceAdministration/consumable",
+                    message="An Immunization Activity has no resolvable vaccine code - the converter will silently skip this entry.",
+                )
+            )
+            continue
+
+        if substance_administration.get("negationInd") != "true":
+            status_element = find_child(substance_administration, "statusCode")
+            status_code = (status_element.get("code") or "").strip().lower() if status_element is not None else ""
+            if status_code and status_code not in IMMUNIZATION_STATUS_MAP:
+                findings.append(
+                    ValidationFinding(
+                        severity="info",
+                        rule_id="cda.immunization-status-unrecognized",
+                        segment="Immunizations/.../substanceAdministration/statusCode",
+                        message=f"statusCode {status_code!r} is not recognized - the converter will silently default to 'completed'.",
+                    )
+                )
+
+        occurrence, _ = ivl_ts_bounds(find_child(substance_administration, "effectiveTime"))
+        occurrence_dt = parse_comparable_datetime(occurrence) if occurrence else None
+        if occurrence_dt is not None and not_in_future(occurrence, now) is False:
+            findings.append(
+                ValidationFinding(
+                    severity="warning",
+                    rule_id="cda.immunization-occurrence-in-future",
+                    segment="Immunizations/.../substanceAdministration/effectiveTime",
+                    message="An Immunization Activity's occurrence date is in the future.",
+                )
+            )
+    return findings
+
+
 def _check_convertibility(document) -> list[ValidationFinding]:
     # Deferred import: app/cda/registry.py imports app/cda/ccd.py at module
     # load time; this module doesn't need to be part of that load-order
@@ -514,6 +590,10 @@ def validate_document(document) -> ValidationReport:
     allergies_section = _find_allergies_section(document)
     if allergies_section is not None:
         findings.extend(_rule_allergies(allergies_section, patient, now))
+
+    immunizations_section = _find_immunizations_section(document)
+    if immunizations_section is not None:
+        findings.extend(_rule_immunizations(immunizations_section, now))
 
     findings.extend(_check_convertibility(document))
 

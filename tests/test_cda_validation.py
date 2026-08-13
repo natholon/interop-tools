@@ -13,6 +13,8 @@ _ALLERGIES_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.6.
 _ALLERGY_CONCERN_ACT_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.30"/>'
 _ALLERGY_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.7"/>'
 _REACTION_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.9"/>'
+_IMMUNIZATIONS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.2.1"/>'
+_IMMUNIZATION_ACTIVITY_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.52"/>'
 
 
 def _doc(body: str, ccd: bool = True) -> object:
@@ -98,6 +100,27 @@ def _reaction(value: str = "") -> str:
 def _allergies_section(entries: str) -> str:
     return (
         f"<component><structuredBody><component><section>{_ALLERGIES_SECTION_TEMPLATE}"
+        f"{entries}</section></component></structuredBody></component>"
+    )
+
+
+def _immunization_entry(
+    status: str = "completed", effective_time: str = "", code: str = "", mood: str = "EVN", negation: str = ""
+) -> str:
+    consumable_code = code or '<code code="88" codeSystem="2.16.840.1.113883.12.292" displayName="Influenza"/>'
+    return (
+        f'<entry><substanceAdministration classCode="SBADM" moodCode="{mood}"{negation}>'
+        f"{_IMMUNIZATION_ACTIVITY_TEMPLATE}"
+        f'<statusCode code="{status}"/>{effective_time}'
+        f"<consumable><manufacturedProduct><manufacturedMaterial>{consumable_code}"
+        "</manufacturedMaterial></manufacturedProduct></consumable>"
+        "</substanceAdministration></entry>"
+    )
+
+
+def _immunizations_section(entries: str) -> str:
+    return (
+        f"<component><structuredBody><component><section>{_IMMUNIZATIONS_SECTION_TEMPLATE}"
         f"{entries}</section></component></structuredBody></component>"
     )
 
@@ -431,6 +454,61 @@ def test_allergy_reaction_missing_manifestation_is_info():
 def test_allergy_reaction_with_manifestation_produces_no_finding():
     entry = _allergy_entry(reaction=_reaction())
     document = _doc(_patient() + _allergies_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+
+
+def test_clean_immunization_produces_no_findings():
+    entry = _immunization_entry()
+    document = _doc(_patient() + _immunizations_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+    assert report.is_valid is True
+
+
+def test_immunization_missing_vaccine_code_is_info():
+    entry = _immunization_entry(code='<code nullFlavor="UNK"/>')
+    document = _doc(_patient() + _immunizations_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.immunization-missing-vaccine-code")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_immunization_status_unrecognized_is_info():
+    entry = _immunization_entry(status="draft")
+    document = _doc(_patient() + _immunizations_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.immunization-status-unrecognized")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_negated_immunization_with_unrecognized_status_produces_no_status_finding():
+    # negationInd="true" forces status="not-done" unconditionally in the
+    # mapper (see app/cda/immunizations.py::_resolve_status) - the
+    # statusCode value becomes irrelevant, so the unrecognized-status rule
+    # must not fire for it either.
+    entry = _immunization_entry(status="draft", negation=' negationInd="true"')
+    document = _doc(_patient() + _immunizations_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+
+
+def test_immunization_occurrence_in_future_is_warning():
+    entry = _immunization_entry(effective_time='<effectiveTime value="20990101"/>')
+    document = _doc(_patient() + _immunizations_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.immunization-occurrence-in-future")
+    assert finding.severity == "warning"
+
+
+def test_planned_immunization_int_mood_produces_no_findings():
+    # INT-mood entries are out of scope for this slice and excluded from
+    # the rule walk entirely - not flagged, same treatment an unrecognized
+    # section already gets.
+    entry = _immunization_entry(mood="INT", status="draft")
+    document = _doc(_patient() + _immunizations_section(entry))
     report = validate_document(document)
     assert report.findings == []
 

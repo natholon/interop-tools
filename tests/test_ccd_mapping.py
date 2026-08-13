@@ -235,6 +235,32 @@ def test_no_known_allergies_produces_text_only_code():
     assert allergy.clinicalStatus.coding[0].code == "active"
 
 
+def test_immunizations_basic_fixture_maps_administered_and_refused_skips_planned():
+    bundle = convert_cda_to_bundle(read_fixture("ccd_immunizations_basic.xml"))
+    entries = _entries_by_type(bundle)
+    patient = entries["Patient"][0].resource
+    immunizations = {e.resource.vaccineCode.coding[0].display: e.resource for e in entries["Immunization"]}
+
+    # Only the two EVN-mood entries convert - the INT-mood (planned Tdap)
+    # entry is out of scope for this slice and must be silently skipped.
+    assert len(immunizations) == 2
+    for immunization in immunizations.values():
+        assert immunization.patient.reference == f"urn:uuid:{patient.id}"
+
+    administered = immunizations["influenza virus vaccine, unspecified formulation"]
+    assert administered.status == "completed"
+    assert administered.occurrenceDateTime.isoformat() == "2010-08-15"
+    assert administered.lotNumber == "1"
+    assert administered.route.coding[0].display == "INTRAMUSCULAR"
+    assert float(administered.doseQuantity.value) == 0.5
+    assert administered.doseQuantity.unit == "mL"
+
+    refused = immunizations["zoster vaccine, live"]
+    assert refused.status == "not-done"
+    assert refused.occurrenceString == "Unknown"
+    assert refused.occurrenceDateTime is None
+
+
 def test_bundle_round_trips_through_json():
     bundle = convert_cda_to_bundle(read_fixture("ccd_basic.xml"))
     round_tripped = Bundle.model_validate_json(bundle.model_dump_json())
