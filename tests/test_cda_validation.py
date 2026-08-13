@@ -9,6 +9,10 @@ _CCD_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.1.2"/>'
 _PROBLEMS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.5.1"/>'
 _MEDICATIONS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.1.1"/>'
 _MEDICATION_ACTIVITY_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.16"/>'
+_ALLERGIES_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.6.1"/>'
+_ALLERGY_CONCERN_ACT_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.30"/>'
+_ALLERGY_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.7"/>'
+_REACTION_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.9"/>'
 
 
 def _doc(body: str, ccd: bool = True) -> object:
@@ -53,6 +57,47 @@ def _medication_entry(status: str = "active", effective_time: str = "", code: st
 def _medications_section(entries: str) -> str:
     return (
         f"<component><structuredBody><component><section>{_MEDICATIONS_SECTION_TEMPLATE}"
+        f"{entries}</section></component></structuredBody></component>"
+    )
+
+
+def _allergy_entry(
+    effective_time: str = "",
+    allergen: str = "",
+    negation: str = "",
+    reaction: str = "",
+) -> str:
+    participant = (
+        allergen
+        or '<participant typeCode="CSM"><participantRole classCode="MANU"><playingEntity classCode="MMAT">'
+        '<code code="102263004" codeSystem="2.16.840.1.113883.6.96" displayName="Eggs"/>'
+        "</playingEntity></participantRole></participant>"
+    )
+    return (
+        f'<entry><act classCode="ACT" moodCode="EVN">{_ALLERGY_CONCERN_ACT_TEMPLATE}'
+        '<code code="CONC" codeSystem="2.16.840.1.113883.5.6"/><statusCode code="active"/>'
+        f'<entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN"{negation}>'
+        f"{_ALLERGY_OBSERVATION_TEMPLATE}"
+        '<code code="ASSERTION" codeSystem="2.16.840.1.113883.5.4"/><statusCode code="completed"/>'
+        f'{effective_time}<value xsi:type="CD" code="414285001" codeSystem="2.16.840.1.113883.6.96"/>'
+        f"{participant}{reaction}"
+        "</observation></entryRelationship></act></entry>"
+    )
+
+
+def _reaction(value: str = "") -> str:
+    manifestation = value or '<value xsi:type="CD" code="247472004" codeSystem="2.16.840.1.113883.6.96" displayName="Wheal"/>'
+    return (
+        f'<entryRelationship typeCode="MFST" inversionInd="true"><observation classCode="OBS" moodCode="EVN">'
+        f"{_REACTION_OBSERVATION_TEMPLATE}"
+        f'<code code="ASSERTION" codeSystem="2.16.840.1.113883.5.4"/><statusCode code="completed"/>{manifestation}'
+        "</observation></entryRelationship>"
+    )
+
+
+def _allergies_section(entries: str) -> str:
+    return (
+        f"<component><structuredBody><component><section>{_ALLERGIES_SECTION_TEMPLATE}"
         f"{entries}</section></component></structuredBody></component>"
     )
 
@@ -314,6 +359,78 @@ def test_medication_period_with_only_low_produces_no_finding():
     effective_time = '<effectiveTime><low value="20260801"/></effectiveTime>'
     entry = _medication_entry(effective_time=effective_time)
     document = _doc(_patient() + _medications_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+
+
+def test_clean_allergy_produces_no_findings():
+    entry = _allergy_entry()
+    document = _doc(_patient() + _allergies_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+    assert report.is_valid is True
+
+
+def test_allergy_missing_allergen_is_info():
+    no_allergen = (
+        '<participant typeCode="CSM"><participantRole classCode="MANU"><playingEntity classCode="MMAT">'
+        '<code nullFlavor="UNK"/>'
+        "</playingEntity></participantRole></participant>"
+    )
+    entry = _allergy_entry(allergen=no_allergen)
+    document = _doc(_patient() + _allergies_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.allergy-missing-allergen")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_negated_allergy_with_no_allergen_produces_no_missing_allergen_finding():
+    # Negated entries are handled by the "no known allergy" text fallback,
+    # not skipped - the missing-allergen rule shouldn't evaluate them at
+    # all, matching build_allergy_intolerances()'s own negation handling.
+    no_allergen = (
+        '<participant typeCode="CSM"><participantRole classCode="MANU"><playingEntity classCode="MMAT">'
+        '<code nullFlavor="UNK"/>'
+        "</playingEntity></participantRole></participant>"
+    )
+    entry = _allergy_entry(allergen=no_allergen, negation=' negationInd="true"')
+    document = _doc(_patient() + _allergies_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+
+
+def test_allergy_onset_in_future_is_warning():
+    entry = _allergy_entry(effective_time='<effectiveTime><low value="20990101"/></effectiveTime>')
+    document = _doc(_patient() + _allergies_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.allergy-onset-in-future")
+    assert finding.severity == "warning"
+
+
+def test_allergy_onset_before_birth_is_error():
+    body = _patient(extra='<birthTime value="20200101"/>') + _allergies_section(
+        _allergy_entry(effective_time='<effectiveTime><low value="19990101"/></effectiveTime>')
+    )
+    document = _doc(body)
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.allergy-onset-before-birth")
+    assert finding.severity == "error"
+    assert report.is_valid is False
+
+
+def test_allergy_reaction_missing_manifestation_is_info():
+    entry = _allergy_entry(reaction=_reaction(value='<value xsi:type="CD" nullFlavor="UNK"/>'))
+    document = _doc(_patient() + _allergies_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.allergy-reaction-missing-manifestation")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_allergy_reaction_with_manifestation_produces_no_finding():
+    entry = _allergy_entry(reaction=_reaction())
+    document = _doc(_patient() + _allergies_section(entry))
     report = validate_document(document)
     assert report.findings == []
 

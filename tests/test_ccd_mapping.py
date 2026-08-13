@@ -203,6 +203,38 @@ def test_negated_medication_produces_no_medication_request():
     assert "MedicationRequest" not in entries
 
 
+def test_allergies_basic_fixture_maps_full_shape():
+    bundle = convert_cda_to_bundle(read_fixture("ccd_allergies_basic.xml"))
+    entries = _entries_by_type(bundle)
+    patient = entries["Patient"][0].resource
+    allergy = entries["AllergyIntolerance"][0].resource
+
+    assert allergy.patient.reference == f"urn:uuid:{patient.id}"
+    assert allergy.code.coding[0].display == "Eggs (edible)"
+    assert allergy.clinicalStatus.coding[0].code == "active"
+    assert allergy.clinicalStatus.coding[0].system == "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical"
+    assert allergy.type == "allergy"
+    assert allergy.category == ["food"]
+    assert allergy.criticality == "high"
+    assert allergy.onsetDateTime.isoformat() == "1998-06-01"
+    assert allergy.recordedDate.isoformat() == "2014-01-04"
+
+    assert len(allergy.reaction) == 1
+    reaction = allergy.reaction[0]
+    assert reaction.manifestation[0].coding[0].display == "Wheal"
+    assert reaction.severity == "moderate"
+    assert reaction.onset.isoformat() == "1998-06-01"
+
+
+def test_no_known_allergies_produces_text_only_code():
+    bundle = convert_cda_to_bundle(read_fixture("ccd_allergies_no_known.xml"))
+    entries = _entries_by_type(bundle)
+    allergy = entries["AllergyIntolerance"][0].resource
+    assert allergy.code.text == "No known allergies"
+    assert allergy.code.coding is None
+    assert allergy.clinicalStatus.coding[0].code == "active"
+
+
 def test_bundle_round_trips_through_json():
     bundle = convert_cda_to_bundle(read_fixture("ccd_basic.xml"))
     round_tripped = Bundle.model_validate_json(bundle.model_dump_json())

@@ -309,6 +309,89 @@ def test_medication_negation_occurs_across_seeds():
     assert negated > 0 and asserted > 0
 
 
+_ALLERGIES_SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.6.1"
+_ALLERGY_OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.7"
+
+
+def _allergy_observations(document):
+    for section in find_all(document, "component/structuredBody/component/section"):
+        if not has_template_id(section, _ALLERGIES_SECTION_TEMPLATE_ID):
+            continue
+        for entry in find_all(section, "entry"):
+            act = find_child(entry, "act")
+            for relationship in find_all(act, "entryRelationship"):
+                observation = find_child(relationship, "observation")
+                if observation is not None and has_template_id(observation, _ALLERGY_OBSERVATION_TEMPLATE_ID):
+                    yield observation
+
+
+def test_allergies_section_varies_across_seeds():
+    def has_allergies_section(document):
+        return any(True for _ in _allergy_observations(document))
+
+    present, absent = _present_absent(range(60), has_allergies_section)
+    assert present > 0 and absent > 0
+
+
+def test_allergy_count_varies_across_seeds():
+    counts = set()
+    for seed in range(60):
+        counts.add(sum(1 for _ in _allergy_observations(_document(seed))))
+    assert {0, 1, 2, 3} & counts, f"expected some allergy-entry counts of 0/1/2/3, got {counts}"
+
+
+def test_allergy_negation_and_allergen_shape_vary_across_seeds():
+    # Negated entries split further between a still-resolvable allergen
+    # ("no known allergy to X") and a nullFlavor one ("no known
+    # allergies") - direct fuzz coverage of both negation branches in
+    # _resolve_allergen_code, alongside plain asserted allergies.
+    asserted = negated_with_code = negated_without_code = 0
+    for seed in range(80):
+        for observation in _allergy_observations(_document(seed)):
+            code_element = find_child(
+                find_child(find_child(observation, "participant"), "participantRole"), "playingEntity"
+            )
+            code_element = find_child(code_element, "code") if code_element is not None else None
+            has_code = code_element is not None and code_element.get("nullFlavor") is None
+            if observation.get("negationInd") == "true":
+                if has_code:
+                    negated_with_code += 1
+                else:
+                    negated_without_code += 1
+            else:
+                asserted += 1
+    assert asserted > 0 and negated_with_code > 0 and negated_without_code > 0
+
+
+def test_allergy_clinical_status_resolution_paths_occur_across_seeds():
+    act_default = with_status_observation = 0
+    for seed in range(60):
+        for observation in _allergy_observations(_document(seed)):
+            if any(r.get("typeCode") == "REFR" for r in find_all(observation, "entryRelationship")):
+                with_status_observation += 1
+            else:
+                act_default += 1
+    assert act_default > 0 and with_status_observation > 0
+
+
+def test_allergy_criticality_and_reaction_vary_across_seeds():
+    criticality_present = criticality_absent = 0
+    reaction_present = reaction_absent = 0
+    for seed in range(60):
+        for observation in _allergy_observations(_document(seed)):
+            relationships = find_all(observation, "entryRelationship")
+            if any(r.get("typeCode") == "SUBJ" and r.get("inversionInd") == "true" for r in relationships):
+                criticality_present += 1
+            else:
+                criticality_absent += 1
+            if any(r.get("typeCode") == "MFST" for r in relationships):
+                reaction_present += 1
+            else:
+                reaction_absent += 1
+    assert criticality_present > 0 and criticality_absent > 0
+    assert reaction_present > 0 and reaction_absent > 0
+
+
 def test_round_trips_through_real_converter():
     for seed in range(1000, 1020):
         xml_text = generate_ccd(random.Random(seed))

@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 
 from pydantic import ValidationError
 
+from app.cda.allergies import ALLERGY_CONCERN_ACT_TEMPLATE_ID, ALLERGY_OBSERVATION_TEMPLATE_ID
+from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.common import RECOGNIZED_ENCOUNTER_CLASSES, build_codeable_concept_from_cd
 from app.cda.medications import MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP as MEDICATION_STATUS_MAP
@@ -58,6 +60,13 @@ def _find_problems_section(document):
 def _find_medications_section(document):
     for section in find_all(document, "component/structuredBody/component/section"):
         if has_template_id(section, MEDICATIONS_SECTION_TEMPLATE_ID):
+            return section
+    return None
+
+
+def _find_allergies_section(document):
+    for section in find_all(document, "component/structuredBody/component/section"):
+        if has_template_id(section, ALLERGIES_SECTION_TEMPLATE_ID):
             return section
     return None
 
@@ -335,6 +344,100 @@ def _rule_medications(section, now: datetime) -> list[ValidationFinding]:
     return findings
 
 
+def _iter_allergy_observations(section):
+    """Yield each Allergy-Intolerance Observation element found via the
+    exact same act/entryRelationship[SUBJ] walk
+    app.cda.allergies.build_allergy_intolerances() uses, so validation can
+    never see a different set of entries than conversion does."""
+    for entry in find_all(section, "entry"):
+        act = find_child(entry, "act")
+        if act is None or not has_template_id(act, ALLERGY_CONCERN_ACT_TEMPLATE_ID):
+            continue
+        for relationship in find_all(act, "entryRelationship"):
+            if relationship.get("typeCode") != "SUBJ":
+                continue
+            observation = find_child(relationship, "observation")
+            if observation is None or not has_template_id(observation, ALLERGY_OBSERVATION_TEMPLATE_ID):
+                continue
+            yield observation
+
+
+def _has_resolvable_allergen(observation) -> bool:
+    """Same participant[@typeCode=CSM]/participantRole/playingEntity/code
+    walk app.cda.allergies._resolve_allergen_code() uses, checking only for
+    presence of a resolvable code (not building the negation text fallback,
+    which this rule doesn't need)."""
+    for participant in find_all(observation, "participant"):
+        if participant.get("typeCode") != "CSM":
+            continue
+        participant_role = find_child(participant, "participantRole")
+        playing_entity = find_child(participant_role, "playingEntity") if participant_role is not None else None
+        code_element = find_child(playing_entity, "code") if playing_entity is not None else None
+        if build_codeable_concept_from_cd(code_element) is not None:
+            return True
+    return False
+
+
+def _rule_allergies(section, patient, now: datetime) -> list[ValidationFinding]:
+    findings = []
+    raw_birth = ts_value(find_child(patient, "birthTime")) if patient is not None else None
+    birth_dt = parse_comparable_datetime(raw_birth) if raw_birth else None
+
+    for observation in _iter_allergy_observations(section):
+        negated = observation.get("negationInd") == "true"
+
+        if not negated:
+            if not _has_resolvable_allergen(observation):
+                findings.append(
+                    ValidationFinding(
+                        severity="info",
+                        rule_id="cda.allergy-missing-allergen",
+                        segment="Allergies/.../observation/participant",
+                        message="An asserted Allergy Observation has no resolvable allergen code - the converter will silently skip this entry.",
+                    )
+                )
+                continue
+
+        onset, _ = ivl_ts_bounds(find_child(observation, "effectiveTime"))
+        onset_dt = parse_comparable_datetime(onset) if onset else None
+        if onset_dt is not None:
+            if not_in_future(onset, now) is False:
+                findings.append(
+                    ValidationFinding(
+                        severity="warning",
+                        rule_id="cda.allergy-onset-in-future",
+                        segment="Allergies/.../observation/effectiveTime",
+                        message="An Allergy Observation's onset date is in the future.",
+                    )
+                )
+            if raw_birth and birth_dt is not None and is_before(onset, onset_dt, raw_birth, birth_dt):
+                findings.append(
+                    ValidationFinding(
+                        severity="error",
+                        rule_id="cda.allergy-onset-before-birth",
+                        segment="Allergies/.../observation/effectiveTime",
+                        message="An Allergy Observation's onset date is before the patient's birthTime.",
+                    )
+                )
+
+        for relationship in find_all(observation, "entryRelationship"):
+            if relationship.get("typeCode") != "MFST":
+                continue
+            reaction_observation = find_child(relationship, "observation")
+            if reaction_observation is None:
+                continue
+            if build_codeable_concept_from_cd(find_child(reaction_observation, "value")) is None:
+                findings.append(
+                    ValidationFinding(
+                        severity="info",
+                        rule_id="cda.allergy-reaction-missing-manifestation",
+                        segment="Allergies/.../observation/entryRelationship[MFST]",
+                        message="A Reaction Observation has no resolvable manifestation code - the converter will silently skip this reaction.",
+                    )
+                )
+    return findings
+
+
 def _check_convertibility(document) -> list[ValidationFinding]:
     # Deferred import: app/cda/registry.py imports app/cda/ccd.py at module
     # load time; this module doesn't need to be part of that load-order
@@ -407,6 +510,10 @@ def validate_document(document) -> ValidationReport:
     medications_section = _find_medications_section(document)
     if medications_section is not None:
         findings.extend(_rule_medications(medications_section, now))
+
+    allergies_section = _find_allergies_section(document)
+    if allergies_section is not None:
+        findings.extend(_rule_allergies(allergies_section, patient, now))
 
     findings.extend(_check_convertibility(document))
 

@@ -29,6 +29,18 @@ the HL7v2 generators' precedent exactly.
 
 import random
 
+from app.cda.allergies import (
+    ALLERGY_CONCERN_ACT_TEMPLATE_ID,
+    ALLERGY_OBSERVATION_TEMPLATE_ID,
+    ALLERGY_STATUS_OBSERVATION_TEMPLATE_ID,
+    CLINICAL_STATUS_MAP as ALLERGY_CLINICAL_STATUS_MAP,
+    CRITICALITY_MAP,
+    CRITICALITY_OBSERVATION_TEMPLATE_ID,
+    REACTION_OBSERVATION_TEMPLATE_ID,
+    SEVERITY_MAP,
+    SEVERITY_OBSERVATION_TEMPLATE_ID,
+)
+from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
@@ -92,6 +104,28 @@ _SIG_TEXTS = [
     "Take one capsule by mouth three times daily until gone",
     "Apply to affected area twice daily",
     "Inhale two puffs every 4 to 6 hours as needed",
+]
+
+# Allergy-Intolerance Observation value pool - each code drives both
+# _TYPE_MAP and _CATEGORY_MAP in app/cda/allergies.py; 419199007 is
+# deliberately included even though it's type-mapped but NOT category-
+# mapped, for direct fuzz coverage of that partial-mapping gap.
+_ALLERGY_TYPE_CODES = ["235719002", "414285001", "416098002", "419199007", "59037007"]
+_ALLERGEN_CODES = [
+    ("102263004", "Eggs (edible)"),
+    ("91935009", "Peanut"),
+    ("7984002", "Penicillin"),
+    ("387406002", "Sulfonamide"),
+    ("111088007", "Latex"),
+    ("227037002", "Shellfish"),
+    ("763875007", "Tree nut"),
+]
+_REACTION_CODES = [
+    ("247472004", "Wheal"),
+    ("271807003", "Skin rash"),
+    ("39579001", "Anaphylaxis"),
+    ("422587007", "Nausea"),
+    ("21522001", "Abdominal pain"),
 ]
 
 
@@ -307,6 +341,114 @@ def _random_medications_section(rng: random.Random) -> str | None:
     )
 
 
+def _random_reaction_entry(rng: random.Random, start, end) -> str:
+    code, display = rng.choice(_REACTION_CODES)
+    reaction_id = _random_uuid_like(rng)
+    severity = ""
+    if maybe(rng, 0.6):
+        severity_code = rng.choice(list(SEVERITY_MAP))
+        severity = (
+            f'<entryRelationship typeCode="SUBJ" inversionInd="true"><observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{SEVERITY_OBSERVATION_TEMPLATE_ID}"/>'
+            '<code code="SEV" codeSystem="2.16.840.1.113883.5.4"/><statusCode code="completed"/>'
+            f'<value xsi:type="CD" code="{severity_code}" codeSystem="2.16.840.1.113883.6.96"/>'
+            "</observation></entryRelationship>"
+        )
+    return (
+        f'<entryRelationship typeCode="MFST" inversionInd="true"><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{REACTION_OBSERVATION_TEMPLATE_ID}"/><id root="{reaction_id}"/>'
+        '<code code="ASSERTION" codeSystem="2.16.840.1.113883.5.4"/><statusCode code="completed"/>'
+        f"{_random_ivl_ts(rng, start, end)}"
+        f'<value xsi:type="CD" code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
+        f"{severity}"
+        "</observation></entryRelationship>"
+    )
+
+
+def _random_allergy_entry(rng: random.Random) -> str:
+    act_id = _random_uuid_like(rng)
+    obs_id = _random_uuid_like(rng)
+    type_code = rng.choice(_ALLERGY_TYPE_CODES)
+    negated = maybe(rng, 0.1)
+
+    # Same window/rationale as _random_problem_entry - always safely after
+    # even the earliest possible generated birthTime.
+    start, end = random_time_range(rng, min_days=-300, max_days=10)
+    effective_time = _random_ivl_ts(rng, start, end)
+
+    # A negated entry can still carry a resolvable allergen (-> "no known
+    # allergy to X" text) or a nullFlavor one (-> "no known allergies") -
+    # direct fuzz coverage of both _resolve_allergen_code negation branches.
+    if negated and maybe(rng, 0.3):
+        participant = (
+            '<participant typeCode="CSM"><participantRole classCode="MANU"><playingEntity classCode="MMAT">'
+            '<code nullFlavor="NA"/>'
+            "</playingEntity></participantRole></participant>"
+        )
+    else:
+        allergen_code, allergen_display = rng.choice(_ALLERGEN_CODES)
+        participant = (
+            '<participant typeCode="CSM"><participantRole classCode="MANU"><playingEntity classCode="MMAT">'
+            f'<code code="{allergen_code}" codeSystem="2.16.840.1.113883.6.96" displayName="{allergen_display}"/>'
+            "</playingEntity></participantRole></participant>"
+        )
+    negation_attr = ' negationInd="true"' if negated else ""
+
+    author = f'<author><time value="{format_hl7_datetime(start)}"/></author>' if maybe(rng, 0.6) else ""
+
+    # ~50/50: rely on the fixed "active" default, or add a nested Status
+    # Observation - direct fuzz coverage of _resolve_clinical_status's two
+    # branches, mirroring Problems' identical split.
+    status_observation = ""
+    if maybe(rng, 0.5):
+        status_code = rng.choice(list(ALLERGY_CLINICAL_STATUS_MAP))
+        status_observation = (
+            f'<entryRelationship typeCode="REFR"><observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{ALLERGY_STATUS_OBSERVATION_TEMPLATE_ID}"/>'
+            '<code code="33999-4" codeSystem="2.16.840.1.113883.6.1" displayName="Status"/>'
+            '<statusCode code="completed"/>'
+            f'<value xsi:type="CD" code="{status_code}" codeSystem="2.16.840.1.113883.6.96"/>'
+            "</observation></entryRelationship>"
+        )
+
+    criticality = ""
+    if maybe(rng, 0.4):
+        criticality_code = rng.choice(list(CRITICALITY_MAP))
+        criticality = (
+            f'<entryRelationship typeCode="SUBJ" inversionInd="true"><observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{CRITICALITY_OBSERVATION_TEMPLATE_ID}"/>'
+            '<code code="82606-5" codeSystem="2.16.840.1.113883.6.1" displayName="Criticality"/>'
+            '<statusCode code="completed"/>'
+            f'<value xsi:type="CD" code="{criticality_code}" codeSystem="2.16.840.1.113883.5.1063"/>'
+            "</observation></entryRelationship>"
+        )
+
+    reaction = _random_reaction_entry(rng, start, end) if maybe(rng, 0.5) else ""
+
+    return (
+        f'<entry typeCode="DRIV"><act classCode="ACT" moodCode="EVN">'
+        f'<templateId root="{ALLERGY_CONCERN_ACT_TEMPLATE_ID}"/><id root="{act_id}"/>'
+        '<code code="CONC" codeSystem="2.16.840.1.113883.5.6"/><statusCode code="active"/>'
+        f'<entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN"{negation_attr}>'
+        f'<templateId root="{ALLERGY_OBSERVATION_TEMPLATE_ID}"/><id root="{obs_id}"/>'
+        '<code code="ASSERTION" codeSystem="2.16.840.1.113883.5.4"/><statusCode code="completed"/>'
+        f'{effective_time}<value xsi:type="CD" code="{type_code}" codeSystem="2.16.840.1.113883.6.96"/>'
+        f"{author}{participant}{status_observation}{criticality}{reaction}"
+        "</observation></entryRelationship></act></entry>"
+    )
+
+
+def _random_allergies_section(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.85):
+        return None
+    entries = "".join(_random_allergy_entry(rng) for _ in range(rng.randint(1, 3)))
+    return (
+        f'<component><section><templateId root="{ALLERGIES_SECTION_TEMPLATE_ID}"/>'
+        '<code code="48765-2" codeSystem="2.16.840.1.113883.6.1" displayName="Allergies and adverse reactions"/>'
+        f"<title>Allergies</title>{entries}</section></component>"
+    )
+
+
 def _random_patient(rng: random.Random) -> str:
     sex = random_sex(rng) if maybe(rng) else None
     ids = "".join(_random_id_element(rng) for _ in range(rng.choice((1, 2))))
@@ -348,7 +490,8 @@ def generate_ccd(rng: random.Random) -> str:
     encounter = _random_encounter(rng) or ""
     problems_section = _random_problems_section(rng) or ""
     medications_section = _random_medications_section(rng) or ""
-    sections = problems_section + medications_section
+    allergies_section = _random_allergies_section(rng) or ""
+    sections = problems_section + medications_section + allergies_section
     body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 
     xml_text = (

@@ -22,7 +22,7 @@ from xml.etree.ElementTree import Element
 
 from fhir.resources.R4B.resource import Resource
 
-from app.cda import medications, problems
+from app.cda import allergies, medications, problems
 from app.cda.base import CdaDocumentBuilder
 from app.cda.ccd import CcdBuilder
 from app.cda.parser import has_template_id
@@ -31,6 +31,7 @@ from app.hl7.errors import MappingError
 SECTION_BUILDERS: dict[str, Callable[[Element, str], list[Resource]]] = {
     problems.SECTION_TEMPLATE_ID: problems.build_conditions,
     medications.SECTION_TEMPLATE_ID: medications.build_medication_requests,
+    allergies.SECTION_TEMPLATE_ID: allergies.build_allergy_intolerances,
 }
 
 _DOCUMENT_BUILDERS: dict[str, CdaDocumentBuilder] = {
