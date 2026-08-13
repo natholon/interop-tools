@@ -232,6 +232,83 @@ def test_negation_occurs_across_seeds():
     assert negated > 0 and asserted > 0
 
 
+_MEDICATIONS_SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.1.1"
+
+
+def _medication_entries(document):
+    for section in find_all(document, "component/structuredBody/component/section"):
+        if not has_template_id(section, _MEDICATIONS_SECTION_TEMPLATE_ID):
+            continue
+        yield from find_all(section, "entry")
+
+
+def test_medications_section_varies_across_seeds():
+    def has_medications_section(document):
+        return any(True for _ in _medication_entries(document))
+
+    present, absent = _present_absent(range(60), has_medications_section)
+    assert present > 0 and absent > 0
+
+
+def test_medication_count_varies_across_seeds():
+    counts = set()
+    for seed in range(60):
+        counts.add(sum(1 for _ in _medication_entries(_document(seed))))
+    assert {0, 1, 2, 3} & counts, f"expected some medication-entry counts of 0/1/2/3, got {counts}"
+
+
+def test_medication_mood_code_varies_across_seeds():
+    int_count = evn_count = 0
+    for seed in range(60):
+        for entry in _medication_entries(_document(seed)):
+            mood = find_child(entry, "substanceAdministration").get("moodCode")
+            if mood == "INT":
+                int_count += 1
+            elif mood == "EVN":
+                evn_count += 1
+    assert int_count > 0 and evn_count > 0
+
+
+def test_medication_status_code_varies_across_seeds():
+    recognized = unrecognized = 0
+    for seed in range(80):
+        for entry in _medication_entries(_document(seed)):
+            status = find_child(find_child(entry, "substanceAdministration"), "statusCode").get("code")
+            if status in {"active", "suspended", "aborted", "completed", "nullified"}:
+                recognized += 1
+            else:
+                unrecognized += 1
+    assert recognized > 0 and unrecognized > 0
+
+
+def test_medication_dosing_shape_varies_across_seeds():
+    # Structured dosing (routeCode), free-text SIG (nested Free Text Sig
+    # substanceAdministration), and neither - the three branches
+    # _random_medication_entry splits ~45/35/20.
+    structured = free_text = neither = 0
+    for seed in range(60):
+        for entry in _medication_entries(_document(seed)):
+            substance_administration = find_child(entry, "substanceAdministration")
+            if find_child(substance_administration, "routeCode") is not None:
+                structured += 1
+            elif find_all(substance_administration, "entryRelationship"):
+                free_text += 1
+            else:
+                neither += 1
+    assert structured > 0 and free_text > 0 and neither > 0
+
+
+def test_medication_negation_occurs_across_seeds():
+    negated = asserted = 0
+    for seed in range(60):
+        for entry in _medication_entries(_document(seed)):
+            if find_child(entry, "substanceAdministration").get("negationInd") == "true":
+                negated += 1
+            else:
+                asserted += 1
+    assert negated > 0 and asserted > 0
+
+
 def test_round_trips_through_real_converter():
     for seed in range(1000, 1020):
         xml_text = generate_ccd(random.Random(seed))

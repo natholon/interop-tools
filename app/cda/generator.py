@@ -30,6 +30,8 @@ the HL7v2 generators' precedent exactly.
 import random
 
 from app.cda.ccd import CCD_TEMPLATE_ID
+from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP
+from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.parser import parse_document
 from app.cda.problems import (
     CONCERN_ACT_TEMPLATE_ID,
@@ -71,6 +73,26 @@ _PROBLEM_CODES = [
 ]
 _RECOGNIZED_ENCOUNTER_CLASS_CODES = ["AMB", "EMER", "IMP"]
 _UNRECOGNIZED_ENCOUNTER_CLASS_CODES = ["XYZ", "ZZZ", "UNK"]
+
+# A representative RxNorm medication pool - overlaps with the codes used in
+# tests/fixtures/ccd_medications_*.xml plus a few more, for realistic fuzz
+# variety.
+_MEDICATION_CODES = [
+    ("314076", "Lisinopril 10 MG Oral Tablet"),
+    ("308191", "Amoxicillin 500 MG Oral Capsule"),
+    ("197361", "Ibuprofen 200 MG Oral Tablet"),
+    ("206805", "Atorvastatin 20 MG Oral Tablet"),
+    ("310965", "Metformin 500 MG Oral Tablet"),
+    ("197806", "Levothyroxine 50 MCG Oral Tablet"),
+    ("745679", "Albuterol 90 MCG Inhalant Solution"),
+]
+_MEDICATION_ROUTES = [("C38288", "ORAL"), ("C38276", "INTRAVENOUS"), ("C38299", "TOPICAL")]
+_SIG_TEXTS = [
+    "Take one tablet by mouth once daily",
+    "Take one capsule by mouth three times daily until gone",
+    "Apply to affected area twice daily",
+    "Inhale two puffs every 4 to 6 hours as needed",
+]
 
 
 def _random_uuid_like(rng: random.Random) -> str:
@@ -217,6 +239,74 @@ def _random_problems_section(rng: random.Random) -> str | None:
     )
 
 
+def _random_medication_entry(rng: random.Random) -> str:
+    subad_id = _random_uuid_like(rng)
+    mood_code = "INT" if maybe(rng, 0.5) else "EVN"
+    # Mostly recognized statusCode values (exercising every row of
+    # STATUS_MAP at least occasionally), rarely an unrecognized one -
+    # direct fuzz coverage of _resolve_status's "unknown" fallback branch.
+    if maybe(rng, 0.85):
+        status_code = rng.choice(list(STATUS_MAP))
+    else:
+        status_code = rng.choice(("new", "held"))
+    negated = maybe(rng, 0.1)
+    negation_attr = ' negationInd="true"' if negated else ""
+    code, display = rng.choice(_MEDICATION_CODES)
+
+    # Structured dosing (route/dose/rate/effectiveTime) and free-text SIG
+    # are alternatives in real C-CDA, not always both present - split
+    # ~45/35/20 across structured-only, free-text-only, and neither, direct
+    # fuzz coverage of _build_dosage's "no dosage info at all -> None"
+    # branch alongside its two populated branches.
+    dosing_choice = rng.random()
+    dosing = ""
+    if dosing_choice < 0.45:
+        route_code, route_display = rng.choice(_MEDICATION_ROUTES)
+        start, end = random_time_range(rng, min_days=-60, max_days=30)
+        dose_value = rng.choice((5, 10, 20, 25, 50, 100, 200, 500))
+        rate = f'<rateQuantity value="{rng.choice((1, 2, 5))}" unit="mL/h"/>' if maybe(rng, 0.15) else ""
+        dosing = (
+            f"{_random_ivl_ts(rng, start, end)}"
+            f'<routeCode code="{route_code}" codeSystem="2.16.840.1.113883.3.26.1.1" displayName="{route_display}"/>'
+            f'<doseQuantity value="{dose_value}" unit="mg"/>{rate}'
+        )
+    elif dosing_choice < 0.80:
+        sig_text = rng.choice(_SIG_TEXTS)
+        dosing = (
+            f'<entryRelationship typeCode="COMP"><substanceAdministration classCode="SBADM" moodCode="{mood_code}">'
+            f'<templateId root="{FREE_TEXT_SIG_TEMPLATE_ID}"/>'
+            '<code code="76662-6" codeSystem="2.16.840.1.113883.6.1" displayName="Medication Instructions"/>'
+            f"<text>{sig_text}</text>"
+            '<consumable><manufacturedProduct classCode="MANU">'
+            '<manufacturedLabeledDrug nullFlavor="NA"/>'
+            "</manufacturedProduct></consumable>"
+            "</substanceAdministration></entryRelationship>"
+        )
+
+    return (
+        f'<entry typeCode="DRIV"><substanceAdministration classCode="SBADM" moodCode="{mood_code}"{negation_attr}>'
+        f'<templateId root="{MEDICATION_ACTIVITY_TEMPLATE_ID}"/><id root="{subad_id}"/>'
+        f'<statusCode code="{status_code}"/>'
+        f"{dosing}"
+        '<consumable><manufacturedProduct classCode="MANU">'
+        f'<templateId root="2.16.840.1.113883.10.20.22.4.23"/>'
+        f'<manufacturedMaterial><code code="{code}" codeSystem="2.16.840.1.113883.6.88" displayName="{display}"/></manufacturedMaterial>'
+        "</manufacturedProduct></consumable>"
+        "</substanceAdministration></entry>"
+    )
+
+
+def _random_medications_section(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.85):
+        return None
+    entries = "".join(_random_medication_entry(rng) for _ in range(rng.randint(1, 3)))
+    return (
+        f'<component><section><templateId root="{MEDICATIONS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="10160-0" codeSystem="2.16.840.1.113883.6.1" displayName="History of medication use"/>'
+        f"<title>Medications</title>{entries}</section></component>"
+    )
+
+
 def _random_patient(rng: random.Random) -> str:
     sex = random_sex(rng) if maybe(rng) else None
     ids = "".join(_random_id_element(rng) for _ in range(rng.choice((1, 2))))
@@ -256,8 +346,10 @@ def generate_ccd(rng: random.Random) -> str:
         effective_time = f'<effectiveTime value="{doc_dt.strftime("%Y%m%d")}"/>'
 
     encounter = _random_encounter(rng) or ""
-    problems_section = _random_problems_section(rng)
-    body = f"<component><structuredBody>{problems_section}</structuredBody></component>" if problems_section else ""
+    problems_section = _random_problems_section(rng) or ""
+    medications_section = _random_medications_section(rng) or ""
+    sections = problems_section + medications_section
+    body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 
     xml_text = (
         '<?xml version="1.0" encoding="UTF-8"?>'

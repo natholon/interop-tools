@@ -168,6 +168,41 @@ def test_header_multiplicities_and_fallbacks():
     assert bundle.timestamp is None
 
 
+def test_medications_basic_fixture_maps_structured_and_free_text_dosing():
+    bundle = convert_cda_to_bundle(read_fixture("ccd_medications_basic.xml"))
+    entries = _entries_by_type(bundle)
+    patient = entries["Patient"][0].resource
+    requests = {r.resource.medicationCodeableConcept.coding[0].display: r.resource for r in entries["MedicationRequest"]}
+    assert len(requests) == 2
+    for request in requests.values():
+        assert request.subject.reference == f"urn:uuid:{patient.id}"
+
+    structured = requests["Lisinopril 10 MG Oral Tablet"]
+    assert structured.status == "active"
+    assert structured.intent == "order"  # moodCode INT
+    dosage = structured.dosageInstruction[0]
+    assert dosage.route.coding[0].display == "ORAL"
+    assert float(dosage.doseAndRate[0].doseQuantity.value) == 10
+    assert dosage.doseAndRate[0].doseQuantity.unit == "mg"
+    assert dosage.timing.repeat.boundsPeriod.start.isoformat() == "2026-07-01"
+    assert dosage.timing.repeat.boundsPeriod.end.isoformat() == "2026-10-01"
+    assert dosage.patientInstruction is None
+
+    free_text = requests["Amoxicillin 500 MG Oral Capsule"]
+    assert free_text.status == "completed"
+    assert free_text.intent == "plan"  # moodCode EVN
+    assert free_text.dosageInstruction[0].patientInstruction == (
+        "Take one capsule by mouth three times daily until gone"
+    )
+    assert free_text.dosageInstruction[0].route is None
+
+
+def test_negated_medication_produces_no_medication_request():
+    bundle = convert_cda_to_bundle(read_fixture("ccd_medications_negated.xml"))
+    entries = _entries_by_type(bundle)
+    assert "MedicationRequest" not in entries
+
+
 def test_bundle_round_trips_through_json():
     bundle = convert_cda_to_bundle(read_fixture("ccd_basic.xml"))
     round_tripped = Bundle.model_validate_json(bundle.model_dump_json())

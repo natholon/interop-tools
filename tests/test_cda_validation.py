@@ -7,6 +7,8 @@ from app.hl7.errors import MissingSegmentError
 _XSI = 'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
 _CCD_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.1.2"/>'
 _PROBLEMS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.5.1"/>'
+_MEDICATIONS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.1.1"/>'
+_MEDICATION_ACTIVITY_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.16"/>'
 
 
 def _doc(body: str, ccd: bool = True) -> object:
@@ -32,6 +34,25 @@ def _problem_entry(effective_time: str, value: str, negation: str = "") -> str:
 def _problems_section(entries: str) -> str:
     return (
         f"<component><structuredBody><component><section>{_PROBLEMS_SECTION_TEMPLATE}"
+        f"{entries}</section></component></structuredBody></component>"
+    )
+
+
+def _medication_entry(status: str = "active", effective_time: str = "", code: str = "", negation: str = "") -> str:
+    consumable_code = code or '<code code="314076" codeSystem="2.16.840.1.113883.6.88" displayName="Lisinopril"/>'
+    return (
+        f'<entry><substanceAdministration classCode="SBADM" moodCode="EVN"{negation}>'
+        f"{_MEDICATION_ACTIVITY_TEMPLATE}"
+        f'<statusCode code="{status}"/>{effective_time}'
+        f"<consumable><manufacturedProduct><manufacturedMaterial>{consumable_code}"
+        "</manufacturedMaterial></manufacturedProduct></consumable>"
+        "</substanceAdministration></entry>"
+    )
+
+
+def _medications_section(entries: str) -> str:
+    return (
+        f"<component><structuredBody><component><section>{_MEDICATIONS_SECTION_TEMPLATE}"
         f"{entries}</section></component></structuredBody></component>"
     )
 
@@ -234,6 +255,67 @@ def test_problem_abatement_before_onset_is_error():
     finding = next(f for f in report.findings if f.rule_id == "cda.problem-abatement-before-onset")
     assert finding.severity == "error"
     assert report.is_valid is False
+
+
+def test_clean_medication_produces_no_findings():
+    entry = _medication_entry(status="active")
+    document = _doc(_patient() + _medications_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+    assert report.is_valid is True
+
+
+def test_medication_missing_code_is_info():
+    entry = _medication_entry(code='<code nullFlavor="UNK"/>')
+    document = _doc(_patient() + _medications_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.medication-missing-code")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_negated_medication_with_no_code_produces_no_finding():
+    # Negated entries are skipped by the converter entirely - the missing-
+    # code rule shouldn't even evaluate them, matching build_medication_
+    # requests()'s own negationInd check ordering.
+    entry = _medication_entry(code='<code nullFlavor="UNK"/>', negation=' negationInd="true"')
+    document = _doc(_patient() + _medications_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+
+
+def test_medication_status_unrecognized_is_info():
+    entry = _medication_entry(status="new")
+    document = _doc(_patient() + _medications_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.medication-status-unrecognized")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_medication_recognized_status_produces_no_status_finding():
+    entry = _medication_entry(status="suspended")
+    document = _doc(_patient() + _medications_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+
+
+def test_medication_period_end_before_start_is_error():
+    effective_time = '<effectiveTime><low value="20260810"/><high value="20260801"/></effectiveTime>'
+    entry = _medication_entry(effective_time=effective_time)
+    document = _doc(_patient() + _medications_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.medication-period-end-before-start")
+    assert finding.severity == "error"
+    assert report.is_valid is False
+
+
+def test_medication_period_with_only_low_produces_no_finding():
+    effective_time = '<effectiveTime><low value="20260801"/></effectiveTime>'
+    entry = _medication_entry(effective_time=effective_time)
+    document = _doc(_patient() + _medications_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
 
 
 def test_unregistered_document_type_is_info():

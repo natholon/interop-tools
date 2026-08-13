@@ -28,6 +28,8 @@ from pydantic import ValidationError
 
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.common import RECOGNIZED_ENCOUNTER_CLASSES, build_codeable_concept_from_cd
+from app.cda.medications import MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP as MEDICATION_STATUS_MAP
+from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
 from app.cda.problems import CONCERN_ACT_TEMPLATE_ID, PROBLEM_OBSERVATION_TEMPLATE_ID
 from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
@@ -49,6 +51,13 @@ def _find_patient(document):
 def _find_problems_section(document):
     for section in find_all(document, "component/structuredBody/component/section"):
         if has_template_id(section, PROBLEMS_SECTION_TEMPLATE_ID):
+            return section
+    return None
+
+
+def _find_medications_section(document):
+    for section in find_all(document, "component/structuredBody/component/section"):
+        if has_template_id(section, MEDICATIONS_SECTION_TEMPLATE_ID):
             return section
     return None
 
@@ -261,6 +270,71 @@ def _rule_problems(section, patient, now: datetime) -> list[ValidationFinding]:
     return findings
 
 
+def _iter_medication_activities(section):
+    """Yield each Medication Activity substanceAdministration element found
+    via the same entry walk app.cda.medications.build_medication_requests()
+    uses, so validation can never see a different set of entries than
+    conversion does."""
+    for entry in find_all(section, "entry"):
+        substance_administration = find_child(entry, "substanceAdministration")
+        if substance_administration is None or not has_template_id(
+            substance_administration, MEDICATION_ACTIVITY_TEMPLATE_ID
+        ):
+            continue
+        yield substance_administration
+
+
+def _rule_medications(section, now: datetime) -> list[ValidationFinding]:
+    findings = []
+    for substance_administration in _iter_medication_activities(section):
+        if substance_administration.get("negationInd") == "true":
+            continue
+
+        consumable = find_child(substance_administration, "consumable")
+        manufactured_product = find_child(consumable, "manufacturedProduct") if consumable is not None else None
+        manufactured_material = (
+            find_child(manufactured_product, "manufacturedMaterial") if manufactured_product is not None else None
+        )
+        code_element = find_child(manufactured_material, "code") if manufactured_material is not None else None
+        if build_codeable_concept_from_cd(code_element) is None:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.medication-missing-code",
+                    segment="Medications/.../substanceAdministration/consumable",
+                    message="A Medication Activity has no resolvable medication code - the converter will silently skip this entry.",
+                )
+            )
+            continue
+
+        status_element = find_child(substance_administration, "statusCode")
+        status_code = (status_element.get("code") or "").strip().lower() if status_element is not None else ""
+        if status_code and status_code not in MEDICATION_STATUS_MAP:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.medication-status-unrecognized",
+                    segment="Medications/.../substanceAdministration/statusCode",
+                    message=f"statusCode {status_code!r} is not recognized - the converter will silently default to 'unknown'.",
+                )
+            )
+
+        low, high = ivl_ts_bounds(find_child(substance_administration, "effectiveTime"))
+        if low and high:
+            low_dt = parse_comparable_datetime(low)
+            high_dt = parse_comparable_datetime(high)
+            if low_dt is not None and high_dt is not None and is_before(high, high_dt, low, low_dt):
+                findings.append(
+                    ValidationFinding(
+                        severity="error",
+                        rule_id="cda.medication-period-end-before-start",
+                        segment="Medications/.../substanceAdministration/effectiveTime",
+                        message="A Medication Activity's dosing period end is before its start.",
+                    )
+                )
+    return findings
+
+
 def _check_convertibility(document) -> list[ValidationFinding]:
     # Deferred import: app/cda/registry.py imports app/cda/ccd.py at module
     # load time; this module doesn't need to be part of that load-order
@@ -329,6 +403,10 @@ def validate_document(document) -> ValidationReport:
     problems_section = _find_problems_section(document)
     if problems_section is not None:
         findings.extend(_rule_problems(problems_section, patient, now))
+
+    medications_section = _find_medications_section(document)
+    if medications_section is not None:
+        findings.extend(_rule_medications(medications_section, now))
 
     findings.extend(_check_convertibility(document))
 
