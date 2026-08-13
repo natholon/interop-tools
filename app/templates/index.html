@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}ADT^A01 &rarr; FHIR | interop-tools{% endblock %}
+{% block title %}HL7v2 / C-CDA / X12 &rarr; FHIR | interop-tools{% endblock %}
 {% block content %}
 <form id="convert-form" method="post" action="/convert" enctype="multipart/form-data">
     <div class="field">
-        <label for="hl7_text">Raw HL7v2 message or C-CDA XML document</label>
-        <textarea id="hl7_text" name="hl7_text" rows="14" placeholder="MSH|^~\&amp;|... or &lt;ClinicalDocument xmlns=&quot;urn:hl7-org:v3&quot;&gt;...">{{ hl7_text or "" }}</textarea>
+        <label for="hl7_text">Raw HL7v2 message, C-CDA XML document, or X12 EDI interchange</label>
+        <textarea id="hl7_text" name="hl7_text" rows="14" placeholder="MSH|^~\&amp;|... or &lt;ClinicalDocument xmlns=&quot;urn:hl7-org:v3&quot;&gt;... or ISA*00*...">{{ hl7_text or "" }}</textarea>
     </div>
     <div class="field">
         <label for="hl7_file">Or upload a file (overrides pasted text)</label>
