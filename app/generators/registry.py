@@ -1,7 +1,7 @@
 import random
 
 from app.cda.generator import generate_ccd, generate_discharge_summary
-from app.edi.generator import generate_270, generate_271, generate_276, generate_277
+from app.edi.generator import generate_270, generate_271, generate_276, generate_277, generate_278_request, generate_278_response
 from app.generators.adt import (
     generate_adt_a01,
     generate_adt_a02,
@@ -84,6 +84,16 @@ _GENERATORS = {
     ("EDI", "271"): (generate_271, "EDI^271 - Eligibility Response"),
     ("EDI", "276"): (generate_276, "EDI^276 - Claim Status Request"),
     ("EDI", "277"): (generate_277, "EDI^277 - Claim Status Response"),
+    # 278 request and response share the literal ST01="278" (see
+    # app/edi/prior_auth.py's own module docstring) - unlike every other
+    # EDI pair here, there's no second ST01 value to key a second registry
+    # entry off of, so "278REQUEST"/"278RESPONSE" are synthetic
+    # trigger_event strings that exist only for this generator dropdown;
+    # both still round-trip through the same Edi278Builder on convert,
+    # since that builder itself branches on BHT02, not on how the sample
+    # was generated.
+    ("EDI", "278REQUEST"): (generate_278_request, "EDI^278 - Prior Authorization Request"),
+    ("EDI", "278RESPONSE"): (generate_278_response, "EDI^278 - Prior Authorization Response"),
 }
 
 

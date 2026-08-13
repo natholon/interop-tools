@@ -36,6 +36,8 @@ _EXPECTED_TYPES = {
     ("EDI", "271"),
     ("EDI", "276"),
     ("EDI", "277"),
+    ("EDI", "278REQUEST"),
+    ("EDI", "278RESPONSE"),
 }
 
 
