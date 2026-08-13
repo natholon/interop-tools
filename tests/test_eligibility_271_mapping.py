@@ -16,7 +16,7 @@ def read_fixture(name: str) -> str:
 def _build_bundle(fixture_name: str):
     interchange = parse_interchange(read_fixture(fixture_name))
     transaction_set = first_transaction_set(interchange)
-    return Edi271Builder().build_bundle(transaction_set)
+    return Edi271Builder().build_bundle(transaction_set, interchange.delimiters)
 
 
 def _entries_by_type(bundle):
@@ -81,7 +81,7 @@ def test_missing_bht_raises_missing_segment_error():
     interchange = parse_interchange(raw)
     transaction_set = first_transaction_set(interchange)
     with pytest.raises(MissingSegmentError):
-        Edi271Builder().build_bundle(transaction_set)
+        Edi271Builder().build_bundle(transaction_set, interchange.delimiters)
 
 
 def test_eb01_inactive_and_non_covered_set_excluded_true():
@@ -104,7 +104,7 @@ def test_eb01_inactive_and_non_covered_set_excluded_true():
     )
     interchange = parse_interchange(raw)
     transaction_set = first_transaction_set(interchange)
-    bundle = Edi271Builder().build_bundle(transaction_set)
+    bundle = Edi271Builder().build_bundle(transaction_set, interchange.delimiters)
     response = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "CoverageEligibilityResponse")
     assert response.insurance[0].inforce is False
     assert response.insurance[0].item[0].excluded is True
@@ -135,7 +135,7 @@ def test_aaa_rejection_with_empty_reason_code_still_sets_error_outcome():
     )
     interchange = parse_interchange(raw)
     transaction_set = first_transaction_set(interchange)
-    bundle = Edi271Builder().build_bundle(transaction_set)
+    bundle = Edi271Builder().build_bundle(transaction_set, interchange.delimiters)
     response = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "CoverageEligibilityResponse")
     assert response.outcome == "error"
     assert response.disposition == "Rejected"
@@ -168,7 +168,7 @@ def test_lowercase_eb01_still_resolves_excluded():
     )
     interchange = parse_interchange(raw)
     transaction_set = first_transaction_set(interchange)
-    bundle = Edi271Builder().build_bundle(transaction_set)
+    bundle = Edi271Builder().build_bundle(transaction_set, interchange.delimiters)
     response = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "CoverageEligibilityResponse")
     assert response.insurance[0].item[0].excluded is True
     assert response.insurance[0].inforce is False
@@ -202,7 +202,7 @@ def test_dependent_loop_without_nm1_falls_back_to_subscriber():
     )
     interchange = parse_interchange(raw)
     transaction_set = first_transaction_set(interchange)
-    bundle = Edi271Builder().build_bundle(transaction_set)
+    bundle = Edi271Builder().build_bundle(transaction_set, interchange.delimiters)
     by_type = {}
     for entry in bundle.entry:
         by_type.setdefault(entry.resource.get_resource_type(), []).append(entry.resource)

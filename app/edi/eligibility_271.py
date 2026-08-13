@@ -58,7 +58,7 @@ from app.edi.common import (
     parse_x12_datetime,
     resolve_eligibility_parties,
 )
-from app.edi.parser import TransactionSet, element, find_segment, group_by_leader
+from app.edi.parser import Delimiters, TransactionSet, element, find_segment, group_by_leader
 from app.hl7.errors import MappingError, MissingSegmentError
 
 TRANSACTION_SET_ID = "271"
@@ -135,7 +135,8 @@ def _resolve_outcome_and_disposition(segments: list) -> tuple[str, str | None]:
 class Edi271Builder(EdiTransactionBuilder):
     transaction_set_id = TRANSACTION_SET_ID
 
-    def build_bundle(self, transaction_set: TransactionSet) -> Bundle:
+    def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters) -> Bundle:
+        # delimiters unused - see EdiTransactionBuilder's own docstring.
         bht = find_segment(transaction_set.segments, "BHT")
         if bht is None:
             raise MissingSegmentError("271 transaction set is missing its BHT segment")

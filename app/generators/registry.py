@@ -1,7 +1,7 @@
 import random
 
 from app.cda.generator import generate_ccd, generate_discharge_summary
-from app.edi.generator import generate_270, generate_271
+from app.edi.generator import generate_270, generate_271, generate_276, generate_277
 from app.generators.adt import (
     generate_adt_a01,
     generate_adt_a02,
@@ -82,6 +82,8 @@ _GENERATORS = {
     ("CDA", "DISCHARGESUMMARY"): (generate_discharge_summary, "CDA^DischargeSummary - Discharge Summary"),
     ("EDI", "270"): (generate_270, "EDI^270 - Eligibility Inquiry"),
     ("EDI", "271"): (generate_271, "EDI^271 - Eligibility Response"),
+    ("EDI", "276"): (generate_276, "EDI^276 - Claim Status Request"),
+    ("EDI", "277"): (generate_277, "EDI^277 - Claim Status Response"),
 }
 
 

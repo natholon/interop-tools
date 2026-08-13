@@ -44,7 +44,7 @@ from app.edi.common import (
     parse_x12_datetime,
     resolve_eligibility_parties,
 )
-from app.edi.parser import TransactionSet, element, find_segment, group_by_leader
+from app.edi.parser import Delimiters, TransactionSet, element, find_segment, group_by_leader
 from app.fhir_models.builders import parse_hl7_date
 from app.hl7.errors import MappingError, MissingSegmentError
 
@@ -87,7 +87,10 @@ def _build_items_and_serviced_date(
 class Edi270Builder(EdiTransactionBuilder):
     transaction_set_id = TRANSACTION_SET_ID
 
-    def build_bundle(self, transaction_set: TransactionSet) -> Bundle:
+    def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters) -> Bundle:
+        # delimiters unused - no field this builder reads is a composite
+        # element. Accepted only to satisfy EdiTransactionBuilder's shared
+        # interface (see its own docstring for why the parameter exists).
         bht = find_segment(transaction_set.segments, "BHT")
         if bht is None:
             raise MissingSegmentError("270 transaction set is missing its BHT segment")

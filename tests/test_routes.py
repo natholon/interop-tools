@@ -342,9 +342,19 @@ def test_index_message_type_dropdown_includes_edi():
     assert response.status_code == 200
     assert "EDI^270 - Eligibility Inquiry" in response.text
     assert "EDI^271 - Eligibility Response" in response.text
+    assert "EDI^276 - Claim Status Request" in response.text
+    assert "EDI^277 - Claim Status Response" in response.text
 
 
-@pytest.mark.parametrize("trigger_event, expected_resource_type", [("270", "CoverageEligibilityRequest"), ("271", "CoverageEligibilityResponse")])
+@pytest.mark.parametrize(
+    "trigger_event, expected_resource_type",
+    [
+        ("270", "CoverageEligibilityRequest"),
+        ("271", "CoverageEligibilityResponse"),
+        ("276", "Task"),
+        ("277", "Task"),
+    ],
+)
 def test_api_generate_edi_returns_convertible_and_valid_message(trigger_event, expected_resource_type):
     # Full-stack smoke test for the EDI generators, mirroring
     # test_api_generate_cda_returns_convertible_and_valid_document: generated

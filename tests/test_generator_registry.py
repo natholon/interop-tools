@@ -34,6 +34,8 @@ _EXPECTED_TYPES = {
     ("CDA", "DISCHARGESUMMARY"),
     ("EDI", "270"),
     ("EDI", "271"),
+    ("EDI", "276"),
+    ("EDI", "277"),
 }
 
 

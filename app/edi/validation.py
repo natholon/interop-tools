@@ -20,8 +20,18 @@ from datetime import datetime, timezone
 
 from pydantic import ValidationError
 
+from app.edi.claim_status import STC_CATEGORY_PREFIX_TO_TASK_STATUS, ResolvedClaimStatusLoops, resolve_claim_status_loops
 from app.edi.common import resolve_eligibility_parties
-from app.edi.parser import Interchange, TransactionSet, element, first_transaction_set, group_by_leader
+from app.edi.parser import (
+    Delimiters,
+    Interchange,
+    TransactionSet,
+    component,
+    element,
+    find_segment,
+    first_transaction_set,
+    group_by_leader,
+)
 from app.hl7.errors import MappingError, MissingSegmentError
 from app.validation.common import not_in_future
 from app.validation.models import ValidationFinding, ValidationReport
@@ -201,7 +211,99 @@ def _rule_271_no_service_type(transaction_set: TransactionSet) -> list[Validatio
     return []
 
 
-def _check_convertibility(transaction_set: TransactionSet | None) -> list[ValidationFinding]:
+def _find_claim_status_loops(transaction_set: TransactionSet) -> ResolvedClaimStatusLoops | None:
+    """Delegates to app.edi.claim_status.resolve_claim_status_loops - the
+    one real "which loops are the patient loops, and do their NM1s
+    resolve" implementation, shared with the real 276/277 builder so
+    validation can never see a different loop/NM1 set than conversion
+    would use (the same discipline _find_patient_loop_members above
+    already established for 270/271, after a code review caught what
+    happens when that discipline isn't followed - and caught again here,
+    for the dependent-loop NM1 gate specifically, before this phase ever
+    shipped). Returns None when the loops aren't strictly resolvable -
+    already surfaced separately via edi.would-not-convert."""
+    try:
+        return resolve_claim_status_loops(transaction_set.segments, transaction_set.st01)
+    except MissingSegmentError:
+        return None
+
+
+def _rule_276_missing_subscriber_name(transaction_set: TransactionSet) -> list[ValidationFinding]:
+    loops = _find_claim_status_loops(transaction_set)
+    if loops is None:
+        return []
+    # loops.subscriber_nm1 is guaranteed non-None by resolve_claim_status_
+    # loops (which raises MissingSegmentError itself otherwise, already
+    # caught above) - only the "present but blank name" case reaches here,
+    # matching _rule_270_missing_subscriber_name's identical guarantee.
+    if not element(loops.subscriber_nm1, 3) and not element(loops.subscriber_nm1, 4):
+        return [
+            ValidationFinding(
+                severity="info",
+                rule_id="edi.276-missing-subscriber-name",
+                segment="2000D/NM1",
+                message="The subscriber's NM1 segment has no resolvable name - the converter will still build a Patient, just with no HumanName.",
+            )
+        ]
+    return []
+
+
+def _iter_claim_status_stc(transaction_set: TransactionSet) -> list:
+    """Every STC segment found within a TRN-led claim-status group across
+    both the subscriber and (if present) dependent patient loops - walked
+    the identical way app.edi.claim_status's own _build_tasks_for_patient_
+    loop reads them, so a rule here can never see a different STC set than
+    conversion would."""
+    loops = _find_claim_status_loops(transaction_set)
+    if loops is None:
+        return []
+    stc_segments = []
+    for patient_loop in (loops.subscriber_loop, loops.dependent_loop):
+        if patient_loop is None:
+            continue
+        for _trn, members in group_by_leader(patient_loop.member_segments, "TRN", ["REF", "STC", "DTP", "SVC"]):
+            stc = find_segment(members, "STC")
+            if stc is not None:
+                stc_segments.append(stc)
+    return stc_segments
+
+
+def _rule_277_unrecognized_status_category(transaction_set: TransactionSet, delimiters: Delimiters) -> list[ValidationFinding]:
+    for stc in _iter_claim_status_stc(transaction_set):
+        category_code = component(element(stc, 1), delimiters, 1)
+        prefix = category_code[:1].upper() if category_code else ""
+        if prefix not in STC_CATEGORY_PREFIX_TO_TASK_STATUS:
+            return [
+                ValidationFinding(
+                    severity="info",
+                    rule_id="edi.277-unrecognized-status-category",
+                    segment="2200D/STC",
+                    message=f"STC01-1 category code {category_code!r} is not recognized - the converter will default this claim's Task.status to 'completed'.",
+                )
+            ]
+    return []
+
+
+def _rule_277_status_date_in_future(
+    transaction_set: TransactionSet, delimiters: Delimiters, now: datetime
+) -> list[ValidationFinding]:
+    for stc in _iter_claim_status_stc(transaction_set):
+        raw_date = element(stc, 2)
+        if not raw_date:
+            continue
+        if not_in_future(raw_date, now) is False:
+            return [
+                ValidationFinding(
+                    severity="warning",
+                    rule_id="edi.277-status-date-in-future",
+                    segment="2200D/STC",
+                    message="The claim status effective date (STC02) is in the future.",
+                )
+            ]
+    return []
+
+
+def _check_convertibility(transaction_set: TransactionSet | None, delimiters: Delimiters) -> list[ValidationFinding]:
     if transaction_set is None:
         return [
             ValidationFinding(
@@ -230,7 +332,7 @@ def _check_convertibility(transaction_set: TransactionSet | None) -> list[Valida
         ]
 
     try:
-        builder.build_bundle(transaction_set)
+        builder.build_bundle(transaction_set, delimiters)
     except (MappingError, MissingSegmentError, ValidationError) as exc:
         return [
             ValidationFinding(
@@ -275,8 +377,13 @@ def validate_interchange(interchange: Interchange) -> ValidationReport:
             findings.extend(_rule_270_serviced_date_in_future(transaction_set, now))
         elif normalized_st01 == "271":
             findings.extend(_rule_271_no_service_type(transaction_set))
+        elif normalized_st01 == "276":
+            findings.extend(_rule_276_missing_subscriber_name(transaction_set))
+        elif normalized_st01 == "277":
+            findings.extend(_rule_277_unrecognized_status_category(transaction_set, interchange.delimiters))
+            findings.extend(_rule_277_status_date_in_future(transaction_set, interchange.delimiters, now))
 
-    findings.extend(_check_convertibility(transaction_set))
+    findings.extend(_check_convertibility(transaction_set, interchange.delimiters))
 
     is_valid = not any(finding.severity == "error" for finding in findings)
     return ValidationReport(

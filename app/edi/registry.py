@@ -5,6 +5,7 @@ the CDA-templateId-equivalent axis here, so (unlike HL7v2's
 (message_type, trigger_event) pair) no second dimension is needed."""
 
 from app.edi.base import EdiTransactionBuilder
+from app.edi.claim_status import Edi276Builder, Edi277Builder
 from app.edi.eligibility_270 import Edi270Builder
 from app.edi.eligibility_271 import Edi271Builder
 from app.hl7.errors import MappingError
@@ -12,6 +13,8 @@ from app.hl7.errors import MappingError
 _TRANSACTION_BUILDERS: dict[str, EdiTransactionBuilder] = {
     Edi270Builder.transaction_set_id: Edi270Builder(),
     Edi271Builder.transaction_set_id: Edi271Builder(),
+    Edi276Builder.transaction_set_id: Edi276Builder(),
+    Edi277Builder.transaction_set_id: Edi277Builder(),
 }
 
 

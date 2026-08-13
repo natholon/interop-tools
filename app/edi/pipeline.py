@@ -21,7 +21,7 @@ def convert_edi_to_bundle(raw_text: str) -> Bundle:
     if transaction_set is None:
         raise MissingSegmentError("Interchange contains no ST/SE transaction set to convert")
     builder = get_transaction_builder(transaction_set.st01)
-    return builder.build_bundle(transaction_set)
+    return builder.build_bundle(transaction_set, interchange.delimiters)
 
 
 def validate_edi(raw_text: str) -> ValidationReport:

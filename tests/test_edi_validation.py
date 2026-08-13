@@ -220,7 +220,7 @@ def test_unexpected_convertibility_crash_is_absorbed_into_a_finding(monkeypatch)
     class _ExplodingBuilder:
         transaction_set_id = "270"
 
-        def build_bundle(self, transaction_set):
+        def build_bundle(self, transaction_set, delimiters):
             raise RuntimeError("boom")
 
     def _fake_get_transaction_builder(st01):

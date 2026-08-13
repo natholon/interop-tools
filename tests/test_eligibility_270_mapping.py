@@ -16,7 +16,7 @@ def read_fixture(name: str) -> str:
 def _build_bundle(fixture_name: str):
     interchange = parse_interchange(read_fixture(fixture_name))
     transaction_set = first_transaction_set(interchange)
-    return Edi270Builder().build_bundle(transaction_set)
+    return Edi270Builder().build_bundle(transaction_set, interchange.delimiters)
 
 
 def _entries_by_type(bundle):
@@ -80,7 +80,7 @@ def test_missing_bht_raises_missing_segment_error():
     interchange = parse_interchange(read_fixture("edi_270_missing_bht.x12"))
     transaction_set = first_transaction_set(interchange)
     with pytest.raises(MissingSegmentError):
-        Edi270Builder().build_bundle(transaction_set)
+        Edi270Builder().build_bundle(transaction_set, interchange.delimiters)
 
 
 def test_person_type_provider_materializes_a_practitioner():
@@ -105,7 +105,7 @@ def test_person_type_provider_materializes_a_practitioner():
     )
     interchange = parse_interchange(raw)
     transaction_set = first_transaction_set(interchange)
-    bundle = Edi270Builder().build_bundle(transaction_set)
+    bundle = Edi270Builder().build_bundle(transaction_set, interchange.delimiters)
     by_type = _entries_by_type(bundle)
     assert "Practitioner" in by_type
     assert "Organization" not in by_type or len(by_type["Organization"]) == 1  # only the payer
@@ -136,7 +136,7 @@ def test_lowercase_nm108_qualifier_still_resolves_canonical_system():
     )
     interchange = parse_interchange(raw)
     transaction_set = first_transaction_set(interchange)
-    bundle = Edi270Builder().build_bundle(transaction_set)
+    bundle = Edi270Builder().build_bundle(transaction_set, interchange.delimiters)
     by_type = _entries_by_type(bundle)
     provider = next(o for o in by_type["Organization"] if o.name == "GENERAL HOSPITAL")
     assert provider.identifier[0].system == "http://hl7.org/fhir/sid/us-npi"
