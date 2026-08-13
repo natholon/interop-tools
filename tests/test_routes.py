@@ -256,3 +256,28 @@ def test_index_message_type_dropdown_includes_cda():
     response = client.get("/")
     assert response.status_code == 200
     assert "CDA^CCD - Continuity of Care Document" in response.text
+    assert "CDA^DischargeSummary - Discharge Summary" in response.text
+
+
+def test_api_validate_resolves_discharge_summary_end_to_end():
+    response = client.post("/api/validate", json={"hl7_text": read_fixture("discharge_summary_basic.xml")})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report"]["is_valid"] is True
+    assert body["report"]["message_type"] == "CDA"
+    assert body["report"]["trigger_event"] == "DISCHARGESUMMARY"
+
+
+def test_api_generate_discharge_summary_returns_convertible_and_valid_document():
+    response = client.get("/api/generate", params={"message_type": "CDA", "trigger_event": "DischargeSummary"})
+    assert response.status_code == 200
+    xml_text = response.json()["hl7_text"]
+    assert xml_text
+
+    convert_response = client.post("/api/convert", json={"hl7_text": xml_text})
+    assert convert_response.status_code == 200
+    assert convert_response.json()["bundle"]["resourceType"] == "Bundle"
+
+    validate_response = client.post("/api/validate", json={"hl7_text": xml_text})
+    assert validate_response.status_code == 200
+    assert validate_response.json()["report"]["is_valid"] is True

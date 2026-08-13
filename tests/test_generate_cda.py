@@ -1,7 +1,8 @@
 import random
 
 from app.cda.ccd import CCD_TEMPLATE_ID
-from app.cda.generator import generate_ccd
+from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
+from app.cda.generator import generate_ccd, generate_discharge_summary
 from app.cda.parser import find_all, find_child, has_template_id, parse_document
 from app.cda.pipeline import convert_cda_to_bundle, validate_cda
 
@@ -310,12 +311,15 @@ def test_medication_negation_occurs_across_seeds():
 
 
 _ALLERGIES_SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.6.1"
+_ALLERGIES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL = "2.16.840.1.113883.10.20.22.2.6"
 _ALLERGY_OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.7"
 
 
 def _allergy_observations(document):
     for section in find_all(document, "component/structuredBody/component/section"):
-        if not has_template_id(section, _ALLERGIES_SECTION_TEMPLATE_ID):
+        if not has_template_id(section, _ALLERGIES_SECTION_TEMPLATE_ID) and not has_template_id(
+            section, _ALLERGIES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
+        ):
             continue
         for entry in find_all(section, "entry"):
             act = find_child(entry, "act")
@@ -338,6 +342,22 @@ def test_allergy_count_varies_across_seeds():
     for seed in range(60):
         counts.add(sum(1 for _ in _allergy_observations(_document(seed))))
     assert {0, 1, 2, 3} & counts, f"expected some allergy-entry counts of 0/1/2/3, got {counts}"
+
+
+def test_allergies_section_templateid_variant_varies_across_seeds():
+    # "entries required" and "entries optional" wrap the identical entry
+    # shape (see app/cda/allergies.py) but are two distinct templateIds -
+    # app/cda/validation.py once recognized only one of them for its rule
+    # dispatch (a real bug, caught by code review). Direct fuzz coverage so
+    # that gap can't silently reopen: both variants must actually occur.
+    entries_required = entries_optional = 0
+    for seed in range(60):
+        for section in find_all(_document(seed), "component/structuredBody/component/section"):
+            if has_template_id(section, _ALLERGIES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL):
+                entries_optional += 1
+            elif has_template_id(section, _ALLERGIES_SECTION_TEMPLATE_ID):
+                entries_required += 1
+    assert entries_required > 0 and entries_optional > 0
 
 
 def test_allergy_negation_and_allergen_shape_vary_across_seeds():
@@ -490,3 +510,43 @@ def test_generate_is_reproducible_with_same_seed():
 
 def test_generate_differs_across_seeds():
     assert generate_ccd(random.Random(1)) != generate_ccd(random.Random(2))
+
+
+def _discharge_summary_document(seed: int):
+    return parse_document(generate_discharge_summary(random.Random(seed)))
+
+
+def test_generated_discharge_summary_parses_and_has_discharge_summary_templateid():
+    for seed in range(20):
+        document = _discharge_summary_document(seed)
+        assert has_template_id(document, DISCHARGE_SUMMARY_TEMPLATE_ID)
+        assert not has_template_id(document, CCD_TEMPLATE_ID)
+
+
+def test_generated_discharge_summary_always_has_an_encounter():
+    # Unlike CCD (where encompassingEncounter is genuinely optional),
+    # Discharge Summary forces one - see generate_discharge_summary's
+    # force_encounter=True.
+    for seed in range(20):
+        document = _discharge_summary_document(seed)
+        assert find_child(document, "componentOf") is not None
+
+
+def test_discharge_summary_round_trips_through_real_converter():
+    for seed in range(1000, 1020):
+        xml_text = generate_discharge_summary(random.Random(seed))
+        bundle = convert_cda_to_bundle(xml_text)
+        resource_types = {e.resource.get_resource_type() for e in bundle.entry}
+        assert {"Patient", "Encounter"} <= resource_types
+
+
+def test_generated_discharge_summary_has_no_validation_errors():
+    for seed in range(1000, 1020):
+        xml_text = generate_discharge_summary(random.Random(seed))
+        report = validate_cda(xml_text)
+        assert report.is_valid, f"seed={seed} findings={report.findings}"
+        assert report.trigger_event == "DISCHARGESUMMARY"
+
+
+def test_generate_discharge_summary_is_reproducible_with_same_seed():
+    assert generate_discharge_summary(random.Random(7)) == generate_discharge_summary(random.Random(7))

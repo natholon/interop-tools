@@ -28,7 +28,9 @@ from pydantic import ValidationError
 
 from app.cda.allergies import ALLERGY_CONCERN_ACT_TEMPLATE_ID, ALLERGY_OBSERVATION_TEMPLATE_ID
 from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
+from app.cda.allergies import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as ALLERGIES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
 from app.cda.ccd import CCD_TEMPLATE_ID
+from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
 from app.cda.common import RECOGNIZED_ENCOUNTER_CLASSES, build_codeable_concept_from_cd
 from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP as IMMUNIZATION_STATUS_MAP
 from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
@@ -46,38 +48,58 @@ logger = logging.getLogger(__name__)
 _MAX_PLAUSIBLE_AGE_YEARS = 120
 
 
+def _resolve_trigger_event(document) -> str | None:
+    """ValidationReport.trigger_event for a CDA document - "CCD"/
+    "DISCHARGESUMMARY" stand in for a real HL7v2 trigger event the same way
+    app/generators/registry.py's ("CDA", "CCD") pairing already does (see
+    that module's own comment on the same convention). Uppercase to match
+    every other trigger-event string in this app (A01, S12, ...) and
+    app/generators/registry.py::generate()'s own `.upper()`-normalized
+    lookup, which requires its dict keys to already be uppercase. None when
+    the document's own templateId isn't one this app recognizes at all."""
+    if has_template_id(document, CCD_TEMPLATE_ID):
+        return "CCD"
+    if has_template_id(document, DISCHARGE_SUMMARY_TEMPLATE_ID):
+        return "DISCHARGESUMMARY"
+    return None
+
+
 def _find_patient(document):
     record_target = find_child(document, "recordTarget")
     patient_role = find_child(record_target, "patientRole") if record_target is not None else None
     return find_child(patient_role, "patient") if patient_role is not None else None
 
 
-def _find_problems_section(document):
+def _find_section(document, *template_ids: str):
+    """Find the first structuredBody section matching any of the given
+    templateIds - most section types have exactly one, but Allergies has
+    two (the "entries required" and "entries optional" variants both wrap
+    the identical entry shape, see app/cda/allergies.py). A single-
+    templateId `_find_*_section` helper checking only one of these would
+    silently never run that section's rules against the other variant -
+    this shipped once (see CLAUDE.md/git history) and this shared helper
+    exists so the same class of gap can't recur for a future section type
+    with more than one recognized templateId."""
     for section in find_all(document, "component/structuredBody/component/section"):
-        if has_template_id(section, PROBLEMS_SECTION_TEMPLATE_ID):
+        if any(has_template_id(section, template_id) for template_id in template_ids):
             return section
     return None
+
+
+def _find_problems_section(document):
+    return _find_section(document, PROBLEMS_SECTION_TEMPLATE_ID)
 
 
 def _find_medications_section(document):
-    for section in find_all(document, "component/structuredBody/component/section"):
-        if has_template_id(section, MEDICATIONS_SECTION_TEMPLATE_ID):
-            return section
-    return None
+    return _find_section(document, MEDICATIONS_SECTION_TEMPLATE_ID)
 
 
 def _find_allergies_section(document):
-    for section in find_all(document, "component/structuredBody/component/section"):
-        if has_template_id(section, ALLERGIES_SECTION_TEMPLATE_ID):
-            return section
-    return None
+    return _find_section(document, ALLERGIES_SECTION_TEMPLATE_ID, ALLERGIES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL)
 
 
 def _find_immunizations_section(document):
-    for section in find_all(document, "component/structuredBody/component/section"):
-        if has_template_id(section, IMMUNIZATIONS_SECTION_TEMPLATE_ID):
-            return section
-    return None
+    return _find_section(document, IMMUNIZATIONS_SECTION_TEMPLATE_ID)
 
 
 def _rule_patient_name_missing(patient) -> list[ValidationFinding]:
@@ -600,7 +622,7 @@ def validate_document(document) -> ValidationReport:
     is_valid = not any(finding.severity == "error" for finding in findings)
     return ValidationReport(
         message_type="CDA",
-        trigger_event="CCD" if has_template_id(document, CCD_TEMPLATE_ID) else None,
+        trigger_event=_resolve_trigger_event(document),
         is_valid=is_valid,
         findings=findings,
     )

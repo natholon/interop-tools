@@ -18,6 +18,16 @@ from app.cda.problems import STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS as _PRO
 # Public (not module-private) - reused by app/cda/generator.py and
 # app/cda/validation.py, same pattern as app/cda/problems.py's constants.
 SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.6.1"
+# The "entries optional" sibling section (no @extension on this templateId,
+# vs. "2.16.840.1.113883.10.20.22.2.6.1" which is the versioned "entries
+# required" one) - a real-world Discharge Summary example (fetched while
+# researching that document type, see app/cda/discharge_summary.py) used
+# this exact variant for its Allergies section. Entry-level content is
+# identical either way (the same Allergy Concern Act/Allergy-Intolerance
+# Observation templates); only the section-level entry-cardinality
+# constraint differs, so both templateIds are registered against the same
+# build_allergy_intolerances in app/cda/registry.py.
+SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL = "2.16.840.1.113883.10.20.22.2.6"
 ALLERGY_CONCERN_ACT_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.30"
 ALLERGY_OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.7"
 ALLERGY_STATUS_OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.28"

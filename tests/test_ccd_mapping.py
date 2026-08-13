@@ -261,6 +261,24 @@ def test_immunizations_basic_fixture_maps_administered_and_refused_skips_planned
     assert refused.occurrenceDateTime is None
 
 
+def test_discharge_summary_maps_header_and_recognized_sections_skips_discharge_specific_ones():
+    bundle = convert_cda_to_bundle(read_fixture("discharge_summary_basic.xml"))
+    entries = _entries_by_type(bundle)
+
+    # Hospital Discharge Diagnosis and Discharge Medications sections use
+    # entry templates this app doesn't recognize (see
+    # app/cda/discharge_summary.py's module docstring) and must be
+    # silently skipped - only the plain Problems-shaped Condition converts.
+    assert set(entries.keys()) == {"Patient", "Encounter", "Condition"}
+    assert len(entries["Condition"]) == 1
+    assert entries["Condition"][0].resource.code.coding[0].display == "Hypertensive disorder"
+
+    encounter = entries["Encounter"][0].resource
+    assert encounter.class_fhir.code == "IMP"
+    assert encounter.period.start.isoformat() == "2026-07-28T08:00:00-05:00"
+    assert encounter.period.end.isoformat() == "2026-08-05T10:00:00-05:00"
+
+
 def test_bundle_round_trips_through_json():
     bundle = convert_cda_to_bundle(read_fixture("ccd_basic.xml"))
     round_tripped = Bundle.model_validate_json(bundle.model_dump_json())

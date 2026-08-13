@@ -10,6 +10,7 @@ _PROBLEMS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.5.1
 _MEDICATIONS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.1.1"/>'
 _MEDICATION_ACTIVITY_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.16"/>'
 _ALLERGIES_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.6.1"/>'
+_ALLERGIES_SECTION_TEMPLATE_ENTRIES_OPTIONAL = '<templateId root="2.16.840.1.113883.10.20.22.2.6"/>'
 _ALLERGY_CONCERN_ACT_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.30"/>'
 _ALLERGY_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.7"/>'
 _REACTION_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.9"/>'
@@ -97,11 +98,9 @@ def _reaction(value: str = "") -> str:
     )
 
 
-def _allergies_section(entries: str) -> str:
-    return (
-        f"<component><structuredBody><component><section>{_ALLERGIES_SECTION_TEMPLATE}"
-        f"{entries}</section></component></structuredBody></component>"
-    )
+def _allergies_section(entries: str, entries_optional: bool = False) -> str:
+    template = _ALLERGIES_SECTION_TEMPLATE_ENTRIES_OPTIONAL if entries_optional else _ALLERGIES_SECTION_TEMPLATE
+    return f"<component><structuredBody><component><section>{template}{entries}</section></component></structuredBody></component>"
 
 
 def _immunization_entry(
@@ -406,6 +405,27 @@ def test_allergy_missing_allergen_is_info():
     finding = next(f for f in report.findings if f.rule_id == "cda.allergy-missing-allergen")
     assert finding.severity == "info"
     assert report.is_valid is True
+
+
+def test_allergy_rules_also_run_against_entries_optional_section_variant():
+    # Regression test: "entries required" (2.16.840.1.113883.10.20.22.2.6.1)
+    # and "entries optional" (2.16.840.1.113883.10.20.22.2.6) wrap the
+    # identical entry shape - app.cda.registry.SECTION_BUILDERS dispatches
+    # both to build_allergy_intolerances for conversion, but
+    # _find_allergies_section originally recognized only the "entries
+    # required" templateId, so validate_document() silently ran zero
+    # allergy rules against a document using the other variant - caught by
+    # code review, reproduced directly, not by this test suite originally.
+    no_allergen = (
+        '<participant typeCode="CSM"><participantRole classCode="MANU"><playingEntity classCode="MMAT">'
+        '<code nullFlavor="UNK"/>'
+        "</playingEntity></participantRole></participant>"
+    )
+    entry = _allergy_entry(allergen=no_allergen)
+    document = _doc(_patient() + _allergies_section(entry, entries_optional=True))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.allergy-missing-allergen")
+    assert finding.severity == "info"
 
 
 def test_negated_allergy_with_no_allergen_produces_no_missing_allergen_finding():

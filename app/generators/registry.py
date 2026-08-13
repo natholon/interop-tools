@@ -1,6 +1,6 @@
 import random
 
-from app.cda.generator import generate_ccd
+from app.cda.generator import generate_ccd, generate_discharge_summary
 from app.generators.adt import (
     generate_adt_a01,
     generate_adt_a02,
@@ -64,12 +64,21 @@ _GENERATORS = {
     ("MDM", "T08"): (generate_mdm_t08, "MDM^T08 - Document Edit"),
     ("MDM", "T10"): (generate_mdm_t10, "MDM^T10 - Document Replacement"),
     ("MDM", "T11"): (generate_mdm_t11, "MDM^T11 - Document Cancel"),
-    # "CCD" stands in for trigger_event even though C-CDA has no real
-    # trigger-event concept - reusing this flat (message_type, trigger)
-    # registry costs zero UI/route changes (list_supported_types(),
-    # /api/generate, the dropdown, and app.js's click handler all work
-    # unchanged) versus introducing a genuine third axis for one entry.
+    # "CCD"/"DISCHARGESUMMARY" stand in for trigger_event even though
+    # C-CDA has no real trigger-event concept - reusing this flat
+    # (message_type, trigger) registry costs zero UI/route changes
+    # (list_supported_types(), /api/generate, the dropdown, and app.js's
+    # click handler all work unchanged) versus introducing a genuine third
+    # axis for two entries. The dict KEY is uppercase to match generate()'s
+    # own .upper()-normalized lookup below (same as every HL7v2 trigger
+    # value) - the human-readable LABEL deliberately keeps mixed-case
+    # "DischargeSummary" rather than matching the key's all-caps casing
+    # (unlike "CCD", where both happen to already coincide, being an
+    # acronym): the label is what actually renders in the UI dropdown, and
+    # "DISCHARGESUMMARY" reads worse there than "DischargeSummary" - a
+    # deliberate readability choice, not an inconsistency to "fix".
     ("CDA", "CCD"): (generate_ccd, "CDA^CCD - Continuity of Care Document"),
+    ("CDA", "DISCHARGESUMMARY"): (generate_discharge_summary, "CDA^DischargeSummary - Discharge Summary"),
 }
 
 

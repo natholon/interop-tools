@@ -41,7 +41,9 @@ from app.cda.allergies import (
     SEVERITY_OBSERVATION_TEMPLATE_ID,
 )
 from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
+from app.cda.allergies import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as ALLERGIES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
 from app.cda.ccd import CCD_TEMPLATE_ID
+from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
 from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID
 from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
 from app.cda.immunizations import STATUS_MAP as IMMUNIZATION_STATUS_MAP
@@ -201,8 +203,8 @@ def _random_ivl_ts(rng: random.Random, start, end) -> str:
     )
 
 
-def _random_encounter(rng: random.Random) -> str | None:
-    if not maybe(rng, 0.5):
+def _random_encounter(rng: random.Random, force: bool = False) -> str | None:
+    if not force and not maybe(rng, 0.5):
         return None
     ids = "".join(_random_id_element(rng) for _ in range(rng.choice((1, 2))))
     if maybe(rng, 0.85):
@@ -455,9 +457,19 @@ def _random_allergy_entry(rng: random.Random) -> str:
 def _random_allergies_section(rng: random.Random) -> str | None:
     if not maybe(rng, 0.85):
         return None
+    # ~25% "entries optional" templateId instead of "entries required" -
+    # both wrap the identical entry shape (see app/cda/allergies.py), but
+    # a real Discharge Summary example used the "entries optional" variant
+    # specifically, and app/cda/validation.py once recognized only the
+    # "entries required" one for its rule dispatch (a bug caught by code
+    # review, not this generator, since it never emitted the other variant
+    # until now) - this exists so that gap can't silently reopen unnoticed.
+    section_template_id = (
+        ALLERGIES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL if maybe(rng, 0.25) else ALLERGIES_SECTION_TEMPLATE_ID
+    )
     entries = "".join(_random_allergy_entry(rng) for _ in range(rng.randint(1, 3)))
     return (
-        f'<component><section><templateId root="{ALLERGIES_SECTION_TEMPLATE_ID}"/>'
+        f'<component><section><templateId root="{section_template_id}"/>'
         '<code code="48765-2" codeSystem="2.16.840.1.113883.6.1" displayName="Allergies and adverse reactions"/>'
         f"<title>Allergies</title>{entries}</section></component>"
     )
@@ -537,7 +549,22 @@ def _random_patient(rng: random.Random) -> str:
     )
 
 
-def generate_ccd(rng: random.Random) -> str:
+def _generate_sectioned_document(
+    rng: random.Random,
+    document_template_id: str,
+    doc_code: str,
+    doc_code_display: str,
+    title: str,
+    force_encounter: bool = False,
+) -> str:
+    """Shared body for every "header + generic sections" C-CDA document
+    type this generator produces - CCD and Discharge Summary are both
+    exactly this shape (see app.cda.common.build_sectioned_bundle, the
+    conversion-side counterpart of this same "extract once a second real
+    consumer exists" pattern). `force_encounter` exists because a real
+    Discharge Summary is inherently tied to one hospitalization and so
+    (unlike CCD, where an encompassingEncounter is genuinely optional)
+    almost always carries one - see app/cda/discharge_summary.py."""
     ids = "".join(_random_id_element(rng) for _ in range(1))
     # A ~10-day window around "now" (rather than always-past) exercises the
     # (warning-severity) "document date in the future" rule about half the
@@ -551,7 +578,7 @@ def generate_ccd(rng: random.Random) -> str:
         # crash on a date-only ClinicalDocument/effectiveTime).
         effective_time = f'<effectiveTime value="{doc_dt.strftime("%Y%m%d")}"/>'
 
-    encounter = _random_encounter(rng) or ""
+    encounter = _random_encounter(rng, force=force_encounter) or ""
     problems_section = _random_problems_section(rng) or ""
     medications_section = _random_medications_section(rng) or ""
     allergies_section = _random_allergies_section(rng) or ""
@@ -562,10 +589,10 @@ def generate_ccd(rng: random.Random) -> str:
     xml_text = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-        f'<templateId root="{_US_HEADER_TEMPLATE_ID}"/><templateId root="{CCD_TEMPLATE_ID}"/>'
+        f'<templateId root="{_US_HEADER_TEMPLATE_ID}"/><templateId root="{document_template_id}"/>'
         f"{ids}"
-        '<code code="34133-9" codeSystem="2.16.840.1.113883.6.1" displayName="Summarization of Episode Note"/>'
-        "<title>Continuity of Care Document</title>"
+        f'<code code="{doc_code}" codeSystem="2.16.840.1.113883.6.1" displayName="{doc_code_display}"/>'
+        f"<title>{title}</title>"
         f"{effective_time}"
         '<confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>'
         '<languageCode code="en-US"/>'
@@ -574,3 +601,24 @@ def generate_ccd(rng: random.Random) -> str:
     )
     parse_document(xml_text)  # self-check: a generator bug should raise, not return broken XML
     return xml_text
+
+
+def generate_ccd(rng: random.Random) -> str:
+    return _generate_sectioned_document(
+        rng,
+        CCD_TEMPLATE_ID,
+        doc_code="34133-9",
+        doc_code_display="Summarization of Episode Note",
+        title="Continuity of Care Document",
+    )
+
+
+def generate_discharge_summary(rng: random.Random) -> str:
+    return _generate_sectioned_document(
+        rng,
+        DISCHARGE_SUMMARY_TEMPLATE_ID,
+        doc_code="18842-5",
+        doc_code_display="Discharge Summary",
+        title="Discharge Summary",
+        force_encounter=True,
+    )
