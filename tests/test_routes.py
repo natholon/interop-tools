@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -281,3 +282,89 @@ def test_api_generate_discharge_summary_returns_convertible_and_valid_document()
     validate_response = client.post("/api/validate", json={"hl7_text": xml_text})
     assert validate_response.status_code == 200
     assert validate_response.json()["report"]["is_valid"] is True
+
+
+def test_api_convert_resolves_edi_270_message_end_to_end():
+    # Proves the format-sniff in app/pipeline.py actually routes a
+    # literal-"ISA"-prefixed X12 interchange through the same /api/convert
+    # endpoint as HL7v2/CDA, not just that the EDI pipeline works in
+    # isolation.
+    response = client.post("/api/convert", json={"hl7_text": read_fixture("edi_270_basic.x12")})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bundle"]["resourceType"] == "Bundle"
+    resource_types = {e["resource"]["resourceType"] for e in body["bundle"]["entry"]}
+    assert "CoverageEligibilityRequest" in resource_types
+
+
+def test_api_convert_resolves_edi_271_message_end_to_end():
+    response = client.post("/api/convert", json={"hl7_text": read_fixture("edi_271_basic.x12")})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bundle"]["resourceType"] == "Bundle"
+    resource_types = {e["resource"]["resourceType"] for e in body["bundle"]["entry"]}
+    assert "CoverageEligibilityResponse" in resource_types
+
+
+def test_api_convert_edi_malformed_returns_parse_error():
+    response = client.post("/api/convert", json={"hl7_text": read_fixture("edi_malformed.x12")})
+    assert response.status_code == 400
+    assert response.json()["error"]["category"] == "Parse error"
+
+
+def test_api_validate_resolves_edi_message_end_to_end():
+    # Proves the format-sniff in app/pipeline.py::validate_any actually
+    # routes X12 through the same /api/validate endpoint as HL7v2/CDA, not
+    # just that the EDI validator works in isolation.
+    response = client.post("/api/validate", json={"hl7_text": read_fixture("edi_270_basic.x12")})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report"]["is_valid"] is True
+    assert body["report"]["message_type"] == "EDI"
+    assert body["report"]["trigger_event"] == "270"
+
+
+def test_api_validate_edi_malformed_returns_parse_error():
+    response = client.post("/api/validate", json={"hl7_text": read_fixture("edi_malformed.x12")})
+    assert response.status_code == 400
+    assert response.json()["error"]["category"] == "Parse error"
+
+
+def test_form_validate_renders_edi_report_in_page():
+    response = client.post("/validate", data={"hl7_text": read_fixture("edi_270_basic.x12")})
+    assert response.status_code == 200
+    assert "is_valid" in response.text
+    assert "true" in response.text
+
+
+def test_index_message_type_dropdown_includes_edi():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "EDI^270 - Eligibility Inquiry" in response.text
+    assert "EDI^271 - Eligibility Response" in response.text
+
+
+@pytest.mark.parametrize("trigger_event, expected_resource_type", [("270", "CoverageEligibilityRequest"), ("271", "CoverageEligibilityResponse")])
+def test_api_generate_edi_returns_convertible_and_valid_message(trigger_event, expected_resource_type):
+    # Full-stack smoke test for the EDI generators, mirroring
+    # test_api_generate_cda_returns_convertible_and_valid_document: generated
+    # text must itself round-trip through /api/convert and /api/validate.
+    response = client.get("/api/generate", params={"message_type": "EDI", "trigger_event": trigger_event})
+    assert response.status_code == 200
+    x12_text = response.json()["hl7_text"]
+    assert x12_text
+
+    convert_response = client.post("/api/convert", json={"hl7_text": x12_text})
+    assert convert_response.status_code == 200
+    resource_types = {e["resource"]["resourceType"] for e in convert_response.json()["bundle"]["entry"]}
+    assert expected_resource_type in resource_types
+
+    validate_response = client.post("/api/validate", json={"hl7_text": x12_text})
+    assert validate_response.status_code == 200
+    assert validate_response.json()["report"]["is_valid"] is True
+
+
+def test_api_generate_edi_is_reproducible_with_seed():
+    first = client.get("/api/generate", params={"message_type": "EDI", "trigger_event": "270", "seed": 5})
+    second = client.get("/api/generate", params={"message_type": "EDI", "trigger_event": "270", "seed": 5})
+    assert first.json()["hl7_text"] == second.json()["hl7_text"]

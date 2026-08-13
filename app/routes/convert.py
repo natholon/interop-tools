@@ -6,6 +6,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ValidationError
 
 from app.cda.errors import CdaParseError
+from app.edi.errors import EdiParseError
 from app.generators.registry import generate as generate_sample
 from app.generators.registry import list_supported_types
 from app.hl7.errors import Hl7ParseError, MappingError, MissingSegmentError
@@ -17,17 +18,19 @@ templates = Jinja2Templates(directory="app/templates")
 _ERROR_STATUS = {
     Hl7ParseError: ("Parse error", 400),
     CdaParseError: ("Parse error", 400),
+    EdiParseError: ("Parse error", 400),
     MissingSegmentError: ("Missing segment", 400),
     MappingError: ("Mapping error", 422),
     ValidationError: ("FHIR validation error", 422),
 }
 
 # validate_any() only ever raises a parse-level error - every other failure
-# mode is caught inside validate_document()/validate_message() and turned
-# into a finding instead.
+# mode is caught inside validate_document()/validate_message()/
+# validate_interchange() and turned into a finding instead.
 _VALIDATION_ERROR_STATUS = {
     Hl7ParseError: ("Parse error", 400),
     CdaParseError: ("Parse error", 400),
+    EdiParseError: ("Parse error", 400),
     MissingSegmentError: ("Missing segment", 400),
 }
 
