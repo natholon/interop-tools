@@ -9,6 +9,7 @@ from app.edi.claim_status import Edi276Builder, Edi277Builder
 from app.edi.eligibility_270 import Edi270Builder
 from app.edi.eligibility_271 import Edi271Builder
 from app.edi.prior_auth import Edi278Builder
+from app.edi.remittance_835 import Edi835Builder
 from app.hl7.errors import MappingError
 
 _TRANSACTION_BUILDERS: dict[str, EdiTransactionBuilder] = {
@@ -22,6 +23,7 @@ _TRANSACTION_BUILDERS: dict[str, EdiTransactionBuilder] = {
     # dict that internally branches on BHT02 rather than being one of a
     # request/response pair of registry entries.
     Edi278Builder.transaction_set_id: Edi278Builder(),
+    Edi835Builder.transaction_set_id: Edi835Builder(),
 }
 
 

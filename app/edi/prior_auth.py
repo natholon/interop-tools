@@ -126,7 +126,7 @@ _MAX_DIAGNOSIS_POSITIONS = 12  # HI01-HI12, per the 005010X217 IG's own cap
 # HI composite qualifier (component 1) -> a real FHIR-canonical system URI
 # where one exists, the same "map to the real canonical system when the
 # qualifier is recognized, disclosed local placeholder otherwise" pattern
-# already established for NM108 (_NM1_ID_QUALIFIER_SYSTEM in common.py).
+# already established for NM108 (NM1_ID_QUALIFIER_SYSTEM in common.py).
 # "BF" (ICD-10-CM Diagnosis) is by far the dominant real-world qualifier in
 # 5010 transactions - other legal HI qualifiers (e.g. "BK"/"BJ" for legacy
 # ICD-9-CM) are left on the disclosed local-placeholder fallback rather

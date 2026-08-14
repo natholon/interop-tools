@@ -49,8 +49,11 @@ _DMG_GENDER_MAP = {"M": "male", "F": "female", "U": "unknown"}
 # no universal FHIR canonical system - fall back to a disclosed local
 # system URI keyed by the qualifier itself, the same "disclosed local
 # system fallback" already used for CDA's _OID_TO_FHIR_SYSTEM and MDM's
-# TXA-3 MIME table.
-_NM1_ID_QUALIFIER_SYSTEM = {
+# TXA-3 MIME table. Public - X12's own Identification Code Qualifier list
+# (element 66) is shared across NM1 and N1 alike, so remittance_835.py's
+# N1-shaped identifier builder reuses this table directly rather than
+# re-declaring a duplicate copy for the same underlying code list.
+NM1_ID_QUALIFIER_SYSTEM = {
     "XX": "http://hl7.org/fhir/sid/us-npi",
     "SY": "http://hl7.org/fhir/sid/us-ssn",
     "EI": "urn:interop-tools:x12-ein",
@@ -95,6 +98,22 @@ def parse_x12_datetime(date_str: str, time_str: str = "") -> str | None:
     return parse_hl7_date(date_str)
 
 
+def resolve_id_qualifier_system(qualifier: str, fallback_system: str) -> str:
+    """NM108/N103-shaped "Identification Code Qualifier -> a FHIR-canonical
+    system where one is officially recognized, else a disclosed
+    caller-specific local system" resolution, shared by `_build_nm1_identifier`
+    below and `app.edi.remittance_835._build_n1_identifier` - both read the
+    identical `NM1_ID_QUALIFIER_SYSTEM` table, differing only in which
+    segment shape (and element positions) they pull `qualifier`/the id
+    value from, not in how the qualifier itself resolves to a system.
+    `qualifier` must already be `.strip().upper()`-normalized by the
+    caller (both current callers do this at their own element-read site)."""
+    system = NM1_ID_QUALIFIER_SYSTEM.get(qualifier)
+    if system is not None:
+        return system
+    return f"{fallback_system}:{qualifier}" if qualifier else fallback_system
+
+
 def _build_nm1_identifier(nm1: Segment) -> Identifier | None:
     # Normalized the same way DMG03's gender code is normalized below (and
     # the way app/mappings/mdm.py::_resolve_content_type normalizes TXA-3
@@ -106,10 +125,7 @@ def _build_nm1_identifier(nm1: Segment) -> Identifier | None:
     value = element(nm1, 9)
     if not value:
         return None
-    system = _NM1_ID_QUALIFIER_SYSTEM.get(qualifier)
-    if system is None:
-        system = f"{_NM1_ID_FALLBACK_SYSTEM}:{qualifier}" if qualifier else _NM1_ID_FALLBACK_SYSTEM
-    return Identifier(system=system, value=value)
+    return Identifier(system=resolve_id_qualifier_system(qualifier, _NM1_ID_FALLBACK_SYSTEM), value=value)
 
 
 def find_child_loop(loop: HlLoop, hl03: str):

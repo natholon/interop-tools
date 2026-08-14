@@ -346,6 +346,7 @@ def test_index_message_type_dropdown_includes_edi():
     assert "EDI^277 - Claim Status Response" in response.text
     assert "EDI^278 - Prior Authorization Request" in response.text
     assert "EDI^278 - Prior Authorization Response" in response.text
+    assert "EDI^835 - Remittance Advice" in response.text
 
 
 @pytest.mark.parametrize(
@@ -361,6 +362,7 @@ def test_index_message_type_dropdown_includes_edi():
         # tests/test_generate_prior_auth.py), so ClaimResponse isn't
         # guaranteed for a single unseeded sample - only Claim is.
         ("278RESPONSE", "Claim"),
+        ("835", "PaymentReconciliation"),
     ],
 )
 def test_api_generate_edi_returns_convertible_and_valid_message(trigger_event, expected_resource_type):

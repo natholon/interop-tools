@@ -14,6 +14,7 @@ into a short segment safe rather than raising.
 """
 
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 
 from app.edi.errors import EdiParseError
 
@@ -140,6 +141,34 @@ def component(value: str, delimiters: Delimiters, index: int) -> str:
     if index < 1 or index > len(parts):
         return ""
     return parts[index - 1]
+
+
+def parse_decimal(raw: str) -> Decimal | None:
+    """Defensively parse an X12 monetary/quantity element (e.g. BPR02,
+    CLP03/04, EQ/EB amounts) as a Decimal, returning None on any failure -
+    the same bounds-guard contract element()/component() already provide,
+    extended to numeric parsing. Deliberately rejects the IEEE-754 special
+    values ("NaN"/"sNaN"/"Infinity"/"-Infinity"), which `Decimal()` itself
+    parses successfully (no InvalidOperation raised) - a bare `except
+    InvalidOperation` around `Decimal(raw)` therefore does NOT guard
+    against a malformed "NaN" value slipping through as a "valid" amount,
+    which then raises InvalidOperation later and uncaught the moment it's
+    used in an ordered comparison (e.g. `paid > charge`) - the exact
+    "validator crashes uncaught on a fat-fingered input it exists to flag"
+    failure class already disclosed twice elsewhere in this app (PID-7's
+    Feb-31 calendar date, the doubled-minus-sign trailer count `_int_or_
+    none()` was written to fix). Shared by app.edi.remittance_835 (for
+    Money construction) and app.edi.validation (for the BPR02/CLP03/CLP04
+    plausibility comparisons) - a single implementation rather than two,
+    after a follow-up code review caught both modules independently
+    re-deriving the same try/except Decimal(...) guard."""
+    try:
+        value = Decimal(raw)
+    except InvalidOperation:
+        return None
+    if not value.is_finite():
+        return None
+    return value
 
 
 def parse_interchange(raw_text: str) -> Interchange:

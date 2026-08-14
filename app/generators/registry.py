@@ -1,7 +1,15 @@
 import random
 
 from app.cda.generator import generate_ccd, generate_discharge_summary
-from app.edi.generator import generate_270, generate_271, generate_276, generate_277, generate_278_request, generate_278_response
+from app.edi.generator import (
+    generate_270,
+    generate_271,
+    generate_276,
+    generate_277,
+    generate_278_request,
+    generate_278_response,
+    generate_835,
+)
 from app.generators.adt import (
     generate_adt_a01,
     generate_adt_a02,
@@ -94,6 +102,7 @@ _GENERATORS = {
     # was generated.
     ("EDI", "278REQUEST"): (generate_278_request, "EDI^278 - Prior Authorization Request"),
     ("EDI", "278RESPONSE"): (generate_278_response, "EDI^278 - Prior Authorization Response"),
+    ("EDI", "835"): (generate_835, "EDI^835 - Remittance Advice"),
 }
 
 
