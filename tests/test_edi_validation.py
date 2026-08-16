@@ -223,7 +223,7 @@ def test_unexpected_convertibility_crash_is_absorbed_into_a_finding(monkeypatch)
         def build_bundle(self, transaction_set, delimiters):
             raise RuntimeError("boom")
 
-    def _fake_get_transaction_builder(st01):
+    def _fake_get_transaction_builder(st01, st03=""):
         return _ExplodingBuilder()
 
     monkeypatch.setattr("app.edi.registry.get_transaction_builder", _fake_get_transaction_builder)

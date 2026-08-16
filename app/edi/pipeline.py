@@ -20,7 +20,7 @@ def convert_edi_to_bundle(raw_text: str) -> Bundle:
     transaction_set = first_transaction_set(interchange)
     if transaction_set is None:
         raise MissingSegmentError("Interchange contains no ST/SE transaction set to convert")
-    builder = get_transaction_builder(transaction_set.st01)
+    builder = get_transaction_builder(transaction_set.st01, transaction_set.st03)
     return builder.build_bundle(transaction_set, interchange.delimiters)
 
 

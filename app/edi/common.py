@@ -71,6 +71,22 @@ HL_INFORMATION_RECEIVER = "21"
 HL_SUBSCRIBER = "22"
 HL_DEPENDENT = "23"
 
+# ST03 (Implementation Convention Reference) substring that identifies the
+# 837I family among transaction sets sharing the literal ST01="837" (see
+# app/edi/registry.py::get_transaction_builder's own docstring for why
+# ST03, not GS08, is this app's dispatch signal). Shared here - not
+# declared locally in registry.py - once app/edi/validation.py became a
+# second real consumer needing the identical check for its own 837P-vs-837I
+# rule dispatch: both sides must never disagree about which variant a given
+# ST03 value indicates, the same "one real implementation, not two
+# independently-drifting copies" discipline every other shared EDI helper
+# in this app already follows.
+ST03_837I_MARKER = "X223"
+
+
+def is_837i_transaction(st03: str) -> bool:
+    return ST03_837I_MARKER in st03.strip().upper()
+
 # The system URI used for a Reference-by-identifier back to BHT03 (both
 # Bundle.identifier in assemble_bundle below, and CoverageEligibilityResponse
 # .request in eligibility_271.py, which has no real originating request

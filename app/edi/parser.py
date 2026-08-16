@@ -40,6 +40,16 @@ Segment = list[str]
 class TransactionSet:
     st01: str
     st02: str
+    # ST03 (Implementation Convention Reference) - situational (empty
+    # string when absent, common for 4010-era or ST03-omitting senders),
+    # carries the same TR3 identifier as GS08 (e.g. "005010X222A1" for
+    # 837P, "005010X223A2" for 837I) but is local to the ST segment itself,
+    # confirmed as the officially authoritative field for this ("ST03 will
+    # always take precedence over GS08" per multiple companion guides) -
+    # used to disambiguate transaction-set families that share one ST01
+    # but multiple TR3s, e.g. 837P vs 837I vs 837D (see
+    # app/edi/registry.py's own dispatch for the one real consumer so far).
+    st03: str = ""
     segments: list[Segment] = field(default_factory=list)
     se: Segment | None = None  # SE itself - SE01 (declared segment count) is checked against it in validation
 
@@ -207,7 +217,7 @@ def parse_interchange(raw_text: str) -> Interchange:
         elif seg_id == "ST":
             if current_gs is None:
                 raise EdiParseError("ST segment encountered outside of a GS/GE functional group")
-            current_st = TransactionSet(st01=element(seg, 1), st02=element(seg, 2))
+            current_st = TransactionSet(st01=element(seg, 1), st02=element(seg, 2), st03=element(seg, 3))
         elif seg_id == "SE":
             if current_st is None:
                 raise EdiParseError("SE segment encountered with no matching ST")
