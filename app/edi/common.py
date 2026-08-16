@@ -10,14 +10,16 @@ from dataclasses import dataclass
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
+from fhir.resources.R4B.coverage import Coverage
 from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.identifier import Identifier
 from fhir.resources.R4B.organization import Organization
 from fhir.resources.R4B.patient import Patient
 from fhir.resources.R4B.practitioner import Practitioner
+from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.resource import Resource
 
-from app.edi.parser import HlLoop, Segment, element, find_segment, group_by_hl_hierarchy
+from app.edi.parser import Delimiters, HlLoop, Segment, component, element, find_segment, group_by_hl_hierarchy
 from app.fhir_models.builders import parse_hl7_date, parse_hl7_datetime
 from app.hl7.errors import MissingSegmentError
 
@@ -239,6 +241,57 @@ def build_service_type_category(code: str) -> CodeableConcept | None:
     return CodeableConcept(coding=[Coding(system=SERVICE_TYPE_CODE_SYSTEM, code=code)])
 
 
+# HI composite qualifier (component 1) -> a real FHIR-canonical system URI.
+# Public - both prior_auth.py (278's UM/HI Patient Event loop) and
+# claim_837p.py (2300's HI diagnosis segment) read the identical X12 code
+# list 1270 diagnosis-type-code shape, so this table and its parsing loop
+# are shared here rather than duplicated. Verified directly (not assumed):
+# "ABK"/"ABF" are the 5010 ICD-10-CM principal/other-diagnosis qualifiers,
+# "BK"/"BF" are the legacy ICD-9-CM ones - an earlier version of this table
+# (introduced in Phase 3, only in prior_auth.py) mapped "BF" itself to
+# ICD-10-CM, which is wrong: "BF" is ICD-9-CM, not ICD-10-CM ("ABF" is the
+# ICD-10-CM one). Caught and fixed while building Phase 5, which needed the
+# identical table a second time and re-verified it from scratch rather than
+# copying the Phase 3 table as-is - see tests/test_prior_auth_mapping.py::
+# test_bf_qualifier_resolves_to_icd9_not_icd10 for the regression proof.
+HI_QUALIFIER_SYSTEM = {
+    "ABK": "http://hl7.org/fhir/sid/icd-10-cm",  # ICD-10-CM Principal Diagnosis
+    "ABF": "http://hl7.org/fhir/sid/icd-10-cm",  # ICD-10-CM Other Diagnosis
+    "BK": "http://hl7.org/fhir/sid/icd-9-cm",  # ICD-9-CM Principal Diagnosis (legacy)
+    "BF": "http://hl7.org/fhir/sid/icd-9-cm",  # ICD-9-CM Other Diagnosis (legacy)
+}
+_HI_QUALIFIER_FALLBACK_SYSTEM = "urn:interop-tools:x12-hi-qualifier"
+_MAX_HI_DIAGNOSIS_POSITIONS = 12  # HI01-HI12, per the 5010 IG's own cap on both 278 and 837
+
+
+def build_diagnosis_codeable_concepts(hi: Segment | None, delimiters: Delimiters) -> list[CodeableConcept]:
+    """Parse an HI segment's repeating diagnosis-code composites
+    (`HI*ABK:J209*ABF:E119~` = two diagnoses, not two segments) into one
+    CodeableConcept per resolved diagnosis, in composite position order -
+    shared by prior_auth.py (278) and claim_837p.py (837P), both of which
+    read the identical composite shape (component 1 = qualifier, component
+    2 = code) via `component()`, the same way STC01/SV1-01 already
+    established. Positions with no code component are skipped rather than
+    breaking the whole scan (a qualifier-only or malformed composite
+    shouldn't silently drop every diagnosis after it), but an entirely
+    empty element still stops the scan (HI's own repetition is positional
+    and left-packed - a real sender never leaves a gap)."""
+    if hi is None:
+        return []
+    concepts = []
+    for position in range(1, _MAX_HI_DIAGNOSIS_POSITIONS + 1):
+        composite = element(hi, position)
+        if not composite:
+            break
+        qualifier = component(composite, delimiters, 1).strip().upper()
+        code = component(composite, delimiters, 2)
+        if not code:
+            continue
+        system = HI_QUALIFIER_SYSTEM.get(qualifier, f"{_HI_QUALIFIER_FALLBACK_SYSTEM}:{qualifier}" if qualifier else _HI_QUALIFIER_FALLBACK_SYSTEM)
+        concepts.append(CodeableConcept(coding=[Coding(system=system, code=code)]))
+    return concepts
+
+
 def is_person_entity(nm1: Segment) -> bool:
     """NM102 (Entity Type Qualifier): "1" = Person, "2" = Non-Person Entity
     (organization). Callers use this to decide whether a given NM1 loop
@@ -313,6 +366,24 @@ def build_patient_from_nm1_dmg(nm1: Segment, dmg: Segment | None) -> Patient:
             patient.gender = gender
 
     return patient
+
+
+def build_coverage(patient: Resource, payer: Resource, subscriber: Resource) -> Coverage:
+    """A minimal, always-active Coverage linking a beneficiary (patient),
+    payer, and subscriber - independently written the identical way three
+    separate times (eligibility_270.py, eligibility_271.py, prior_auth.py)
+    before being promoted here once claim_837p.py became a fourth real
+    consumer of the exact same shape. `patient`/`subscriber` are the same
+    resource whenever the patient isn't a dependent - callers pass
+    whichever resource they already resolved for each role rather than
+    this function re-deriving patient/dependent precedence itself."""
+    return Coverage(
+        id=str(uuid.uuid4()),
+        status="active",
+        beneficiary=Reference(reference=f"urn:uuid:{patient.id}"),
+        payor=[Reference(reference=f"urn:uuid:{payer.id}")],
+        subscriber=Reference(reference=f"urn:uuid:{subscriber.id}"),
+    )
 
 
 def assemble_bundle(bht: Segment, *resources: Resource) -> Bundle:

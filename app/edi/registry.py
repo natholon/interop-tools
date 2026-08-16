@@ -5,6 +5,7 @@ the CDA-templateId-equivalent axis here, so (unlike HL7v2's
 (message_type, trigger_event) pair) no second dimension is needed."""
 
 from app.edi.base import EdiTransactionBuilder
+from app.edi.claim_837p import Edi837pBuilder
 from app.edi.claim_status import Edi276Builder, Edi277Builder
 from app.edi.eligibility_270 import Edi270Builder
 from app.edi.eligibility_271 import Edi271Builder
@@ -24,6 +25,17 @@ _TRANSACTION_BUILDERS: dict[str, EdiTransactionBuilder] = {
     # request/response pair of registry entries.
     Edi278Builder.transaction_set_id: Edi278Builder(),
     Edi835Builder.transaction_set_id: Edi835Builder(),
+    # 837P/837I/837D all share the literal ST01="837" (professional,
+    # institutional, dental claims respectively) - a real-world sender
+    # distinguishes them via GS08 (the functional group's implementation
+    # guide version, e.g. "005010X222A2" for professional), not any element
+    # inside the transaction set itself, unlike 278's own single-ST01
+    # request/response split (distinguished by BHT02). This app's scope is
+    # 837P only (see app/edi/claim_837p.py's own module docstring) - a
+    # future 837I/837D would need registry.py's own dispatch to grow a
+    # GS08-aware branch here, not just a second ST01 entry, since there is
+    # no second ST01 to register one under.
+    Edi837pBuilder.transaction_set_id: Edi837pBuilder(),
 }
 
 

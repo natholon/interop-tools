@@ -35,7 +35,6 @@ import uuid
 
 from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.codeableconcept import CodeableConcept
-from fhir.resources.R4B.coverage import Coverage
 from fhir.resources.R4B.coverageeligibilityresponse import (
     CoverageEligibilityResponse,
     CoverageEligibilityResponseInsurance,
@@ -50,6 +49,7 @@ from app.edi.common import (
     BHT_REFERENCE_SYSTEM,
     DEFAULT_PURPOSE,
     assemble_bundle,
+    build_coverage,
     build_organization_from_nm1,
     build_patient_from_nm1_dmg,
     build_practitioner_from_nm1,
@@ -159,13 +159,7 @@ class Edi271Builder(EdiTransactionBuilder):
             else subscriber
         )
 
-        coverage = Coverage(
-            id=str(uuid.uuid4()),
-            status="active",
-            beneficiary=Reference(reference=f"urn:uuid:{patient.id}"),
-            payor=[Reference(reference=f"urn:uuid:{payer.id}")],
-            subscriber=Reference(reference=f"urn:uuid:{subscriber.id}"),
-        )
+        coverage = build_coverage(patient, payer, subscriber)
 
         items, inforce = _build_insurance_items(parties.patient_loop_members)
         outcome, disposition = _resolve_outcome_and_disposition(transaction_set.segments)

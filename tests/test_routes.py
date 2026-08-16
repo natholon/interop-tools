@@ -306,6 +306,15 @@ def test_api_convert_resolves_edi_271_message_end_to_end():
     assert "CoverageEligibilityResponse" in resource_types
 
 
+def test_api_convert_resolves_edi_837p_message_end_to_end():
+    response = client.post("/api/convert", json={"hl7_text": read_fixture("edi_837p_basic.x12")})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bundle"]["resourceType"] == "Bundle"
+    resource_types = {e["resource"]["resourceType"] for e in body["bundle"]["entry"]}
+    assert "Claim" in resource_types
+
+
 def test_api_convert_edi_malformed_returns_parse_error():
     response = client.post("/api/convert", json={"hl7_text": read_fixture("edi_malformed.x12")})
     assert response.status_code == 400
@@ -347,6 +356,7 @@ def test_index_message_type_dropdown_includes_edi():
     assert "EDI^278 - Prior Authorization Request" in response.text
     assert "EDI^278 - Prior Authorization Response" in response.text
     assert "EDI^835 - Remittance Advice" in response.text
+    assert "EDI^837P - Professional Claim" in response.text
 
 
 @pytest.mark.parametrize(
@@ -363,6 +373,7 @@ def test_index_message_type_dropdown_includes_edi():
         # guaranteed for a single unseeded sample - only Claim is.
         ("278RESPONSE", "Claim"),
         ("835", "PaymentReconciliation"),
+        ("837", "Claim"),
     ],
 )
 def test_api_generate_edi_returns_convertible_and_valid_message(trigger_event, expected_resource_type):

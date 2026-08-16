@@ -47,11 +47,15 @@ local-system table for the identical list.
 
 `HI` (diagnosis codes) is the first `IVL`-style *repeating* composite
 element this app has parsed - up to 12 diagnosis-code composites can occur
-positionally within one `HI` segment (`HI*BF:1831*BF:2630~` = two
+positionally within one `HI` segment (`HI*ABK:1831*ABF:2630~` = two
 diagnoses, not two `HI` segments) - each read via `component()` the same
 way `STC01` already established, iterated across `element(hi, N)` for
 N=1..12 (the 5010 IG's own repetition cap for this field), stopping at the
-first empty position.
+first empty position. This parsing loop (and its qualifier table) was
+promoted to `app.edi.common.build_diagnosis_codeable_concepts`/
+`HI_QUALIFIER_SYSTEM` once `claim_837p.py` became a second real consumer
+of the identical HI composite shape - see that module's own bullet for a
+real qualifier-table bug this promotion caught along the way.
 
 `HCR01` (Action Code, e.g. `"A1"`=Certified in Total, `"A2"`=Certified -
 Partial, `"A3"`=Not Certified, `"A4"`=Pended - verified against a real RFI
@@ -103,6 +107,8 @@ from app.edi.common import (
     HL_INFORMATION_SOURCE,
     HL_SUBSCRIBER,
     assemble_bundle,
+    build_coverage,
+    build_diagnosis_codeable_concepts,
     build_organization_from_nm1,
     build_patient_from_nm1_dmg,
     build_practitioner_from_nm1,
@@ -111,7 +117,7 @@ from app.edi.common import (
     is_person_entity,
     parse_x12_datetime,
 )
-from app.edi.parser import Delimiters, HlLoop, Segment, TransactionSet, component, element, find_segment, group_by_hl_hierarchy
+from app.edi.parser import Delimiters, HlLoop, Segment, TransactionSet, element, find_segment, group_by_hl_hierarchy
 from app.hl7.errors import MissingSegmentError
 
 TRANSACTION_SET_ID = "278"
@@ -120,20 +126,6 @@ _HL_PATIENT_EVENT = "EV"
 
 BHT02_REQUEST = "13"
 BHT02_RESPONSE = "11"
-
-_MAX_DIAGNOSIS_POSITIONS = 12  # HI01-HI12, per the 005010X217 IG's own cap
-
-# HI composite qualifier (component 1) -> a real FHIR-canonical system URI
-# where one exists, the same "map to the real canonical system when the
-# qualifier is recognized, disclosed local placeholder otherwise" pattern
-# already established for NM108 (NM1_ID_QUALIFIER_SYSTEM in common.py).
-# "BF" (ICD-10-CM Diagnosis) is by far the dominant real-world qualifier in
-# 5010 transactions - other legal HI qualifiers (e.g. "BK"/"BJ" for legacy
-# ICD-9-CM) are left on the disclosed local-placeholder fallback rather
-# than guessed at.
-_HI_QUALIFIER_SYSTEM = {
-    "BF": "http://hl7.org/fhir/sid/icd-10-cm",
-}
 
 _HCR_ACTION_SYSTEM = "urn:interop-tools:x12-hcr-action-code"
 _HCR_REASON_SYSTEM = "urn:interop-tools:x12-hcr-reason-code"
@@ -242,40 +234,8 @@ def resolve_prior_auth_loops(segments: list[Segment], transaction_set_id: str) -
 
 
 def _build_diagnoses(hi: Segment | None, delimiters: Delimiters) -> list[ClaimDiagnosis]:
-    if hi is None:
-        return []
-    diagnoses = []
-    for position in range(1, _MAX_DIAGNOSIS_POSITIONS + 1):
-        composite = element(hi, position)
-        if not composite:
-            break
-        qualifier = component(composite, delimiters, 1).strip().upper()
-        code = component(composite, delimiters, 2)
-        if not code:
-            continue
-        system = _HI_QUALIFIER_SYSTEM.get(qualifier, f"urn:interop-tools:x12-hi-qualifier:{qualifier}")
-        concept = CodeableConcept(coding=[Coding(system=system, code=code)])
-        diagnoses.append(ClaimDiagnosis(sequence=len(diagnoses) + 1, diagnosisCodeableConcept=concept))
-    return diagnoses
-
-
-def _build_coverage(patient: Resource, payer: Resource, subscriber: Resource) -> Coverage:
-    """Mirrors eligibility_270.py/271.py's own Coverage construction
-    exactly - a code review caught that an earlier version of this module
-    pointed ClaimInsurance.coverage/ClaimResponseInsurance.coverage
-    directly at the payer Organization instead of a real Coverage
-    resource (confirmed via ClaimInsurance.coverage's own field
-    description: "Reference to the insurance card level information
-    contained in the Coverage resource"), which also left a dependent
-    patient's subscriber Patient resource unreferenced by anything else in
-    the Bundle."""
-    return Coverage(
-        id=str(uuid.uuid4()),
-        status="active",
-        beneficiary=Reference(reference=f"urn:uuid:{patient.id}"),
-        payor=[Reference(reference=f"urn:uuid:{payer.id}")],
-        subscriber=Reference(reference=f"urn:uuid:{subscriber.id}"),
-    )
+    concepts = build_diagnosis_codeable_concepts(hi, delimiters)
+    return [ClaimDiagnosis(sequence=i, diagnosisCodeableConcept=concept) for i, concept in enumerate(concepts, start=1)]
 
 
 def _build_claim(
@@ -393,7 +353,7 @@ class Edi278Builder(EdiTransactionBuilder):
             build_patient_from_nm1_dmg(loops.patient_nm1, loops.patient_dmg) if loops.patient_is_dependent else subscriber
         )
 
-        coverage = _build_coverage(patient, payer, subscriber)
+        coverage = build_coverage(patient, payer, subscriber)
         claim = _build_claim(loops, bht, patient, payer, requester, coverage, delimiters)
 
         resources: list[Resource] = [payer, requester, subscriber]

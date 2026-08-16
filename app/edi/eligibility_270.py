@@ -23,7 +23,6 @@ implicit."""
 import uuid
 
 from fhir.resources.R4B.bundle import Bundle
-from fhir.resources.R4B.coverage import Coverage
 from fhir.resources.R4B.coverageeligibilityrequest import (
     CoverageEligibilityRequest,
     CoverageEligibilityRequestInsurance,
@@ -36,6 +35,7 @@ from app.edi.base import EdiTransactionBuilder
 from app.edi.common import (
     DEFAULT_PURPOSE,
     assemble_bundle,
+    build_coverage,
     build_organization_from_nm1,
     build_patient_from_nm1_dmg,
     build_practitioner_from_nm1,
@@ -113,13 +113,7 @@ class Edi270Builder(EdiTransactionBuilder):
             else subscriber
         )
 
-        coverage = Coverage(
-            id=str(uuid.uuid4()),
-            status="active",
-            beneficiary=Reference(reference=f"urn:uuid:{patient.id}"),
-            payor=[Reference(reference=f"urn:uuid:{payer.id}")],
-            subscriber=Reference(reference=f"urn:uuid:{subscriber.id}"),
-        )
+        coverage = build_coverage(patient, payer, subscriber)
 
         items, serviced_date = _build_items_and_serviced_date(parties.patient_loop_members)
 

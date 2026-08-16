@@ -49,7 +49,12 @@ def test_request_basic_fixture_maps_claim_with_diagnoses_and_no_response():
     assert len(claim.diagnosis) == 2
     dx_codes = {d.diagnosisCodeableConcept.coding[0].code for d in claim.diagnosis}
     assert dx_codes == {"1831", "2630"}
-    assert claim.diagnosis[0].diagnosisCodeableConcept.coding[0].system == "http://hl7.org/fhir/sid/icd-10-cm"
+    # The fixture's HI segment uses the "BF" qualifier, which is ICD-9-CM
+    # (not ICD-10-CM - "ABF" is the ICD-10-CM one) per X12 code list 1270,
+    # verified directly. An earlier version of HI_QUALIFIER_SYSTEM mapped
+    # "BF" itself to ICD-10-CM, which this assertion originally (wrongly)
+    # matched - see app/edi/common.py::HI_QUALIFIER_SYSTEM's own comment.
+    assert claim.diagnosis[0].diagnosisCodeableConcept.coding[0].system == "http://hl7.org/fhir/sid/icd-9-cm"
 
     # A code review caught that claim.insurance[].coverage originally
     # pointed directly at the payer Organization instead of a real

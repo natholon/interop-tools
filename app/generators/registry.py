@@ -9,6 +9,7 @@ from app.edi.generator import (
     generate_278_request,
     generate_278_response,
     generate_835,
+    generate_837p,
 )
 from app.generators.adt import (
     generate_adt_a01,
@@ -103,6 +104,7 @@ _GENERATORS = {
     ("EDI", "278REQUEST"): (generate_278_request, "EDI^278 - Prior Authorization Request"),
     ("EDI", "278RESPONSE"): (generate_278_response, "EDI^278 - Prior Authorization Response"),
     ("EDI", "835"): (generate_835, "EDI^835 - Remittance Advice"),
+    ("EDI", "837"): (generate_837p, "EDI^837P - Professional Claim"),
 }
 
 

@@ -200,11 +200,11 @@ def test_would_not_convert_is_error():
 
 def test_unsupported_transaction_set_is_info():
     body = ["BHT*0022*13*1*20260812*1200~"]
-    report = validate_interchange(parse_interchange(_build("837", body)))
+    report = validate_interchange(parse_interchange(_build("999", body)))
     finding = next(f for f in report.findings if f.rule_id == "edi.unsupported-transaction-set")
     assert finding.severity == "info"
     assert report.is_valid is True
-    assert report.trigger_event == "837"
+    assert report.trigger_event == "999"
 
 
 def test_empty_interchange_reports_no_transaction_set_info_finding():
