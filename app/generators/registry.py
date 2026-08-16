@@ -1,16 +1,11 @@
 import random
 
 from app.cda.generator import generate_ccd, generate_discharge_summary
-from app.edi.generator import (
-    generate_270,
-    generate_271,
-    generate_276,
-    generate_277,
-    generate_278_request,
-    generate_278_response,
-    generate_835,
-    generate_837p,
-)
+from app.edi.claim_837p_generator import generate_837p
+from app.edi.claim_status_generator import generate_276, generate_277
+from app.edi.eligibility_generator import generate_270, generate_271
+from app.edi.prior_auth_generator import generate_278_request, generate_278_response
+from app.edi.remittance_generator import generate_835
 from app.generators.adt import (
     generate_adt_a01,
     generate_adt_a02,

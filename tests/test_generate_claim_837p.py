@@ -1,6 +1,6 @@
 import random
 
-from app.edi.generator import generate_837p
+from app.edi.claim_837p_generator import generate_837p
 from app.edi.parser import element, find_segment, first_transaction_set, parse_interchange
 from app.edi.pipeline import convert_edi_to_bundle, validate_edi
 

@@ -2,7 +2,7 @@ import random
 
 import pytest
 
-from app.edi.generator import generate_270, generate_271
+from app.edi.eligibility_generator import generate_270, generate_271
 from app.edi.parser import element, find_segment, first_transaction_set, parse_interchange
 from app.edi.pipeline import convert_edi_to_bundle, validate_edi
 

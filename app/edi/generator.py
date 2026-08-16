@@ -1,56 +1,60 @@
-"""Synthetic X12 270/271 generator - the app/edi/ mirror of
-app/cda/generator.py and the HL7v2 generators in app/generators/. Built via
-positional string-joins per segment (X12 is delimited text like HL7v2, not
-tree-built like CDA's XML).
+"""Shared X12 generator primitives - the app/edi/ mirror of
+app/generators/base.py, used by every family's own generator module
+(eligibility_generator.py for 270/271, claim_status_generator.py for
+276/277, prior_auth_generator.py for 278, remittance_generator.py for 835,
+claim_837p_generator.py for 837P). Built via positional string-joins per
+segment (X12 is delimited text like HL7v2, not tree-built like CDA's XML).
+
+Deliberately holds no `generate_*` functions itself and does not re-export
+them - each family module imports these primitives one-directionally, and
+`app/generators/registry.py`/every `test_generate_*.py` file import each
+`generate_*` function directly from its own family module (e.g.
+`from app.edi.eligibility_generator import generate_270`), not from here.
+A re-export shim here would work (Python resolves it via definition order)
+but relies on this file's own primitives staying textually before any
+cross-import, a fragile ordering constraint not worth taking on for a
+convenience import path.
 
 Reuses app.generators.base's format-agnostic primitives directly (maybe(),
 random_person_name(), random_sex(), random_identifier(),
 random_datetime_near_now()) rather than re-deriving name pools; net-new
 here is only format_x12_date()/format_x12_time() (X12 splits date and time
 into separate elements, unlike HL7's single concatenated TS field) and a
-small Service-Type-Code/payer-name/provider-name pool.
+small set of shared name/code pools reused across two or more families
+(`PAYER_NAMES`/`PROVIDER_ORG_NAMES` by nearly every family;
+`ICD10_DIAGNOSIS_CODES` by both prior_auth_generator.py and
+claim_837p_generator.py, both of which read the identical HI composite
+shape). Family-specific pools (Service Type Codes, Claim Status categories,
+HCR action codes, ...) stay in their own family's generator module instead.
 
 Self-checked via parse_interchange() before returning, mirroring every
 other generator's parse-back self-check - a generator bug should raise
 EdiParseError, not return broken X12 text."""
 
 import random
-from decimal import Decimal
 
 from app.edi.parser import parse_interchange
-from app.generators.base import maybe, random_datetime_near_now, random_identifier, random_person_name, random_sex
+from app.generators.base import maybe, random_datetime_near_now, random_identifier, random_person_name
 
-_PAYER_NAMES = [
+PAYER_NAMES = [
     "ACME HEALTH PLAN",
     "BLUEHARBOR INSURANCE",
     "SUMMIT HEALTH PARTNERS",
     "PINECREST MUTUAL",
     "HORIZON BENEFIT GROUP",
 ]
-_PROVIDER_ORG_NAMES = [
+PROVIDER_ORG_NAMES = [
     "GENERAL HOSPITAL",
     "RIVERVIEW CLINIC",
     "MAINSTREET MEDICAL GROUP",
     "LAKESIDE FAMILY PRACTICE",
     "CITY HEALTH CENTER",
 ]
-# (code, description) - a representative subset of the X12 Service Type
-# Code external code list (EQ01/EB03) - see app/edi/common.py's
-# SERVICE_TYPE_CODE_SYSTEM for why these are carried as a disclosed local
-# system rather than an official FHIR-canonical one.
-_SERVICE_TYPE_CODES = [
-    ("30", "Health Benefit Plan Coverage"),
-    ("1", "Medical Care"),
-    ("35", "Dental Care"),
-    ("88", "Pharmacy"),
-    ("98", "Professional (Physician) Visit - Office"),
-    ("A6", "Psychotherapy"),
-]
-# EB01 (Eligibility/Benefit Information Code) - the subset app.edi.
-# eligibility_271._EB01_EXCLUDED_MAP actually recognizes.
-_EB01_CODES = ["1", "6", "I"]
-_NETWORK_INDICATORS = ["Y", "N", "U"]
-_GS08_VERSION = "005010X279A1"
+# Representative ICD-10-CM-shaped diagnosis codes, shared by prior_auth_
+# generator.py's HI segment and claim_837p_generator.py's own HI segment -
+# both transaction sets read the identical HI composite shape (see
+# app/edi/common.py::build_diagnosis_codeable_concepts).
+ICD10_DIAGNOSIS_CODES = ["E119", "I10", "M5450", "J449", "N390", "M25561"]
 
 
 def format_x12_date(dt) -> str:
@@ -61,7 +65,7 @@ def format_x12_time(dt) -> str:
     return dt.strftime("%H%M")
 
 
-def _build_isa(control_number: str, sender_id: str, receiver_id: str, dt) -> str:
+def build_isa(control_number: str, sender_id: str, receiver_id: str, dt) -> str:
     fields = [
         "00",
         " " * 10,
@@ -83,13 +87,13 @@ def _build_isa(control_number: str, sender_id: str, receiver_id: str, dt) -> str
     return "ISA*" + "*".join(fields) + "~"
 
 
-def _build_org_nm1(rng: random.Random, entity_code: str, names_pool: list[str]) -> str:
+def build_org_nm1(rng: random.Random, entity_code: str, names_pool: list[str]) -> str:
     name = rng.choice(names_pool)
     identifier = random_identifier(rng, digits=8)
     return f"NM1*{entity_code}*2*{name}*****XX*{identifier}~"
 
 
-def _build_person_nm1(rng: random.Random, entity_code: str, sex: str, include_id: bool) -> str:
+def build_person_nm1(rng: random.Random, entity_code: str, sex: str, include_id: bool) -> str:
     family, given = random_person_name(rng, sex=sex)
     if include_id:
         identifier = random_identifier(rng, digits=8)
@@ -97,41 +101,21 @@ def _build_person_nm1(rng: random.Random, entity_code: str, sex: str, include_id
     return f"NM1*{entity_code}*1*{family}*{given}~"
 
 
-def _build_dmg(rng: random.Random, sex: str) -> str:
+def build_dmg(rng: random.Random, sex: str) -> str:
     dob = random_datetime_near_now(rng, min_days=-365 * 80, max_days=-365)
     return f"DMG*D8*{format_x12_date(dob)}*{sex}~"
 
 
-def _build_eq(rng: random.Random) -> str:
-    code, _ = rng.choice(_SERVICE_TYPE_CODES)
-    return f"EQ*{code}~"
-
-
-def _build_dtp(now) -> str:
-    return f"DTP*291*D8*{format_x12_date(now)}~"
-
-
-def _build_eb(rng: random.Random) -> str:
-    code, _ = rng.choice(_SERVICE_TYPE_CODES)
-    eb01 = rng.choice(_EB01_CODES)
-    network = rng.choice(_NETWORK_INDICATORS)
-    plan_description = f"{rng.choice(_PAYER_NAMES)} Plan"
-    return f"EB*{eb01}*IND*{code}*HM*{plan_description}*******{network}~"
-
-
-def _build_aaa(rng: random.Random) -> str:
-    # AAA01 "Y"/"N" (Valid Request Y/N), AAA03 a disclosed small subset of
-    # reject-reason codes, AAA04 Follow-up Action Code.
-    reject_code = rng.choice(("15", "42", "72"))
-    return f"AAA*N*{rng.choice(('15', '42'))}*{reject_code}*C~"
-
-
-class _EligibilityDraft:
-    """Intermediate state threaded from _generate_eligibility() to
-    _assemble() - explicit segment lists (not a joined string later
-    searched for markers) so SE01's segment count can be computed exactly,
-    with no risk of a random name/identifier value coincidentally
-    containing a substring that looks like a segment boundary."""
+class EdiDraft:
+    """Intermediate state threaded from each family's own `_generate_*()`
+    to `assemble_generated_interchange()` - explicit segment lists (not a
+    joined string later searched for markers) so SE01's segment count can
+    be computed exactly, with no risk of a random name/identifier value
+    coincidentally containing a substring that looks like a segment
+    boundary. Fully generic across every EDI family (even 835, which has no
+    HL hierarchy at all) - originally named `_EligibilityDraft` from when
+    only 270/271 existed, renamed once every other family was already
+    reusing it under that misleading name."""
 
     def __init__(self, envelope_segments: list[str], st_to_hl_segments: list[str], now, st_control, gs_control, isa_control):
         self.envelope_segments = envelope_segments  # ISA, GS - never part of the SE01 count
@@ -142,58 +126,7 @@ class _EligibilityDraft:
         self.isa_control = isa_control
 
 
-def _generate_eligibility(rng: random.Random, st01: str, bht02: str) -> _EligibilityDraft:
-    """Shared envelope + HL-hierarchy (2000A payer / 2000B provider /
-    2000C subscriber / optional 2000D dependent) generation for both 270
-    and 271 - the two transaction sets are identical through this point,
-    diverging only in their patient-loop leader segment (EQ vs EB) and
-    271's optional AAA rejection, both appended by the caller-specific
-    branch below."""
-    now = random_datetime_near_now(rng, min_days=-5, max_days=5)
-    sender_id = f"SENDER{random_identifier(rng, digits=4)}"
-    receiver_id = f"RECEIVER{random_identifier(rng, digits=4)}"
-    isa_control = random_identifier(rng, digits=9)
-    gs_control = random_identifier(rng, digits=6)
-    st_control = "0001"
-    bht_reference = random_identifier(rng, digits=8)
-
-    envelope_segments = [
-        _build_isa(isa_control, sender_id, receiver_id, now),
-        f"GS*HS*{sender_id}*{receiver_id}*{format_x12_date(now)}*{format_x12_time(now)}*{gs_control}*X*{_GS08_VERSION}~",
-    ]
-    st_to_hl_segments = [
-        f"ST*{st01}*{st_control}~",
-        f"BHT*0022*{bht02}*{bht_reference}*{format_x12_date(now)}*{format_x12_time(now)}~",
-        "HL*1**20*1~",
-        _build_org_nm1(rng, "PR", _PAYER_NAMES),
-        "HL*2*1*21*1~",
-    ]
-    # Provider (2000B) is an organization ~70% of the time, an individual
-    # practitioner otherwise - direct fuzz coverage of build_bundle()'s
-    # is_person_entity() branch on both mapper sides.
-    if maybe(rng, 0.7):
-        st_to_hl_segments.append(_build_org_nm1(rng, "1P", _PROVIDER_ORG_NAMES))
-    else:
-        st_to_hl_segments.append(_build_person_nm1(rng, "1P", random_sex(rng), include_id=True))
-
-    subscriber_sex = random_sex(rng)
-    st_to_hl_segments += ["HL*3*2*22*1~", _build_person_nm1(rng, "IL", subscriber_sex, include_id=True)]
-    if maybe(rng, 0.7):
-        st_to_hl_segments.append(_build_dmg(rng, subscriber_sex))
-
-    # A dependent loop (2000D) is present ~40% of the time - direct fuzz
-    # coverage of both mappers' "patient = dependent when present, else
-    # subscriber" precedence rule.
-    if maybe(rng, 0.4):
-        dependent_sex = random_sex(rng)
-        st_to_hl_segments += ["HL*4*3*23*0~", _build_person_nm1(rng, "QC", dependent_sex, include_id=False)]
-        if maybe(rng, 0.7):
-            st_to_hl_segments.append(_build_dmg(rng, dependent_sex))
-
-    return _EligibilityDraft(envelope_segments, st_to_hl_segments, now, st_control, gs_control, isa_control)
-
-
-def _assemble(rng: random.Random, draft: _EligibilityDraft, body_segments: list[str]) -> str:
+def assemble_generated_interchange(rng: random.Random, draft: EdiDraft, body_segments: list[str]) -> str:
     """Append the patient-loop-specific body, then the trailer segments
     (SE/GE/IEA), deliberately wrong ~12% of the time on SE01/GE01/IEA02
     (trailer element counts) to fuzz-exercise the validator's
@@ -219,471 +152,3 @@ def _assemble(rng: random.Random, draft: _EligibilityDraft, body_segments: list[
     text = "".join(draft.envelope_segments + draft.st_to_hl_segments + body_segments + trailer)
     parse_interchange(text)  # self-check: a generator bug should raise, not return broken X12
     return text
-
-
-def generate_270(rng: random.Random) -> str:
-    draft = _generate_eligibility(rng, "270", "13")
-    body = [_build_eq(rng)]
-    if maybe(rng):
-        body.append(_build_dtp(draft.now))
-    if maybe(rng, 0.3):
-        body.append(_build_eq(rng))
-    return _assemble(rng, draft, body)
-
-
-def generate_271(rng: random.Random) -> str:
-    draft = _generate_eligibility(rng, "271", "11")
-    body = [_build_eb(rng)]
-    if maybe(rng, 0.3):
-        body.append(_build_eb(rng))
-    # A rejection (AAA01="N") occurs ~15% of the time - direct fuzz
-    # coverage of _resolve_outcome_and_disposition()'s "error" branch,
-    # which would otherwise never be exercised by generated data.
-    if maybe(rng, 0.15):
-        body.append(_build_aaa(rng))
-    return _assemble(rng, draft, body)
-
-
-# --- 276/277 Claim Status Request/Response ----------------------------
-
-# (category, status) pairs - a representative subset of X12's Claim Status
-# Category Code (STC01-1) / Claim Status Code (STC01-2) external code
-# lists, spanning every prefix app.edi.claim_status::
-# _STC_CATEGORY_PREFIX_TO_TASK_STATUS recognizes (A/P/F/R/E) plus one
-# unrecognized prefix ("D0") to exercise the "completed" fallback.
-_CLAIM_STATUS_CATEGORIES = [
-    ("A1", "1"),
-    ("F1", "1"),
-    ("F2", "45"),
-    ("P1", "1"),
-    ("R3", "62"),
-    ("E1", "42"),
-    ("D0", "1"),
-]
-
-
-def _build_claim_status_group(rng: random.Random, trn01: str, now, include_status: bool) -> list[str]:
-    """One TRN-led claim-status group - TRN (always present, trace number),
-    optional REF (payer claim control number), and - 277 only - STC
-    (claim status). Mirrors app.edi.claim_status's own reading of this
-    exact group shape."""
-    trace = f"TRACE{random_identifier(rng, digits=6)}"
-    segments = [f"TRN*{trn01}*{trace}*{random_identifier(rng, digits=10)}~"]
-    if include_status:
-        category, status = rng.choice(_CLAIM_STATUS_CATEGORIES)
-        segments.append(f"STC*{category}:{status}:PR*{format_x12_date(now)}~")
-    if maybe(rng, 0.7):
-        segments.append(f"REF*1K*{random_identifier(rng, digits=8)}~")
-    return segments
-
-
-def _generate_claim_status(rng: random.Random, st01: str, bht02: str, include_status: bool) -> str:
-    """Shared envelope + HL-hierarchy generation for 276/277 - a deeper
-    chain than 270/271's (2000A payer / 2000B information receiver / 2000C
-    provider / 2000D subscriber / 2000E dependent), reusing the same
-    envelope/NM1/DMG segment builders _generate_eligibility already uses,
-    but not _generate_eligibility itself - the extra 2000C provider loop
-    makes this a genuinely different shape, not a parameterization of the
-    same one (see app/edi/claim_status.py's own module docstring for the
-    same "different HL03 table, don't force a shared walk" reasoning)."""
-    now = random_datetime_near_now(rng, min_days=-5, max_days=5)
-    sender_id = f"SENDER{random_identifier(rng, digits=4)}"
-    receiver_id = f"RECEIVER{random_identifier(rng, digits=4)}"
-    isa_control = random_identifier(rng, digits=9)
-    gs_control = random_identifier(rng, digits=6)
-    st_control = "0001"
-    bht_reference = random_identifier(rng, digits=8)
-    trn01 = "2" if include_status else "1"  # TRN01: 1=current trace, 2=referenced (echoed back)
-
-    envelope_segments = [
-        _build_isa(isa_control, sender_id, receiver_id, now),
-        f"GS*HR*{sender_id}*{receiver_id}*{format_x12_date(now)}*{format_x12_time(now)}*{gs_control}*X*005010X212~",
-    ]
-    st_to_hl_segments = [
-        f"ST*{st01}*{st_control}~",
-        f"BHT*0010*{bht02}*{bht_reference}*{format_x12_date(now)}*{format_x12_time(now)}~",
-        "HL*1**20*1~",
-        _build_org_nm1(rng, "PR", _PAYER_NAMES),
-        "HL*2*1*21*1~",
-    ]
-    # Information receiver (2000B) is an organization ~70% of the time, an
-    # individual otherwise - direct fuzz coverage of is_person_entity()'s
-    # branch on both the receiver and provider loops.
-    if maybe(rng, 0.7):
-        st_to_hl_segments.append(_build_org_nm1(rng, "41", _PROVIDER_ORG_NAMES))
-    else:
-        st_to_hl_segments.append(_build_person_nm1(rng, "41", random_sex(rng), include_id=True))
-
-    st_to_hl_segments.append("HL*3*2*19*1~")
-    if maybe(rng, 0.7):
-        st_to_hl_segments.append(_build_org_nm1(rng, "1P", _PROVIDER_ORG_NAMES))
-    else:
-        st_to_hl_segments.append(_build_person_nm1(rng, "1P", random_sex(rng), include_id=True))
-
-    subscriber_sex = random_sex(rng)
-    st_to_hl_segments += ["HL*4*3*22*1~", _build_person_nm1(rng, "IL", subscriber_sex, include_id=True)]
-    st_to_hl_segments += _build_claim_status_group(rng, trn01, now, include_status)
-
-    # A dependent loop (2000E) is present ~40% of the time - direct fuzz
-    # coverage of the builder's "walk both patient loops, one Task per
-    # claim group" behavior (not a precedence rule like 270/271's, since
-    # 276/277 can report on claims for both the subscriber and a
-    # dependent within the same transaction set).
-    if maybe(rng, 0.4):
-        dependent_sex = random_sex(rng)
-        st_to_hl_segments += ["HL*5*4*23*0~", _build_person_nm1(rng, "QC", dependent_sex, include_id=False)]
-        if maybe(rng, 0.7):
-            st_to_hl_segments.append(_build_dmg(rng, dependent_sex))
-        st_to_hl_segments += _build_claim_status_group(rng, trn01, now, include_status)
-
-    return _assemble(
-        rng,
-        _EligibilityDraft(envelope_segments, st_to_hl_segments, now, st_control, gs_control, isa_control),
-        [],
-    )
-
-
-def generate_276(rng: random.Random) -> str:
-    return _generate_claim_status(rng, "276", "13", include_status=False)
-
-
-def generate_277(rng: random.Random) -> str:
-    return _generate_claim_status(rng, "277", "08", include_status=True)
-
-
-# --- 278 Health Care Services Review (Prior Authorization) --------------
-
-# UM01 (Request Category Code) - a representative subset.
-_UM01_REQUEST_CATEGORY_CODES = ["HS", "SC", "AR", "IN"]
-# UM02 (Certification Type Code): I=Initial, R=Renewal, S=Revised.
-_UM02_CERTIFICATION_TYPE_CODES = ["I", "R", "S"]
-# HI qualifier BF = ICD-10-CM Diagnosis (the same qualifier the real
-# X12.org example this module's builder was verified against uses).
-_HI_DIAGNOSIS_QUALIFIER = "BF"
-_DIAGNOSIS_CODES = ["E119", "I10", "M5450", "J449", "N390", "M25561"]
-# HCR01 (Action Code) - every prefix app.edi.prior_auth::
-# _HCR01_TO_OUTCOME recognizes (A1/A2/A3/A4), plus one deliberately
-# unrecognized code ("Z9") to exercise the "completed" fallback.
-_HCR01_ACTION_CODES = ["A1", "A2", "A3", "A4", "Z9"]
-_HCR03_REASON_CODES = ["93", "197", ""]
-
-
-def _build_um(rng: random.Random) -> str:
-    um01 = rng.choice(_UM01_REQUEST_CATEGORY_CODES)
-    um02 = rng.choice(_UM02_CERTIFICATION_TYPE_CODES)
-    # UM03 (service type code) populated ~70% of the time - direct fuzz
-    # coverage of build_service_type_category's None-vs-coded branches.
-    um03 = rng.choice(_SERVICE_TYPE_CODES)[0] if maybe(rng, 0.7) else ""
-    return f"UM*{um01}*{um02}*{um03}*12:B~"
-
-
-def _build_hi(rng: random.Random) -> str:
-    count = rng.randint(1, 3)
-    codes = rng.sample(_DIAGNOSIS_CODES, count)
-    composites = "*".join(f"{_HI_DIAGNOSIS_QUALIFIER}:{code}" for code in codes)
-    return f"HI*{composites}~"
-
-
-def _build_hcr(rng: random.Random) -> str:
-    action_code = rng.choice(_HCR01_ACTION_CODES)
-    auth_ref = f"AUTH{random_identifier(rng, digits=6)}" if maybe(rng, 0.8) else ""
-    reason_code = rng.choice(_HCR03_REASON_CODES) if action_code in ("A3", "A4") else ""
-    return f"HCR*{action_code}*{auth_ref}*{reason_code}~"
-
-
-def _generate_prior_auth(rng: random.Random, bht02: str) -> str:
-    """Shared envelope + HL-hierarchy generation for 278 request/response -
-    unlike every other EDI pair in this app, both share the literal
-    ST01="278" (see app/edi/prior_auth.py's own module docstring), so
-    request vs. response is purely a BHT02 difference, not a body-shape
-    one at the envelope level; the two callers below differ only in
-    bht02 and whether an HCR segment gets appended."""
-    now = random_datetime_near_now(rng, min_days=-5, max_days=5)
-    sender_id = f"SENDER{random_identifier(rng, digits=4)}"
-    receiver_id = f"RECEIVER{random_identifier(rng, digits=4)}"
-    isa_control = random_identifier(rng, digits=9)
-    gs_control = random_identifier(rng, digits=6)
-    st_control = "0001"
-    bht_reference = random_identifier(rng, digits=8)
-
-    envelope_segments = [
-        _build_isa(isa_control, sender_id, receiver_id, now),
-        f"GS*HI*{sender_id}*{receiver_id}*{format_x12_date(now)}*{format_x12_time(now)}*{gs_control}*X*005010X217~",
-    ]
-    st_to_hl_segments = [
-        f"ST*278*{st_control}~",
-        f"BHT*0007*{bht02}*{bht_reference}*{format_x12_date(now)}*{format_x12_time(now)}~",
-        "HL*1**20*1~",
-        _build_org_nm1(rng, "X3", _PAYER_NAMES),
-        "HL*2*1*21*1~",
-    ]
-    # Requester (2000B) is an organization ~60% of the time, an individual
-    # otherwise - direct fuzz coverage of is_person_entity()'s branch.
-    if maybe(rng, 0.6):
-        st_to_hl_segments.append(_build_org_nm1(rng, "1P", _PROVIDER_ORG_NAMES))
-    else:
-        st_to_hl_segments.append(_build_person_nm1(rng, "1P", random_sex(rng), include_id=True))
-
-    subscriber_sex = random_sex(rng)
-    st_to_hl_segments += ["HL*3*2*22*1~", _build_person_nm1(rng, "IL", subscriber_sex, include_id=True)]
-    if maybe(rng, 0.7):
-        st_to_hl_segments.append(_build_dmg(rng, subscriber_sex))
-
-    # A dependent loop (2000D) is present ~40% of the time - direct fuzz
-    # coverage of the "patient = dependent when present and NM1 resolves,
-    # else subscriber" precedence rule, same as every other EDI family.
-    patient_hl_id = "3"
-    next_hl_id = 4
-    if maybe(rng, 0.4):
-        dependent_sex = random_sex(rng)
-        st_to_hl_segments += [f"HL*4*3*23*1~", _build_person_nm1(rng, "QC", dependent_sex, include_id=False)]
-        if maybe(rng, 0.7):
-            st_to_hl_segments.append(_build_dmg(rng, dependent_sex))
-        patient_hl_id = "4"
-        next_hl_id = 5
-
-    st_to_hl_segments.append(f"HL*{next_hl_id}*{patient_hl_id}*EV*0~")
-    st_to_hl_segments.append(_build_um(rng))
-    if maybe(rng, 0.7):
-        st_to_hl_segments.append(_build_hi(rng))
-    # A response (BHT02="11") carries an HCR certification decision ~85%
-    # of the time, not always - direct fuzz coverage of
-    # _build_claim_response()'s own "no HCR -> no ClaimResponse" branch,
-    # which would otherwise never be exercised by generated response data.
-    if bht02 == "11" and maybe(rng, 0.85):
-        st_to_hl_segments.append(_build_hcr(rng))
-
-    return _assemble(
-        rng,
-        _EligibilityDraft(envelope_segments, st_to_hl_segments, now, st_control, gs_control, isa_control),
-        [],
-    )
-
-
-def generate_278_request(rng: random.Random) -> str:
-    return _generate_prior_auth(rng, "13")
-
-
-def generate_278_response(rng: random.Random) -> str:
-    return _generate_prior_auth(rng, "11")
-
-
-# --- 835 Health Care Claim Payment/Advice (Remittance Advice) -----------
-
-# CLP02 (Claim Status Code) - a representative subset (1=Processed as
-# Primary, 2=Secondary, 3=Tertiary, 4=Denied, 22=Reversal of Previous
-# Payment).
-_CLP_STATUS_CODES = ["1", "2", "3", "4", "22"]
-# CAS01 (Claim Adjustment Group Code) - CO=Contractual Obligation,
-# PR=Patient Responsibility, OA=Other Adjustment, PI=Payer Initiated,
-# CR=Correction.
-_CAS_GROUP_CODES = ["CO", "PR", "OA", "PI", "CR"]
-_CAS_REASON_CODES = ["45", "96", "97", "1", "2"]
-
-
-def _build_clp(rng: random.Random) -> tuple[list[str], Decimal]:
-    """One CLP-led claim-payment group, with an optional CAS adjustment -
-    returns its own segments plus the paid amount (CLP04), so the caller
-    can sum every claim's paid amount into BPR02 (the payment total),
-    keeping the generated 835 internally consistent the same way a real
-    one is."""
-    claim_id = f"PCN{random_identifier(rng, digits=5)}"
-    status = rng.choice(_CLP_STATUS_CODES)
-    charge = Decimal(str(round(rng.uniform(50, 1000), 2)))
-    paid_fraction = Decimal(str(round(rng.uniform(0, 1), 2)))
-    paid = (charge * paid_fraction).quantize(Decimal("0.01"))
-    responsibility = (charge - paid).quantize(Decimal("0.01"))
-    segments = [
-        f"CLP*{claim_id}*{status}*{charge:.2f}*{paid:.2f}*{responsibility:.2f}*MC*"
-        f"PAYERCTRL{random_identifier(rng, digits=6)}*11*1~"
-    ]
-    # A CAS adjustment occurs ~80% of the time - direct fuzz coverage of
-    # group_by_leader's CLP->CAS member association (deliberately not
-    # mapped to any FHIR field this phase, see the module docstring, but
-    # still exercised so a future SVC/CAS-nested-STC-style bug in the
-    # leader/member walk itself would be caught).
-    if maybe(rng, 0.8):
-        group = rng.choice(_CAS_GROUP_CODES)
-        reason = rng.choice(_CAS_REASON_CODES)
-        segments.append(f"CAS*{group}*{reason}*{responsibility:.2f}~")
-    return segments, paid
-
-
-def _build_n1(rng: random.Random, entity_code: str, names_pool: list[str], id_qualifier: str) -> str:
-    name = rng.choice(names_pool)
-    identifier = random_identifier(rng, digits=8)
-    return f"N1*{entity_code}*{name}*{id_qualifier}*{identifier}~"
-
-
-def generate_835(rng: random.Random) -> str:
-    """Unlike every other EDI generator in this app, 835 has no HL
-    hierarchy and no BHT segment (see app/edi/remittance_835.py's own
-    module docstring) - the envelope + N1 header pair + repeating CLP/CAS
-    body is built directly, still reusing _EligibilityDraft/_assemble for
-    the generic envelope/trailer-count machinery despite the
-    eligibility-scoped name, since that shape is fully generic."""
-    now = random_datetime_near_now(rng, min_days=-5, max_days=5)
-    sender_id = f"SENDER{random_identifier(rng, digits=4)}"
-    receiver_id = f"RECEIVER{random_identifier(rng, digits=4)}"
-    isa_control = random_identifier(rng, digits=9)
-    gs_control = random_identifier(rng, digits=6)
-    st_control = "0001"
-
-    # Claims are built first so BPR02 (payment total) can be the real sum
-    # of every claim's own paid amount - the same "internally consistent,
-    # not just individually valid" discipline every other generator here
-    # follows for its own header/body relationship.
-    body: list[str] = []
-    total_paid = Decimal("0.00")
-    for _ in range(rng.randint(1, 3)):
-        clp_segments, paid = _build_clp(rng)
-        body.extend(clp_segments)
-        total_paid += paid
-
-    trace_number = random_identifier(rng, digits=10)
-    envelope_segments = [
-        _build_isa(isa_control, sender_id, receiver_id, now),
-        f"GS*HP*{sender_id}*{receiver_id}*{format_x12_date(now)}*{format_x12_time(now)}*{gs_control}*X*005010X221A1~",
-    ]
-    st_to_hl_segments = [
-        f"ST*835*{st_control}~",
-        f"BPR*I*{total_paid:.2f}*C*ACH*CCP*01*{random_identifier(rng, digits=9)}*DA*"
-        f"{random_identifier(rng, digits=10)}*{trace_number}**01*{random_identifier(rng, digits=9)}*DA*"
-        f"{random_identifier(rng, digits=10)}*{format_x12_date(now)}~",
-        f"TRN*1*{trace_number}*9876543210~",
-        _build_n1(rng, "PR", _PAYER_NAMES, "XV"),
-        _build_n1(rng, "PE", _PROVIDER_ORG_NAMES, "XX"),
-    ]
-
-    return _assemble(
-        rng,
-        _EligibilityDraft(envelope_segments, st_to_hl_segments, now, st_control, gs_control, isa_control),
-        body,
-    )
-
-
-# --- 837P Health Care Claim: Professional -------------------------------
-
-# CLM05-1 (Facility Code Value / Place of Service) - a representative
-# subset of the real CMS Place of Service code set (see
-# app/edi/claim_837p.py's own _POS_CODE_SYSTEM for the verified canonical
-# system this feeds).
-_PLACE_OF_SERVICE_CODES = ["11", "21", "22", "23", "02"]
-# SV1-01 procedure codes, all under the "HC" qualifier (see claim_837p.py's
-# module docstring for the disclosed CPT-vs-HCPCS-Level-II ambiguity this
-# qualifier carries).
-_PROCEDURE_CODES = ["99213", "99214", "90782", "80053", "85025", "93000"]
-# HI diagnosis codes - the same representative ICD-10-CM-shaped pool
-# _DIAGNOSIS_CODES above already uses for 278's own HI segment, reused
-# directly since both transaction sets read the identical composite shape
-# (see app/edi/common.py::build_diagnosis_codeable_concepts).
-_ICD10_DIAGNOSIS_CODES = _DIAGNOSIS_CODES
-
-
-def _build_hi_837p(rng: random.Random, count: int) -> str:
-    """Unlike 278's _build_hi (which reuses the same "BF" qualifier for
-    every position - a disclosed simplification for that phase), this
-    generator distinguishes ABK (principal, position 1) from ABF (other,
-    every subsequent position) - the real semantic distinction the 5010 IG
-    itself draws, and the one this generator can exercise cleanly since
-    837P's own diagnosis-pointer composite (SV1-07) gives a concrete reason
-    to care which position is which."""
-    codes = rng.sample(_ICD10_DIAGNOSIS_CODES, count)
-    composites = [f"ABK:{codes[0]}"] + [f"ABF:{code}" for code in codes[1:]]
-    return "HI*" + "*".join(composites) + "~"
-
-
-def _build_sv1(rng: random.Random, num_diagnoses: int) -> str:
-    procedure = rng.choice(_PROCEDURE_CODES)
-    charge = round(rng.uniform(15, 500), 2)
-    # SV1-07: 1-based pointers into HI's own diagnosis order - up to the
-    # smaller of _MAX_DIAGNOSIS_POINTERS(4) and however many diagnoses this
-    # claim actually carries, so a generated pointer resolves. ~10% of the
-    # time, one pointer is deliberately pushed out of range instead - direct
-    # fuzz coverage of edi.837p-diagnosis-pointer-unresolved, mirroring
-    # ORU's own deliberate ~30% out-of-range OBX-5 fuzzing precedent (a
-    # generator that never produces an unresolved pointer would leave that
-    # rule permanently untested).
-    pointer_count = rng.randint(1, min(4, num_diagnoses)) if num_diagnoses else 0
-    pointers_list = sorted(rng.sample(range(1, num_diagnoses + 1), pointer_count)) if pointer_count else []
-    if pointers_list and maybe(rng, 0.1):
-        pointers_list[-1] = num_diagnoses + rng.randint(1, 3)
-    pointers = ":".join(str(p) for p in pointers_list)
-    return f"SV1*HC:{procedure}*{charge:.2f}*UN*1***{pointers}~"
-
-
-def generate_837p(rng: random.Random) -> str:
-    """Unlike every earlier EDI generator in this app, the 837P HL chain is
-    only 3 levels deep (2000A Billing Provider/2000B Subscriber/optional
-    2000C Patient - see app/edi/claim_837p.py's own module docstring for
-    why "20"/"22"/"23" mean something different here than in 270/271/278
-    despite the numeric coincidence), and the payer NM1*PR is generated as
-    a member of the *subscriber* loop, not its own root loop - a genuine
-    structural difference from every sibling generator's own envelope
-    shape, not a copy-paste of _generate_eligibility's."""
-    now = random_datetime_near_now(rng, min_days=-5, max_days=5)
-    sender_id = f"SENDER{random_identifier(rng, digits=4)}"
-    receiver_id = f"RECEIVER{random_identifier(rng, digits=4)}"
-    isa_control = random_identifier(rng, digits=9)
-    gs_control = random_identifier(rng, digits=6)
-    st_control = "0001"
-    bht_reference = random_identifier(rng, digits=8)
-
-    envelope_segments = [
-        _build_isa(isa_control, sender_id, receiver_id, now),
-        f"GS*HC*{sender_id}*{receiver_id}*{format_x12_date(now)}*{format_x12_time(now)}*{gs_control}*X*005010X222A2~",
-    ]
-    st_to_hl_segments = [
-        f"ST*837*{st_control}*005010X222A2~",
-        f"BHT*0019*00*{bht_reference}*{format_x12_date(now)}*{format_x12_time(now)}*CH~",
-        "HL*1**20*1~",
-    ]
-    # Billing provider (2000A) is an organization ~60% of the time, an
-    # individual (sole proprietor) otherwise - direct fuzz coverage of
-    # is_person_entity()'s branch on this loop.
-    if maybe(rng, 0.6):
-        st_to_hl_segments.append(_build_org_nm1(rng, "85", _PROVIDER_ORG_NAMES))
-    else:
-        st_to_hl_segments.append(_build_person_nm1(rng, "85", random_sex(rng), include_id=True))
-
-    subscriber_sex = random_sex(rng)
-    st_to_hl_segments += ["HL*2*1*22*1~", "SBR*P*******CI~", _build_person_nm1(rng, "IL", subscriber_sex, include_id=True)]
-    if maybe(rng, 0.7):
-        st_to_hl_segments.append(_build_dmg(rng, subscriber_sex))
-    st_to_hl_segments.append(_build_org_nm1(rng, "PR", _PAYER_NAMES))
-
-    # A patient loop (2000C) is present ~40% of the time - direct fuzz
-    # coverage of Claim.patient/Coverage.beneficiary's "patient = the
-    # 2000C patient when present and NM1 resolves, else the subscriber"
-    # precedence rule, same as every other EDI family's dependent loop.
-    if maybe(rng, 0.4):
-        patient_sex = random_sex(rng)
-        st_to_hl_segments += ["HL*3*2*23*0~", "PAT*19~", _build_person_nm1(rng, "QC", patient_sex, include_id=False)]
-        if maybe(rng, 0.7):
-            st_to_hl_segments.append(_build_dmg(rng, patient_sex))
-
-    charge = round(rng.uniform(50, 1000), 2)
-    facility = rng.choice(_PLACE_OF_SERVICE_CODES)
-    claim_id = f"CLM{random_identifier(rng, digits=8)}"
-    st_to_hl_segments.append(f"CLM*{claim_id}*{charge:.2f}***{facility}:B:1*Y*A*Y*I~")
-
-    num_diagnoses = rng.randint(1, 3)
-    st_to_hl_segments.append(_build_hi_837p(rng, num_diagnoses))
-
-    # A rendering provider (2310B, NM1*82) is present ~60% of the time -
-    # direct fuzz coverage of Claim.careTeam's own present/absent branch.
-    if maybe(rng, 0.6):
-        st_to_hl_segments.append(_build_person_nm1(rng, "82", random_sex(rng), include_id=True))
-
-    line_count = rng.randint(1, 3)
-    for line_number in range(1, line_count + 1):
-        st_to_hl_segments.append(f"LX*{line_number}~")
-        st_to_hl_segments.append(_build_sv1(rng, num_diagnoses))
-        if maybe(rng, 0.8):
-            st_to_hl_segments.append(f"DTP*472*D8*{format_x12_date(now)}~")
-
-    return _assemble(
-        rng,
-        _EligibilityDraft(envelope_segments, st_to_hl_segments, now, st_control, gs_control, isa_control),
-        [],
-    )
