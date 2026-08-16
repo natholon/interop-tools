@@ -8,7 +8,8 @@ transaction-set family's own plausibility rules live in their own sibling
 module instead (`eligibility_validation.py` for 270/271,
 `claim_status_validation.py` for 276/277, `prior_auth_validation.py` for
 278, `remittance_validation.py` for 835, `claim_837p_validation.py` for
-837P, `claim_837i_validation.py` for 837I), mirroring the file-per-family split every builder/generator module
+837P, `claim_837i_validation.py` for 837I, `claim_837d_validation.py` for
+837D), mirroring the file-per-family split every builder/generator module
 already follows. This split is purely internal - every external caller
 (`app/edi/pipeline.py`, every `test_*_validation.py` file) only ever calls
 `validate_interchange` itself, so moving code between these modules changes
@@ -33,10 +34,11 @@ from datetime import datetime, timezone
 
 from pydantic import ValidationError
 
+from app.edi.claim_837d_validation import validate_837d
 from app.edi.claim_837i_validation import validate_837i
 from app.edi.claim_837p_validation import validate_837p
 from app.edi.claim_status_validation import validate_276, validate_277
-from app.edi.common import is_837i_transaction
+from app.edi.common import is_837d_transaction, is_837i_transaction
 from app.edi.eligibility_validation import validate_270, validate_271
 from app.edi.parser import Delimiters, Interchange, TransactionSet, element, first_transaction_set
 from app.edi.prior_auth_validation import validate_278
@@ -224,12 +226,14 @@ def validate_interchange(interchange: Interchange) -> ValidationReport:
             findings.extend(validate_835(transaction_set, now))
         elif normalized_st01 == "837":
             # Mirrors app/edi/registry.py::get_transaction_builder's own
-            # 837P-vs-837I dispatch exactly, via the shared
-            # common.py::is_837i_transaction - so validation can never
-            # disagree with conversion about which variant a given ST03
-            # value indicates.
+            # 837P-vs-837I-vs-837D dispatch exactly, via the shared
+            # common.py::is_837i_transaction/is_837d_transaction - so
+            # validation can never disagree with conversion about which
+            # variant a given ST03 value indicates.
             if is_837i_transaction(transaction_set.st03):
                 findings.extend(validate_837i(transaction_set, interchange.delimiters, now))
+            elif is_837d_transaction(transaction_set.st03):
+                findings.extend(validate_837d(transaction_set, interchange.delimiters, now))
             else:
                 findings.extend(validate_837p(transaction_set, interchange.delimiters, now))
 

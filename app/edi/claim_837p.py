@@ -60,9 +60,11 @@ the same "no fitting field, disclosed and skipped" treatment 278's `UM01`
 already gets.
 
 `CLM05-1` (Facility Code Value, i.e. Place of Service) maps to the real,
-verified CMS canonical CodeSystem (`_POS_CODE_SYSTEM` - confirmed by direct
-fetch, not guessed at, unlike most of this app's disclosed local-system
-fallbacks). `SV1-01` (Composite Medical Procedure Identifier)'s qualifier
+verified CMS canonical CodeSystem (`common.py::POS_CODE_SYSTEM` -
+confirmed by direct fetch, not guessed at, unlike most of this app's
+disclosed local-system fallbacks; promoted there once `claim_837d.py`
+became a second real consumer of the identical CLM05-1 vocabulary).
+`SV1-01` (Composite Medical Procedure Identifier)'s qualifier
 "HC" is a **genuinely unresolvable ambiguity, confirmed directly rather
 than assumed**: X12's own "HC" qualifier covers both CPT (AMA-owned) and
 HCPCS Level II (CMS-owned) codes with no way to tell which from the X12
@@ -112,6 +114,7 @@ from app.edi.common import (
     build_diagnosis_codeable_concepts,
     build_organization_from_nm1,
     build_patient_from_nm1_dmg,
+    build_place_of_service_from_clm05,
     build_practitioner_from_nm1,
     is_person_entity,
     parse_x12_datetime,
@@ -155,12 +158,6 @@ _NM1_SUBSCRIBER = "IL"
 _NM1_PAYER = "PR"
 _NM1_PATIENT = "QC"
 _NM1_RENDERING_PROVIDER = "82"
-
-# CMS's own Place of Service code set - a real, verified FHIR-canonical
-# CodeSystem (confirmed by direct fetch), unlike most of this app's
-# disclosed local-system fallbacks for X12 code lists with no official FHIR
-# home. CLM05-1 (Facility Code Value) is coded against this list.
-_POS_CODE_SYSTEM = "https://www.cms.gov/Medicare/Coding/place-of-service-codes/Place_of_Service_Code_Set"
 
 # SV1-01's procedure-code qualifier (X12 code list 235) - "HC" is a
 # genuinely unresolvable CPT-vs-HCPCS-Level-II ambiguity at the X12 level
@@ -297,13 +294,6 @@ def resolve_837p_loops(segments: list[Segment], transaction_set_id: str) -> Reso
     )
 
 
-def _build_place_of_service(clm: Segment, delimiters: Delimiters) -> CodeableConcept | None:
-    facility_code = component(element(clm, 5), delimiters, 1)
-    if not facility_code:
-        return None
-    return CodeableConcept(coding=[Coding(system=_POS_CODE_SYSTEM, code=facility_code)])
-
-
 def _build_procedure_concept(sv1_01: str, delimiters: Delimiters) -> CodeableConcept | None:
     qualifier = component(sv1_01, delimiters, 1).strip().upper()
     code = component(sv1_01, delimiters, 2)
@@ -418,7 +408,7 @@ class Edi837pBuilder(EdiTransactionBuilder):
         if created is None:
             raise MappingError(f"{self.transaction_set_id} transaction set's BHT segment has no resolvable date (BHT04)")
 
-        location = _build_place_of_service(clm, delimiters)
+        location = build_place_of_service_from_clm05(clm, delimiters)
 
         line_groups = group_by_leader(loops.claim_loop.member_segments, "LX", ["SV1", "DTP", "PWK", "CRC"])
         items = []

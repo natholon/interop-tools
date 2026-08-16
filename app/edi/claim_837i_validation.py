@@ -5,13 +5,8 @@ app/edi/validation.py's own docstring describes. `app/edi/validation.py`'s
 
 from datetime import datetime
 
-from app.edi.claim_837i import (
-    DTP_SERVICE_DATE,
-    Resolved837iLoops,
-    find_dtp_by_qualifier,
-    iter_diagnosis_hi_segments,
-    resolve_837i_loops,
-)
+from app.edi.claim_837i import DTP_SERVICE_DATE, Resolved837iLoops, find_dtp_by_qualifier, resolve_837i_loops
+from app.edi.common import iter_diagnosis_hi_segments
 from app.edi.parser import Delimiters, Segment, TransactionSet, element, find_segment, group_by_leader
 from app.hl7.errors import MissingSegmentError
 from app.validation.common import not_in_future

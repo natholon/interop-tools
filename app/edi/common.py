@@ -71,21 +71,27 @@ HL_INFORMATION_RECEIVER = "21"
 HL_SUBSCRIBER = "22"
 HL_DEPENDENT = "23"
 
-# ST03 (Implementation Convention Reference) substring that identifies the
-# 837I family among transaction sets sharing the literal ST01="837" (see
-# app/edi/registry.py::get_transaction_builder's own docstring for why
+# ST03 (Implementation Convention Reference) substrings that identify the
+# 837I/837D families among transaction sets sharing the literal ST01="837"
+# (see app/edi/registry.py::get_transaction_builder's own docstring for why
 # ST03, not GS08, is this app's dispatch signal). Shared here - not
 # declared locally in registry.py - once app/edi/validation.py became a
-# second real consumer needing the identical check for its own 837P-vs-837I
+# second real consumer needing the identical check for its own 837-family
 # rule dispatch: both sides must never disagree about which variant a given
 # ST03 value indicates, the same "one real implementation, not two
 # independently-drifting copies" discipline every other shared EDI helper
 # in this app already follows.
 ST03_837I_MARKER = "X223"
+ST03_837D_MARKER = "X224"
 
 
 def is_837i_transaction(st03: str) -> bool:
     return ST03_837I_MARKER in st03.strip().upper()
+
+
+def is_837d_transaction(st03: str) -> bool:
+    return ST03_837D_MARKER in st03.strip().upper()
+
 
 # The system URI used for a Reference-by-identifier back to BHT03 (both
 # Bundle.identifier in assemble_bundle below, and CoverageEligibilityResponse
@@ -306,6 +312,58 @@ def build_diagnosis_codeable_concepts(hi: Segment | None, delimiters: Delimiters
         system = HI_QUALIFIER_SYSTEM.get(qualifier, f"{_HI_QUALIFIER_FALLBACK_SYSTEM}:{qualifier}" if qualifier else _HI_QUALIFIER_FALLBACK_SYSTEM)
         concepts.append(CodeableConcept(coding=[Coding(system=system, code=code)]))
     return concepts
+
+
+def iter_diagnosis_hi_segments(claim_loop_members: list[Segment], delimiters: Delimiters) -> list[Segment]:
+    """Promoted here from claim_837i.py once claim_837d.py became a second
+    real consumer - both institutional and dental claims can carry several
+    HI segments per claim, each dedicated to one code-list "type"
+    (principal/other diagnosis, occurrence, value, condition, ...)
+    distinguished only by the qualifier of its own composites, not any
+    segment-level flag - confirmed directly against real X12.org examples
+    for both families, which split Principal Diagnosis (BK/ABK) and Other
+    Diagnosis (BF/ABF) into two separate HI segment instances
+    (`HI*BK:3669~` then, separately, `HI*BF:4019*BF:79431~`). Only segments
+    whose first composite uses a recognized diagnosis qualifier are
+    treated as diagnosis segments at all - occurrence/value/condition-coded
+    HI segments (BH/BE/BG) are structurally skipped here, not merely
+    unrecognized, since feeding them through build_diagnosis_codeable_
+    concepts would otherwise fold them into Claim.diagnosis[] as bogus
+    "unrecognized diagnosis qualifier" entries rather than the
+    disclosed-and-deferred data they actually are. Public - each family's
+    own `_iter_*_validation.py` missing-diagnosis rule needs the identical
+    filtering, so validation can never disagree with conversion about
+    which HI segments actually count as diagnosis-bearing."""
+    diagnosis_segments = []
+    for hi in claim_loop_members:
+        if hi[0] != "HI":
+            continue
+        first_qualifier = component(element(hi, 1), delimiters, 1).strip().upper()
+        if first_qualifier in HI_QUALIFIER_SYSTEM:
+            diagnosis_segments.append(hi)
+    return diagnosis_segments
+
+
+# CMS's own Place of Service code set - a real, verified FHIR-canonical
+# CodeSystem (confirmed by direct fetch), unlike most of this app's
+# disclosed local-system fallbacks for X12 code lists with no official FHIR
+# home. Public - promoted from claim_837p.py once claim_837d.py became a
+# second real consumer: CLM05-1 (Facility Code Value) uses this identical
+# vocabulary for both professional and dental claims (confirmed by direct
+# fetch of SV3-03's own field description, "Place of Service Codes for
+# Professional or Dental Services") - a genuine, confirmed structural match,
+# not a coincidence the way HL03 numeric codes have sometimes only
+# *appeared* to match across other EDI families. 837I's own CLM05-1 uses a
+# completely different vocabulary (UB-04 Type of Bill) and does not use
+# this constant - see claim_837i.py's own module docstring for why.
+POS_CODE_SYSTEM = "https://www.cms.gov/Medicare/Coding/place-of-service-codes/Place_of_Service_Code_Set"
+
+
+def build_place_of_service_from_clm05(clm: Segment, delimiters: Delimiters) -> CodeableConcept | None:
+    facility_code = component(element(clm, 5), delimiters, 1)
+    if not facility_code:
+        return None
+    return CodeableConcept(coding=[Coding(system=POS_CODE_SYSTEM, code=facility_code)])
 
 
 def is_person_entity(nm1: Segment) -> bool:

@@ -136,7 +136,6 @@ from fhir.resources.R4B.resource import Resource
 
 from app.edi.base import EdiTransactionBuilder
 from app.edi.common import (
-    HI_QUALIFIER_SYSTEM,
     assemble_bundle,
     build_coverage,
     build_diagnosis_codeable_concepts,
@@ -144,6 +143,7 @@ from app.edi.common import (
     build_patient_from_nm1_dmg,
     build_practitioner_from_nm1,
     is_person_entity,
+    iter_diagnosis_hi_segments,
     parse_x12_datetime,
 )
 from app.edi.parser import (
@@ -338,36 +338,6 @@ def _build_service_line_item(
             item.servicedDate = serviced
 
     return item
-
-
-def iter_diagnosis_hi_segments(claim_loop_members: list[Segment], delimiters: Delimiters) -> list[Segment]:
-    """Public - claim_837i_validation.py's own missing-diagnosis rule needs
-    the identical filtering, so both sides can never disagree about which
-    HI segments actually count as diagnosis-bearing.
-
-    Institutional claims can carry several HI segments per claim, each
-    dedicated to one code-list "type" (principal/other diagnosis,
-    occurrence, value, condition, ...) distinguished only by the qualifier
-    of its own composites, not any segment-level flag - confirmed directly
-    against a real X12.org example, which splits Principal Diagnosis
-    (BK/ABK) and Other Diagnosis (BF/ABF) into two separate HI segment
-    instances (`HI*BK:3669~` then, separately, `HI*BF:4019*BF:79431~`).
-    Only segments whose first composite uses a recognized diagnosis
-    qualifier are treated as diagnosis segments at all -
-    occurrence/value/condition-coded HI segments (BH/BE/BG) are
-    structurally skipped here, not merely unrecognized, since feeding them
-    through build_diagnosis_codeable_concepts would otherwise fold them
-    into Claim.diagnosis[] as bogus "unrecognized diagnosis qualifier"
-    entries rather than the disclosed-and-deferred data they actually are
-    (see the module docstring)."""
-    diagnosis_segments = []
-    for hi in claim_loop_members:
-        if hi[0] != "HI":
-            continue
-        first_qualifier = component(element(hi, 1), delimiters, 1).strip().upper()
-        if first_qualifier in HI_QUALIFIER_SYSTEM:
-            diagnosis_segments.append(hi)
-    return diagnosis_segments
 
 
 def _build_discharge_status_supporting_info(cl1: Segment | None, sequence: int) -> ClaimSupportingInfo | None:

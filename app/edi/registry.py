@@ -6,10 +6,11 @@ the CDA-templateId-equivalent axis here, so (unlike HL7v2's
 one real exception, 837**, see get_transaction_builder's own docstring."""
 
 from app.edi.base import EdiTransactionBuilder
+from app.edi.claim_837d import Edi837dBuilder
 from app.edi.claim_837i import Edi837iBuilder
 from app.edi.claim_837p import Edi837pBuilder
 from app.edi.claim_status import Edi276Builder, Edi277Builder
-from app.edi.common import is_837i_transaction
+from app.edi.common import is_837d_transaction, is_837i_transaction
 from app.edi.eligibility_270 import Edi270Builder
 from app.edi.eligibility_271 import Edi271Builder
 from app.edi.prior_auth import Edi278Builder
@@ -35,33 +36,35 @@ _TRANSACTION_BUILDERS: dict[str, EdiTransactionBuilder] = {
 
 def get_transaction_builder(st01: str, st03: str = "") -> EdiTransactionBuilder:
     """Raises MappingError if st01 isn't registered at all. **"837" is
-    intercepted before the registry dict is ever consulted** - 837P/837I
-    (and, prospectively, 837D) all share the literal ST01="837", so ST01
-    alone can't select a builder for this one family the way it can for
-    every other EDI transaction set here. `st03` (Implementation
-    Convention Reference - confirmed as the officially authoritative field
-    for this exact purpose, "ST03 will always take precedence over GS08"
-    per multiple companion guides, and, unlike GS08, local to the ST
-    segment itself so no change to Interchange/FunctionalGroup's own
-    parsed shape was needed) is checked via the shared
-    `common.py::is_837i_transaction` - shared, not declared locally here,
-    since `app/edi/validation.py` needs the identical check for its own
-    837P-vs-837I rule dispatch and both sides must never disagree.
-    `st03` is situational (a real, disclosed possibility - not every
-    real-world sender populates it) - when absent or unrecognized, this
-    defaults to `Edi837pBuilder` (Professional), the dominant real-world
-    837 variant and this app's only-ever-registered 837 builder before
-    837I shipped, the same "default to the most common real value when the
+    intercepted before the registry dict is ever consulted** - 837P/837I/
+    837D all share the literal ST01="837", so ST01 alone can't select a
+    builder for this one family the way it can for every other EDI
+    transaction set here. `st03` (Implementation Convention Reference -
+    confirmed as the officially authoritative field for this exact
+    purpose, "ST03 will always take precedence over GS08" per multiple
+    companion guides, and, unlike GS08, local to the ST segment itself so
+    no change to Interchange/FunctionalGroup's own parsed shape was
+    needed) is checked via the shared `common.py::is_837i_transaction`/
+    `is_837d_transaction` - shared, not declared locally here, since
+    `app/edi/validation.py` needs the identical checks for its own
+    837-family rule dispatch and both sides must never disagree. `st03` is
+    situational (a real, disclosed possibility - not every real-world
+    sender populates it) - when absent or unrecognized, this defaults to
+    `Edi837pBuilder` (Professional), the dominant real-world 837 variant
+    and this app's only-ever-registered 837 builder before 837I/837D
+    shipped, the same "default to the most common real value when the
     identifying field doesn't resolve" precedent as 270's
     DEFAULT_PURPOSE/278's DEFAULT_CLAIM_TYPE - not a content-sniffing
-    fallback (e.g. SV1 vs SV2 presence), which was considered but judged
-    more complexity than this situational-field-absent edge case warrants,
-    matching this codebase's own established risk tolerance for comparable
-    "identifying field missing" cases elsewhere."""
+    fallback (e.g. SV1 vs SV2 vs SV3 presence), which was considered but
+    judged more complexity than this situational-field-absent edge case
+    warrants, matching this codebase's own established risk tolerance for
+    comparable "identifying field missing" cases elsewhere."""
     normalized_st01 = st01.strip().upper()
     if normalized_st01 == "837":
         if is_837i_transaction(st03):
             return Edi837iBuilder()
+        if is_837d_transaction(st03):
+            return Edi837dBuilder()
         return Edi837pBuilder()
 
     # .strip().upper() to mirror app/mappings/registry.py::get_mapper's own
