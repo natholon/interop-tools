@@ -41,6 +41,7 @@ _EXPECTED_TYPES = {
     ("EDI", "835"),
     ("EDI", "837P"),
     ("EDI", "837I"),
+    ("EDI", "837D"),
 }
 
 

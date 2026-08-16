@@ -1,6 +1,7 @@
 import random
 
 from app.cda.generator import generate_ccd, generate_discharge_summary
+from app.edi.claim_837d_generator import generate_837d
 from app.edi.claim_837i_generator import generate_837i
 from app.edi.claim_837p_generator import generate_837p
 from app.edi.claim_status_generator import generate_276, generate_277
@@ -100,16 +101,17 @@ _GENERATORS = {
     ("EDI", "278REQUEST"): (generate_278_request, "EDI^278 - Prior Authorization Request"),
     ("EDI", "278RESPONSE"): (generate_278_response, "EDI^278 - Prior Authorization Response"),
     ("EDI", "835"): (generate_835, "EDI^835 - Remittance Advice"),
-    # "837P"/"837I" are synthetic trigger_event strings that exist only for
-    # this dropdown, the same reason 278's own "278REQUEST"/"278RESPONSE"
-    # are - 837P/837I share the literal ST01="837" (see
-    # app/edi/registry.py::get_transaction_builder's own docstring), so
-    # there's no second ST01 to key a second registry entry off of; a
-    # generated sample still round-trips through the same ST03-based
-    # dispatch on convert, since that dispatch reads the generated text's
-    # own ST03, not how the sample was generated.
+    # "837P"/"837I"/"837D" are synthetic trigger_event strings that exist
+    # only for this dropdown, the same reason 278's own
+    # "278REQUEST"/"278RESPONSE" are - all three share the literal
+    # ST01="837" (see app/edi/registry.py::get_transaction_builder's own
+    # docstring), so there's no second ST01 to key a second registry entry
+    # off of; a generated sample still round-trips through the same
+    # ST03-based dispatch on convert, since that dispatch reads the
+    # generated text's own ST03, not how the sample was generated.
     ("EDI", "837P"): (generate_837p, "EDI^837P - Professional Claim"),
     ("EDI", "837I"): (generate_837i, "EDI^837I - Institutional Claim"),
+    ("EDI", "837D"): (generate_837d, "EDI^837D - Dental Claim"),
 }
 
 

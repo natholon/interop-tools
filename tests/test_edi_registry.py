@@ -1,5 +1,6 @@
 import pytest
 
+from app.edi.claim_837d import Edi837dBuilder
 from app.edi.claim_837i import Edi837iBuilder
 from app.edi.claim_837p import Edi837pBuilder
 from app.edi.eligibility_270 import Edi270Builder
@@ -22,6 +23,10 @@ def test_get_transaction_builder_resolves_837_professional_by_st03():
 
 def test_get_transaction_builder_resolves_837_institutional_by_st03():
     assert isinstance(get_transaction_builder("837", "005010X223A2"), Edi837iBuilder)
+
+
+def test_get_transaction_builder_resolves_837_dental_by_st03():
+    assert isinstance(get_transaction_builder("837", "005010X224A2"), Edi837dBuilder)
 
 
 def test_get_transaction_builder_defaults_837_to_professional_when_st03_absent():
