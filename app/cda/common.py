@@ -26,6 +26,7 @@ from fhir.resources.R4B.resource import Resource
 from app.cda.parser import find_all, find_child, coded_value, has_template_id, ivl_ts_bounds, ts_value
 from app.fhir_models.builders import parse_hl7_date, parse_hl7_datetime
 from app.hl7.errors import MissingSegmentError
+from app.provenance.location import xpath_location
 
 # HL7 AdministrativeGender codeSystem (2.16.840.1.113883.5.1) uses F/M/UN,
 # not HL7v2 PID-8's M/F/O - a genuinely different (if similarly-shaped)
@@ -180,20 +181,39 @@ def build_identifier(id_element, fallback_system: str) -> Identifier | None:
     return None
 
 
-def build_identifiers(id_elements, fallback_system: str) -> list[Identifier]:
+def build_identifiers(
+    id_elements, fallback_system: str, resource_id: str | None = None, location_prefix: str | None = None, recorder=None
+) -> list[Identifier]:
+    """`resource_id`/`location_prefix`/`recorder` are optional (see
+    app/provenance/recorder.py) - when all three are given, each kept
+    identifier's `.value` is recorded against `{location_prefix}[{index}]`
+    (the 0-based index into the *kept* list, matching FHIR's own array
+    index - an `<id>` element with neither `@root` nor `@extension` is
+    skipped by build_identifier and correctly never consumes an index)."""
     identifiers = []
     for id_element in id_elements:
         identifier = build_identifier(id_element, fallback_system)
         if identifier:
+            index = len(identifiers)
             identifiers.append(identifier)
+            if recorder and resource_id and location_prefix:
+                recorder.record(
+                    resource_id, f"identifier[{index}].value", xpath_location(f"{location_prefix}[{index}]"), identifier.value
+                )
     return identifiers
 
 
-def _build_patient_identifiers(patient_role) -> list[Identifier]:
-    return build_identifiers(find_all(patient_role, "id"), "urn:interop-tools:cda-patient-id")
+def _build_patient_identifiers(patient_role, resource_id: str | None = None, recorder=None) -> list[Identifier]:
+    return build_identifiers(
+        find_all(patient_role, "id"),
+        "urn:interop-tools:cda-patient-id",
+        resource_id=resource_id,
+        location_prefix="recordTarget/patientRole/id",
+        recorder=recorder,
+    )
 
 
-def _build_patient_names(patient_element) -> list[HumanName]:
+def _build_patient_names(patient_element, resource_id: str | None = None, recorder=None) -> list[HumanName]:
     names = []
     for i, name_element in enumerate(find_all(patient_element, "name")):
         family_element = find_child(name_element, "family")
@@ -202,18 +222,43 @@ def _build_patient_names(patient_element) -> list[HumanName]:
         if not family and not given_parts:
             continue
         name = HumanName(use="official" if i == 0 else "old")
+        name_index = len(names)
         if family:
             name.family = family
+            if recorder and resource_id:
+                recorder.record(
+                    resource_id,
+                    f"name[{name_index}].family",
+                    xpath_location("recordTarget", "patientRole", "patient", f"name[{i}]", "family"),
+                    family,
+                )
         if given_parts:
             name.given = given_parts
+            if recorder and resource_id:
+                for j, given in enumerate(given_parts):
+                    recorder.record(
+                        resource_id,
+                        f"name[{name_index}].given[{j}]",
+                        xpath_location("recordTarget", "patientRole", "patient", f"name[{i}]", f"given[{j}]"),
+                        given,
+                    )
         names.append(name)
     return names
 
 
-def _build_patient_addresses(patient_role) -> list[Address]:
+def _build_patient_addresses(patient_role, resource_id: str | None = None, recorder=None) -> list[Address]:
     addresses = []
-    for addr_element in find_all(patient_role, "addr"):
-        lines = [e.text.strip() for e in find_all(addr_element, "streetAddressLine") if e.text and e.text.strip()]
+    for i, addr_element in enumerate(find_all(patient_role, "addr")):
+        # (source_index, text) pairs, not just text - streetAddressLine
+        # entries can be sparse (some empty, filtered out), so the kept
+        # line's own FHIR array index must not desync from which XML
+        # element it actually came from.
+        line_pairs = [
+            (src_i, e.text.strip())
+            for src_i, e in enumerate(find_all(addr_element, "streetAddressLine"))
+            if e.text and e.text.strip()
+        ]
+        lines = [text for _, text in line_pairs]
         city_element = find_child(addr_element, "city")
         state_element = find_child(addr_element, "state")
         postal_code_element = find_child(addr_element, "postalCode")
@@ -225,28 +270,74 @@ def _build_patient_addresses(patient_role) -> list[Address]:
         if not any([lines, city, state, postal_code, country]):
             continue
         address = Address()
+        addr_index = len(addresses)
         if lines:
             address.line = lines
+            if recorder and resource_id:
+                for j, (src_i, text) in enumerate(line_pairs):
+                    recorder.record(
+                        resource_id,
+                        f"address[{addr_index}].line[{j}]",
+                        xpath_location("recordTarget", "patientRole", f"addr[{i}]", f"streetAddressLine[{src_i}]"),
+                        text,
+                    )
         if city:
             address.city = city
+            if recorder and resource_id:
+                recorder.record(
+                    resource_id,
+                    f"address[{addr_index}].city",
+                    xpath_location("recordTarget", "patientRole", f"addr[{i}]", "city"),
+                    city,
+                )
         if state:
             address.state = state
+            if recorder and resource_id:
+                recorder.record(
+                    resource_id,
+                    f"address[{addr_index}].state",
+                    xpath_location("recordTarget", "patientRole", f"addr[{i}]", "state"),
+                    state,
+                )
         if postal_code:
             address.postalCode = postal_code
+            if recorder and resource_id:
+                recorder.record(
+                    resource_id,
+                    f"address[{addr_index}].postalCode",
+                    xpath_location("recordTarget", "patientRole", f"addr[{i}]", "postalCode"),
+                    postal_code,
+                )
         if country:
             address.country = country
+            if recorder and resource_id:
+                recorder.record(
+                    resource_id,
+                    f"address[{addr_index}].country",
+                    xpath_location("recordTarget", "patientRole", f"addr[{i}]", "country"),
+                    country,
+                )
         addresses.append(address)
     return addresses
 
 
-def _build_patient_telecoms(patient_role) -> list[ContactPoint]:
+def _build_patient_telecoms(patient_role, resource_id: str | None = None, recorder=None) -> list[ContactPoint]:
     telecoms = []
-    for telecom_element in find_all(patient_role, "telecom"):
+    for i, telecom_element in enumerate(find_all(patient_role, "telecom")):
         raw_value = telecom_element.get("value")
         if not raw_value:
             continue
         scheme, _, value = raw_value.partition(":")
         contact_point = ContactPoint(value=value or raw_value)
+        telecom_index = len(telecoms)
+        if recorder and resource_id:
+            recorder.record(
+                resource_id,
+                f"telecom[{telecom_index}].value",
+                xpath_location("recordTarget", "patientRole", f"telecom[{i}]", "@value"),
+                contact_point.value,
+                source_value=raw_value,
+            )
         system = _TELECOM_SCHEME_TO_SYSTEM.get(scheme.lower())
         if system:
             contact_point.system = system
@@ -257,7 +348,7 @@ def _build_patient_telecoms(patient_role) -> list[ContactPoint]:
     return telecoms
 
 
-def build_patient_from_header(document) -> Patient:
+def build_patient_from_header(document, recorder=None) -> Patient:
     """recordTarget/patientRole/patient -> Patient. Raises
     MissingSegmentError when the header lacks a patientRole/patient at
     all - reused from app.hl7.errors since the meaning ("a required
@@ -270,13 +361,14 @@ def build_patient_from_header(document) -> Patient:
     if patient_element is None:
         raise MissingSegmentError("recordTarget/patientRole/patient is missing")
 
-    patient = Patient(id=str(uuid.uuid4()))
+    patient_id = str(uuid.uuid4())
+    patient = Patient(id=patient_id)
 
-    identifiers = _build_patient_identifiers(patient_role)
+    identifiers = _build_patient_identifiers(patient_role, resource_id=patient_id, recorder=recorder)
     if identifiers:
         patient.identifier = identifiers
 
-    names = _build_patient_names(patient_element)
+    names = _build_patient_names(patient_element, resource_id=patient_id, recorder=recorder)
     if names:
         patient.name = names
 
@@ -284,19 +376,37 @@ def build_patient_from_header(document) -> Patient:
     if gender_element is not None:
         code = (gender_element.get("code") or "").strip().upper()
         if code:
-            patient.gender = _GENDER_MAP.get(code, "unknown")
+            gender = _GENDER_MAP.get(code, "unknown")
+            patient.gender = gender
+            if recorder:
+                recorder.record(
+                    patient_id,
+                    "gender",
+                    xpath_location("recordTarget", "patientRole", "patient", "administrativeGenderCode", "@code"),
+                    gender,
+                    source_value=code,
+                )
 
     birth_time = find_child(patient_element, "birthTime")
     if birth_time is not None:
-        birth_date = parse_hl7_date(ts_value(birth_time) or "")
+        birth_time_raw = ts_value(birth_time)
+        birth_date = parse_hl7_date(birth_time_raw or "")
         if birth_date:
             patient.birthDate = birth_date
+            if recorder:
+                recorder.record(
+                    patient_id,
+                    "birthDate",
+                    xpath_location("recordTarget", "patientRole", "patient", "birthTime", "@value"),
+                    birth_date,
+                    source_value=birth_time_raw,
+                )
 
-    addresses = _build_patient_addresses(patient_role)
+    addresses = _build_patient_addresses(patient_role, resource_id=patient_id, recorder=recorder)
     if addresses:
         patient.address = addresses
 
-    telecoms = _build_patient_telecoms(patient_role)
+    telecoms = _build_patient_telecoms(patient_role, resource_id=patient_id, recorder=recorder)
     if telecoms:
         patient.telecom = telecoms
 
@@ -315,7 +425,23 @@ _DEFAULT_ENCOUNTER_CLASS = "AMB"
 RECOGNIZED_ENCOUNTER_CLASSES = {"AMB", "EMER", "IMP", "ACUTE", "NONAC", "PRENC", "SS", "VR"}
 
 
-def build_encounter_from_header(document, patient_id: str) -> Encounter | None:
+def effective_time_location(base_path: str, element, bound: str) -> str:
+    """Which of IVL_TS's three legal shapes ivl_ts_bounds() actually read
+    `bound` ("low" or "high") from for a given effectiveTime element - a
+    bare @value (the same value used for both bounds) or a dedicated
+    <low>/<high> child - so the Data Specification crosswalk points at the
+    real shape a given document used, rather than guessing one. Purely for
+    provenance; doesn't change ivl_ts_bounds' own resolution logic. Public
+    (not module-private) - app/cda/problems.py's own onset/abatement dates
+    are a second real consumer of the identical resolution this function's
+    own first caller (build_encounter_from_header's period.start/end)
+    already needed, so it lives here rather than being duplicated."""
+    if element is not None and element.get("value"):
+        return xpath_location(f"{base_path}/@value")
+    return xpath_location(f"{base_path}/{bound}/@value")
+
+
+def build_encounter_from_header(document, patient_id: str, recorder=None) -> Encounter | None:
     """componentOf/encompassingEncounter -> Encounter, or None when absent
     (a CCD isn't necessarily bound to one encounter - it's a summary
     document). Status is honestly "unknown" rather than inferred - unlike
@@ -335,32 +461,67 @@ def build_encounter_from_header(document, patient_id: str) -> Encounter | None:
         if raw_code in RECOGNIZED_ENCOUNTER_CLASSES:
             class_code = raw_code
 
+    encounter_id = str(uuid.uuid4())
     encounter = Encounter(
-        id=str(uuid.uuid4()),
+        id=encounter_id,
         status="unknown",
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
         class_fhir=Coding(system=_ENCOUNTER_CLASS_SYSTEM, code=class_code),
     )
+    if recorder:
+        # Recorded as direct (not inferred) even when code_element is
+        # absent/unrecognized and class_code falls back to the disclosed
+        # default - the same "point at where the value would have come
+        # from, even when the field's own table default fired" precedent
+        # app/mappings/adt.py::build_encounter_core already established for
+        # PV1-2's identical recognized/unrecognized-code-with-a-default
+        # shape.
+        recorder.record(
+            encounter_id,
+            "class.code",
+            xpath_location("componentOf", "encompassingEncounter", "code", "@code"),
+            class_code,
+            source_value=code_element.get("code") if code_element is not None else None,
+        )
 
-    identifiers = build_identifiers(find_all(encompassing_encounter, "id"), "urn:interop-tools:cda-encounter-id")
+    identifiers = build_identifiers(
+        find_all(encompassing_encounter, "id"),
+        "urn:interop-tools:cda-encounter-id",
+        resource_id=encounter_id,
+        location_prefix="componentOf/encompassingEncounter/id",
+        recorder=recorder,
+    )
     if identifiers:
         encounter.identifier = identifiers
 
-    period_start, period_end = (
-        (parse_partial_ts(v) for v in ivl_ts_bounds(find_child(encompassing_encounter, "effectiveTime")))
-    )
+    effective_time = find_child(encompassing_encounter, "effectiveTime")
+    period_start, period_end = (parse_partial_ts(v) for v in ivl_ts_bounds(effective_time))
     if period_start or period_end:
         period = Period()
         if period_start:
             period.start = period_start
+            if recorder:
+                recorder.record(
+                    encounter_id,
+                    "period.start",
+                    effective_time_location("componentOf/encompassingEncounter/effectiveTime", effective_time, "low"),
+                    period_start,
+                )
         if period_end:
             period.end = period_end
+            if recorder:
+                recorder.record(
+                    encounter_id,
+                    "period.end",
+                    effective_time_location("componentOf/encompassingEncounter/effectiveTime", effective_time, "high"),
+                    period_end,
+                )
         encounter.period = period
 
     return encounter
 
 
-def assemble_bundle(document, patient: Patient, *resources: Resource) -> Bundle:
+def assemble_bundle(document, patient: Patient, *resources: Resource, recorder=None) -> Bundle:
     """Wrap a Patient plus any number of additional resources into a
     Bundle, with ClinicalDocument-derived metadata (id -> Bundle.identifier,
     effectiveTime -> Bundle.timestamp) - the CDA-header equivalent of
@@ -368,12 +529,16 @@ def assemble_bundle(document, patient: Patient, *resources: Resource) -> Bundle:
     Bundle.type is "collection", matching every existing HL7v2 pipeline's
     output shape - a proper FHIR-Document-shaped Bundle(type="document")
     with a Composition is deliberately out of scope for this slice (see
-    CLAUDE.md)."""
+    CLAUDE.md). `recorder` is optional; when given, the document's own
+    id/effectiveTime are recorded against `bundle.id` itself - see
+    app/provenance/resolver.py's own bundle.id special case."""
     bundle = Bundle(id=str(uuid.uuid4()), type="collection")
 
     identifier = build_identifier(find_child(document, "id"), "urn:interop-tools:cda-document-id")
     if identifier:
         bundle.identifier = identifier
+        if recorder:
+            recorder.record(bundle.id, "identifier.value", xpath_location("id"), identifier.value)
 
     # Bundle.timestamp is FHIR "instant", which (unlike Condition's
     # onset/abatement dateTime) has NO date-only form - it requires full
@@ -384,16 +549,21 @@ def assemble_bundle(document, patient: Patient, *resources: Resource) -> Bundle:
     # parse_hl7_datetime directly (returns None rather than a date-only
     # string), matching app/mappings/common.py::assemble_bundle's own
     # deliberate choice not to date-only-fallback for this same reason.
-    timestamp = parse_hl7_datetime(ts_value(find_child(document, "effectiveTime")) or "")
+    document_effective_time_raw = ts_value(find_child(document, "effectiveTime"))
+    timestamp = parse_hl7_datetime(document_effective_time_raw or "")
     if timestamp:
         bundle.timestamp = timestamp
+        if recorder:
+            recorder.record(
+                bundle.id, "timestamp", xpath_location("effectiveTime", "@value"), timestamp, source_value=document_effective_time_raw
+            )
 
     bundle.entry = [BundleEntry(fullUrl=f"urn:uuid:{patient.id}", resource=patient)]
     bundle.entry.extend(BundleEntry(fullUrl=f"urn:uuid:{resource.id}", resource=resource) for resource in resources)
     return bundle
 
 
-def build_sectioned_bundle(document) -> Bundle:
+def build_sectioned_bundle(document, recorder=None) -> Bundle:
     """Shared build_bundle() implementation for any C-CDA document type
     whose conversion is "header (Patient + optional Encounter) + walk every
     structuredBody section through SECTION_BUILDERS" - CCD and Discharge
@@ -405,23 +575,28 @@ def build_sectioned_bundle(document) -> Bundle:
     with genuinely different structure (e.g. a future document type that
     ISN'T just "header + generic sections") should NOT be forced through
     this helper - implement build_bundle() directly instead, the way
-    CcdBuilder/DischargeSummaryBuilder did before this was extracted."""
+    CcdBuilder/DischargeSummaryBuilder did before this was extracted.
+
+    `recorder` is threaded into every registered SECTION_BUILDERS entry
+    uniformly, whether or not that section's own builder acts on it yet -
+    see app/cda/medications.py::build_medication_requests' own docstring
+    for why every section builder accepts it regardless."""
     # Deferred import: app.cda.registry imports the concrete document
     # builder modules (ccd, discharge_summary) at its own module-load time,
     # so importing it back at this module's top level would be circular -
     # same reasoning as ccd.py's own pre-extraction deferred import.
     from app.cda.registry import SECTION_BUILDERS
 
-    patient = build_patient_from_header(document)
-    encounter = build_encounter_from_header(document, patient.id)
+    patient = build_patient_from_header(document, recorder=recorder)
+    encounter = build_encounter_from_header(document, patient.id, recorder=recorder)
     resources = [encounter] if encounter is not None else []
 
     for section in find_all(document, "component/structuredBody/component/section"):
         for section_template_id, builder in SECTION_BUILDERS.items():
             if has_template_id(section, section_template_id):
-                resources.extend(builder(section, patient.id))
+                resources.extend(builder(section, patient.id, recorder=recorder))
                 break
         # An unrecognized section is silently skipped - disclosed, not a
         # bug (see CLAUDE.md's per-document-type scope-limit notes).
 
-    return assemble_bundle(document, patient, *resources)
+    return assemble_bundle(document, patient, *resources, recorder=recorder)

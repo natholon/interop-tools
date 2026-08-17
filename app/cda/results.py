@@ -186,13 +186,18 @@ def _build_result_observation(observation_element, patient_id: str) -> Observati
     return observation
 
 
-def build_diagnostic_reports(section, patient_id: str) -> list[Observation | DiagnosticReport]:
+def build_diagnostic_reports(section, patient_id: str, recorder=None) -> list[Observation | DiagnosticReport]:
     """One DiagnosticReport per Result Organizer entry (its own .result
     referencing one Observation per child Result Observation), plus each
     of those Observations - all returned as a flat list of separate,
     top-level resources. An organizer whose every child observation lacks
     a resolvable code produces no report either, matching vitals.py's
-    identical "nothing to group" treatment."""
+    identical "nothing to group" treatment.
+
+    `recorder` is accepted (see app/provenance/) but not yet acted on - see
+    app/cda/medications.py::build_medication_requests' own docstring for
+    why every SECTION_BUILDERS entry accepts it uniformly regardless of
+    whether its own section is instrumented yet."""
     resources: list[Observation | DiagnosticReport] = []
     for entry in find_all(section, "entry"):
         organizer = find_child(entry, "organizer")

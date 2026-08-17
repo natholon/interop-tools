@@ -228,9 +228,14 @@ def _build_allergy_intolerance(allergy_observation, patient_id: str) -> AllergyI
     return allergy
 
 
-def build_allergy_intolerances(section, patient_id: str) -> list[AllergyIntolerance]:
+def build_allergy_intolerances(section, patient_id: str, recorder=None) -> list[AllergyIntolerance]:
     """One AllergyIntolerance per Allergy-Intolerance Observation entry in
-    the section - a section can (and commonly does) have multiple entries."""
+    the section - a section can (and commonly does) have multiple entries.
+
+    `recorder` is accepted (see app/provenance/) but not yet acted on - see
+    app/cda/medications.py::build_medication_requests' own docstring for
+    why every SECTION_BUILDERS entry accepts it uniformly regardless of
+    whether its own section is instrumented yet."""
     allergies = []
     for entry in find_all(section, "entry"):
         act = find_child(entry, "act")

@@ -116,11 +116,16 @@ def _build_immunization(substance_administration, patient_id: str) -> Immunizati
     return immunization
 
 
-def build_immunizations(section, patient_id: str) -> list[Immunization]:
+def build_immunizations(section, patient_id: str, recorder=None) -> list[Immunization]:
     """One Immunization per EVN-mood Immunization Activity entry in the
     section - a section can (and commonly does) have multiple entries.
     INT-mood entries (planned, not yet administered) are silently skipped -
-    see module docstring."""
+    see module docstring.
+
+    `recorder` is accepted (see app/provenance/) but not yet acted on - see
+    app/cda/medications.py::build_medication_requests' own docstring for
+    why every SECTION_BUILDERS entry accepts it uniformly regardless of
+    whether its own section is instrumented yet."""
     immunizations = []
     for entry in find_all(section, "entry"):
         substance_administration = find_child(entry, "substanceAdministration")

@@ -69,6 +69,13 @@ def test_api_data_specification_edi_input_converts_but_is_unsupported():
 
 
 def test_api_data_specification_cda_input_converts_but_is_unsupported():
+    # C-CDA's document header + Problems section are instrumented (see
+    # app/cda/common.py/app/cda/problems.py), so ccd_basic.xml (which
+    # carries both) now produces real, non-empty partial entries - but the
+    # report stays unsupported=True until every CCD section is
+    # instrumented, mirroring the identical "some real facts, still
+    # unsupported" shape a not-yet-instrumented HL7v2 message type already
+    # produces (see app/provenance/dispatch.py's own _CDA_UNSUPPORTED_REASON).
     response = client.post("/api/data-specification", json={"hl7_text": read_fixture("ccd_basic.xml")})
     assert response.status_code == 200
     body = response.json()
@@ -76,7 +83,10 @@ def test_api_data_specification_cda_input_converts_but_is_unsupported():
     report = body["report"]
     assert report["unsupported"] is True
     assert report["source_format"] == "CDA"
-    assert report["entries"] == []
+    assert report["message_type"] == "CDA"
+    assert report["trigger_event"] == "CCD"
+    assert len(report["entries"]) > 0
+    assert "C-CDA" in report["unsupported_reason"]
 
 
 def test_api_data_specification_siu_type_is_now_instrumented():

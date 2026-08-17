@@ -15,5 +15,5 @@ class CdaDocumentBuilder(ABC):
     template_id: str
 
     @abstractmethod
-    def build_bundle(self, document: Element) -> Bundle:
+    def build_bundle(self, document: Element, recorder=None) -> Bundle:
         ...

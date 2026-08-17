@@ -136,9 +136,14 @@ def _build_procedure(procedure_element, patient_id: str) -> Procedure:
     return procedure
 
 
-def build_procedures(section, patient_id: str) -> list[Procedure]:
+def build_procedures(section, patient_id: str, recorder=None) -> list[Procedure]:
     """One Procedure per Procedure Activity Procedure entry in the section
-    - a section can (and commonly does) have multiple entries."""
+    - a section can (and commonly does) have multiple entries.
+
+    `recorder` is accepted (see app/provenance/) but not yet acted on - see
+    app/cda/medications.py::build_medication_requests' own docstring for
+    why every SECTION_BUILDERS entry accepts it uniformly regardless of
+    whether its own section is instrumented yet."""
     procedures = []
     for entry in find_all(section, "entry"):
         procedure_element = find_child(entry, "procedure")

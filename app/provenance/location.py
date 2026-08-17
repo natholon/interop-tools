@@ -1,15 +1,9 @@
 """Source-location string formatters, one per input format, so every
 mapper call site that records a fact composes its `source_location`
 string the same consistent way rather than each hand-writing its own
-f-string. Only HL7v2's exists yet (Phase 0's own scope) - C-CDA's and
-X12 EDI's own equivalents (`xpath_location()`/`edi_location()`) are added
-when those formats' own provenance slices are actually implemented, not
-speculatively now. C-CDA's in particular needs its own real design at
-that point: stdlib `xml.etree.ElementTree` (this app's own parsing choice
-for `app/cda/parser.py`) has no parent pointers, so an XPath-shaped
-location has to be composed *forward* while walking the document tree -
-each `find_child`/`find_all` call extending a path string it's handed -
-not reconstructed backward from a bare `Element` after the fact."""
+f-string. X12 EDI's own equivalent (`edi_location()`) is added when that
+format's own provenance slice is actually implemented, not speculatively
+now."""
 
 
 def hl7_location(segment_id: str, field: int, *, repetition: int | None = None, component: int | None = None) -> str:
@@ -27,3 +21,24 @@ def hl7_location(segment_id: str, field: int, *, repetition: int | None = None, 
     if component is not None:
         location += f".{component}"
     return location
+
+
+def xpath_location(*segments: str) -> str:
+    """`xpath_location("recordTarget", "patientRole", "patient", "name[0]",
+    "family")` -> `"recordTarget/patientRole/patient/name[0]/family"` - the
+    C-CDA equivalent of `hl7_location()`.
+
+    Composed *forward* at each call site from the same relative-path
+    segments the caller is already walking via `app/cda/parser.py`'s
+    `find_child`/`find_all` - stdlib `xml.etree.ElementTree` has no parent
+    pointers, so there's no way to reconstruct a path *backward* from a
+    bare `Element` after the fact the way `resolve_bundle_paths` does for
+    a FHIR resource's own `Bundle.entry[N]` index. Each segment may itself
+    already carry its own 0-based repetition index (e.g. `"name[0]"`),
+    since - unlike HL7v2's fixed field/component shape - a repeating
+    element can appear at any depth along a CDA path, not just the last
+    one. An attribute-derived value (a coded element's own `@code`, a
+    `@value` on a TS/PQ-shaped element, ...) is named with a trailing
+    `"/@attr"` segment, matching real XPath's own attribute-axis syntax,
+    e.g. `xpath_location("administrativeGenderCode", "@code")`."""
+    return "/".join(segments)

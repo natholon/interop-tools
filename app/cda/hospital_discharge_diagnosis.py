@@ -48,9 +48,20 @@ CATEGORY_SYSTEM = "http://terminology.hl7.org/CodeSystem/condition-category"
 CATEGORY_CODE = "encounter-diagnosis"
 
 
-def build_hospital_discharge_diagnoses(section, patient_id: str) -> list[Condition]:
+def build_hospital_discharge_diagnoses(section, patient_id: str, recorder=None) -> list[Condition]:
     """One Condition per Hospital Discharge Diagnosis Act entry in the
-    section - a section can (and commonly does) have multiple entries."""
+    section - a section can (and commonly does) have multiple entries.
+
+    `recorder` is threaded straight into the reused build_condition (see
+    module docstring - the wrapped Problem Observation entry shape is
+    byte-for-byte identical to Problems' own) rather than accepted-and-
+    ignored the way every other not-yet-instrumented SECTION_BUILDERS entry
+    is this slice - Problems' own instrumentation work covers this section
+    "for free" the same way build_patient/assemble_bundle already
+    instrument every HL7v2 message type's shared fields for free, since the
+    recorded location strings ("act/entryRelationship/observation/...")
+    are accurate regardless of which outer Act template wraps the identical
+    inner entry shape."""
     conditions = []
     for entry in find_all(section, "entry"):
         act = find_child(entry, "act")
@@ -62,7 +73,7 @@ def build_hospital_discharge_diagnoses(section, patient_id: str) -> list[Conditi
             observation = find_child(relationship, "observation")
             if observation is None or not has_template_id(observation, PROBLEM_OBSERVATION_TEMPLATE_ID):
                 continue
-            condition = build_condition(act, observation, patient_id)
+            condition = build_condition(act, observation, patient_id, recorder=recorder)
             if condition is not None:
                 condition.category = [CodeableConcept(coding=[Coding(system=CATEGORY_SYSTEM, code=CATEGORY_CODE)])]
                 conditions.append(condition)

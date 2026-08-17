@@ -31,9 +31,13 @@ SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.11.1"
 DISCHARGE_MEDICATION_ACT_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.35"
 
 
-def build_discharge_medication_requests(section, patient_id: str) -> list[MedicationRequest]:
+def build_discharge_medication_requests(section, patient_id: str, recorder=None) -> list[MedicationRequest]:
     """One MedicationRequest per Discharge Medication Act entry in the
-    section - a section can (and commonly does) have multiple entries."""
+    section - a section can (and commonly does) have multiple entries.
+
+    `recorder` is accepted (see app/provenance/) but not yet acted on -
+    build_medication_request itself isn't instrumented yet (see
+    app/cda/medications.py::build_medication_requests' own docstring)."""
     requests = []
     for entry in find_all(section, "entry"):
         act = find_child(entry, "act")

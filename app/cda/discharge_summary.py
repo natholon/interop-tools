@@ -49,5 +49,5 @@ DISCHARGE_SUMMARY_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.1.8"
 class DischargeSummaryBuilder(CdaDocumentBuilder):
     template_id = DISCHARGE_SUMMARY_TEMPLATE_ID
 
-    def build_bundle(self, document: Element) -> Bundle:
-        return build_sectioned_bundle(document)
+    def build_bundle(self, document: Element, recorder=None) -> Bundle:
+        return build_sectioned_bundle(document, recorder=recorder)

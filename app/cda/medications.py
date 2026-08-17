@@ -154,9 +154,17 @@ def build_medication_request(substance_administration, patient_id: str) -> Medic
     return request
 
 
-def build_medication_requests(section, patient_id: str) -> list[MedicationRequest]:
+def build_medication_requests(section, patient_id: str, recorder=None) -> list[MedicationRequest]:
     """One MedicationRequest per Medication Activity entry in the section -
-    a section can (and commonly does) have multiple entries."""
+    a section can (and commonly does) have multiple entries.
+
+    `recorder` is accepted (see app/provenance/) but not yet acted on - the
+    Medications section isn't instrumented yet (the Data Specification
+    pillar's current C-CDA scope is header + Problems only); accepting it
+    here lets app.cda.common.build_sectioned_bundle's generic dispatch loop
+    pass recorder uniformly to every registered section builder, the same
+    "accept it now, act on it in a later slice" precedent every HL7v2
+    message type's own to_bundle() already established."""
     requests = []
     for entry in find_all(section, "entry"):
         substance_administration = find_child(entry, "substanceAdministration")

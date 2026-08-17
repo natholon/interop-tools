@@ -129,14 +129,19 @@ def _build_vital_sign_observation(observation_element, patient_id: str) -> Obser
     return observation
 
 
-def build_vital_signs(section, patient_id: str) -> list[Observation]:
+def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observation]:
     """One panel Observation per Vital Signs Organizer entry (its own
     .hasMember referencing one Observation per individual Vital Sign
     Observation), plus each of those individual Observations - all
     returned as a flat list of separate, top-level resources. An organizer
     whose every child observation lacks a resolvable code produces no
     panel either (nothing to group), matching the "no resolvable code ->
-    skip" convention at the organizer level too, not just the leaf level."""
+    skip" convention at the organizer level too, not just the leaf level.
+
+    `recorder` is accepted (see app/provenance/) but not yet acted on - see
+    app/cda/medications.py::build_medication_requests' own docstring for
+    why every SECTION_BUILDERS entry accepts it uniformly regardless of
+    whether its own section is instrumented yet."""
     observations: list[Observation] = []
     for entry in find_all(section, "entry"):
         organizer = find_child(entry, "organizer")

@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 _MAX_PLAUSIBLE_AGE_YEARS = 120
 
 
-def _resolve_trigger_event(document) -> str | None:
+def resolve_trigger_event(document) -> str | None:
     """ValidationReport.trigger_event for a CDA document - "CCD"/
     "DISCHARGESUMMARY" stand in for a real HL7v2 trigger event the same way
     app/generators/registry.py's ("CDA", "CCD") pairing already does (see
@@ -77,7 +77,12 @@ def _resolve_trigger_event(document) -> str | None:
     every other trigger-event string in this app (A01, S12, ...) and
     app/generators/registry.py::generate()'s own `.upper()`-normalized
     lookup, which requires its dict keys to already be uppercase. None when
-    the document's own templateId isn't one this app recognizes at all."""
+    the document's own templateId isn't one this app recognizes at all.
+
+    Public (not module-private) - app/provenance/dispatch.py became a
+    second real consumer once C-CDA's own Data Specification slice needed
+    the identical CrosswalkReport.trigger_event value this function's
+    original ValidationReport.trigger_event call site already resolved."""
     if has_template_id(document, CCD_TEMPLATE_ID):
         return "CCD"
     if has_template_id(document, DISCHARGE_SUMMARY_TEMPLATE_ID):
@@ -922,7 +927,7 @@ def validate_document(document) -> ValidationReport:
     is_valid = not any(finding.severity == "error" for finding in findings)
     return ValidationReport(
         message_type="CDA",
-        trigger_event=_resolve_trigger_event(document),
+        trigger_event=resolve_trigger_event(document),
         is_valid=is_valid,
         findings=findings,
     )
