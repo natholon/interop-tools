@@ -15,6 +15,32 @@ from app.pipeline import convert_to_bundle, validate_any
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
+# Human-readable group labels for the sample-type dropdown's <optgroup>s,
+# keyed by the same message_type code list_supported_types() already
+# returns - a flat ~40-entry <select> across three formats is hard to scan,
+# so the dropdown groups by format/message-type instead. Falls back to the
+# raw code for any future message_type this map hasn't been updated for
+# yet, so a new generator never silently disappears from the dropdown.
+_TYPE_GROUP_LABELS = {
+    "ADT": "HL7v2 — ADT (Admit / Discharge / Transfer)",
+    "SIU": "HL7v2 — SIU (Scheduling)",
+    "ORU": "HL7v2 — ORU (Observation Results)",
+    "MDM": "HL7v2 — MDM (Document Management)",
+    "CDA": "C-CDA",
+    "EDI": "X12 EDI",
+}
+
+
+def _grouped_supported_types() -> list[tuple[str, list[tuple[str, str, str]]]]:
+    """Groups list_supported_types()'s flat (message_type, trigger, label)
+    tuples by message_type, preserving each group's own insertion order -
+    used to render the sample-type dropdown as <optgroup>s instead of one
+    long flat list."""
+    groups: dict[str, list[tuple[str, str, str]]] = {}
+    for msg_type, trigger, label in list_supported_types():
+        groups.setdefault(msg_type, []).append((msg_type, trigger, label))
+    return [(_TYPE_GROUP_LABELS.get(msg_type, msg_type), items) for msg_type, items in groups.items()]
+
 _ERROR_STATUS = {
     Hl7ParseError: ("Parse error", 400),
     CdaParseError: ("Parse error", 400),
@@ -87,7 +113,7 @@ async def index(request: Request):
             "error": None,
             "validation_result": None,
             "validation_error": None,
-            "supported_types": list_supported_types(),
+            "supported_types": _grouped_supported_types(),
         },
     )
 
@@ -115,7 +141,7 @@ async def convert_form(
             "error": error,
             "validation_result": None,
             "validation_error": None,
-            "supported_types": list_supported_types(),
+            "supported_types": _grouped_supported_types(),
         },
     )
 
@@ -143,7 +169,7 @@ async def validate_form(
             "error": None,
             "validation_result": outcome.report_json,
             "validation_error": validation_error,
-            "supported_types": list_supported_types(),
+            "supported_types": _grouped_supported_types(),
         },
     )
 
