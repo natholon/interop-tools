@@ -27,6 +27,14 @@ child present, matching `ivl_ts_bounds`' own tolerance for a partial pair."""
 
 from fhir.resources.R4B.bundle import Bundle
 
+from app.cda.allergies import ALLERGY_CONCERN_ACT_TEMPLATE_ID, ALLERGY_OBSERVATION_TEMPLATE_ID
+from app.cda.allergies import ALLERGY_STATUS_OBSERVATION_TEMPLATE_ID, CRITICALITY_OBSERVATION_TEMPLATE_ID
+from app.cda.allergies import REACTION_OBSERVATION_TEMPLATE_ID, SEVERITY_OBSERVATION_TEMPLATE_ID
+from app.cda.allergies import CLINICAL_STATUS_MAP as ALLERGY_CLINICAL_STATUS_MAP
+from app.cda.allergies import CRITICALITY_MAP, SEVERITY_MAP
+from app.cda.allergies import CATEGORY_MAP as ALLERGY_CATEGORY_MAP
+from app.cda.allergies import TYPE_MAP as ALLERGY_TYPE_MAP
+from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.common import CD_FALLBACK_SYSTEM, OID_TO_FHIR_SYSTEM, RECOGNIZED_ENCOUNTER_CLASSES
 from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID
@@ -62,6 +70,28 @@ _DEFAULT_MEDICATION_ACT_STATUS = "active"
 # "order" default.
 _INTENT_TO_MOOD_CODE = {"order": "INT", "plan": "EVN"}
 _DEFAULT_MOOD_CODE = "INT"
+
+# Reverse of app.cda.allergies.CLINICAL_STATUS_MAP - a clean bijection
+# (active/inactive/resolved <-> the three Status Observation SNOMED
+# codes), unlike Medications' STATUS_MAP - Allergies has no "unknown"
+# fallback value on the FHIR side to worry about, since
+# _resolve_clinical_status's own fixed default ("active") is a real
+# recoverable code, not a synthetic catch-all.
+_ALLERGY_CLINICAL_STATUS_TO_STATUS_OBSERVATION_VALUE = {v: k for k, v in ALLERGY_CLINICAL_STATUS_MAP.items()}
+
+# Reverse of app.cda.allergies.CRITICALITY_MAP/SEVERITY_MAP - both clean
+# bijections, the local HL7ObservationValue/SNOMED tables respectively.
+_CRITICALITY_TO_HL7_CODE = {v: k for k, v in CRITICALITY_MAP.items()}
+_SEVERITY_TO_SNOMED = {v: k for k, v in SEVERITY_MAP.items()}
+
+# Reverse of app.cda.allergies.TYPE_MAP/CATEGORY_MAP - both keyed off the
+# identical source SNOMED code, searched together rather than
+# independently, since a single source code can carry a type, a category,
+# or both.
+_ALLERGY_VALUE_CANDIDATES = [
+    (code, ALLERGY_TYPE_MAP.get(code), ALLERGY_CATEGORY_MAP.get(code))
+    for code in dict.fromkeys([*ALLERGY_TYPE_MAP, *ALLERGY_CATEGORY_MAP])
+]
 
 _US_HEADER_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.1.1"
 # Reverse of app/cda/common.py::_GENDER_MAP ({"F": "female", "M": "male",
@@ -316,6 +346,147 @@ def _build_medications_section(requests) -> str:
     )
 
 
+def _reverse_allergy_value_code(allergy) -> str | None:
+    """Reverse of TYPE_MAP/CATEGORY_MAP - both keyed off the identical
+    source SNOMED code, so this searches for a source code whose own
+    (type, category) pair best matches the AllergyIntolerance's own
+    values, in three passes of decreasing precision: an exact (type,
+    category) match, then type-only, then category-only, then None (a
+    genuinely irrecoverable combination, the same "no signal left to
+    reverse from" outcome as every other best-effort reverse mapping in
+    this app) - <value> is omitted entirely in that last case rather than
+    guessing at a source code that was never really there."""
+    category = allergy.category[0] if allergy.category else None
+    for code, type_, cat in _ALLERGY_VALUE_CANDIDATES:
+        if type_ == allergy.type and cat == category:
+            return code
+    for code, type_, _cat in _ALLERGY_VALUE_CANDIDATES:
+        if allergy.type and type_ == allergy.type:
+            return code
+    for code, _type_, cat in _ALLERGY_VALUE_CANDIDATES:
+        if category and cat == category:
+            return code
+    return None
+
+
+def _build_allergy_status_observation(allergy) -> str:
+    status_code = allergy.clinicalStatus.coding[0].code if allergy.clinicalStatus and allergy.clinicalStatus.coding else None
+    value_code = _ALLERGY_CLINICAL_STATUS_TO_STATUS_OBSERVATION_VALUE.get(status_code) if status_code else None
+    if not value_code:
+        return ""
+    return (
+        '<entryRelationship typeCode="REFR"><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{ALLERGY_STATUS_OBSERVATION_TEMPLATE_ID}"/>'
+        '<code code="33999-4" codeSystem="2.16.840.1.113883.6.1" displayName="Status"/>'
+        f'<value xsi:type="CD" code="{value_code}" codeSystem="2.16.840.1.113883.6.96"/>'
+        "</observation></entryRelationship>"
+    )
+
+
+def _build_criticality_observation(allergy) -> str:
+    criticality_code = _CRITICALITY_TO_HL7_CODE.get(allergy.criticality) if allergy.criticality else None
+    if not criticality_code:
+        return ""
+    return (
+        '<entryRelationship typeCode="SUBJ" inversionInd="true"><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{CRITICALITY_OBSERVATION_TEMPLATE_ID}"/>'
+        '<code code="82606-5" codeSystem="2.16.840.1.113883.6.1" displayName="Criticality"/>'
+        f'<value xsi:type="CD" code="{criticality_code}" codeSystem="2.16.840.1.113883.5.1063"/>'
+        "</observation></entryRelationship>"
+    )
+
+
+def _build_reaction_observation(reaction) -> str:
+    manifestation = reaction.manifestation[0].coding[0] if reaction.manifestation and reaction.manifestation[0].coding else None
+    value = f"<value xsi:type=\"CD\" {_build_cd_attrs(manifestation)}/>" if manifestation else ""
+    onset = f'<effectiveTime><low value="{format_hl7_date(reaction.onset)}"/></effectiveTime>' if reaction.onset else ""
+    severity_code = _SEVERITY_TO_SNOMED.get(reaction.severity) if reaction.severity else None
+    severity = (
+        (
+            '<entryRelationship typeCode="SUBJ" inversionInd="true"><observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{SEVERITY_OBSERVATION_TEMPLATE_ID}"/>'
+            '<code code="SEV" codeSystem="2.16.840.1.113883.5.4"/>'
+            f'<value xsi:type="CD" code="{severity_code}" codeSystem="2.16.840.1.113883.6.96"/>'
+            "</observation></entryRelationship>"
+        )
+        if severity_code
+        else ""
+    )
+    return (
+        '<entryRelationship typeCode="MFST" inversionInd="true"><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{REACTION_OBSERVATION_TEMPLATE_ID}"/>'
+        '<code code="ASSERTION" codeSystem="2.16.840.1.113883.5.4"/>'
+        f"{onset}{value}{severity}"
+        "</observation></entryRelationship>"
+    )
+
+
+def _build_allergen_participant(allergy) -> str:
+    coding = allergy.code.coding[0] if allergy.code and allergy.code.coding else None
+    if coding is None:
+        return ""
+    return (
+        '<participant typeCode="CSM"><participantRole classCode="MANU"><playingEntity classCode="MMAT">'
+        f"<code {_build_cd_attrs(coding)}/>"
+        "</playingEntity></participantRole></participant>"
+    )
+
+
+def _build_allergy_entry(allergy) -> str:
+    # A negated allergy always reaches this builder with code.coding empty
+    # (only code.text set) - _resolve_allergen_code never returns a coded
+    # CodeableConcept for a negated entry, only a text-only one - so this
+    # is a reliable, disclosed way to detect the negated case on the way
+    # back out without a dedicated FHIR-side marker. A further, disclosed
+    # lossy step follows from this: a negated allergy that still carried a
+    # resolvable allergen ("No known allergy to Penicillin") can't recover
+    # that allergen's own code here, so it degrades to the fully generic
+    # "No known allergies" shape on this and every subsequent round trip -
+    # the same "can't recover more than the forward side actually kept"
+    # limitation every other lossy-by-construction reverse mapping in this
+    # app already discloses.
+    negated = not (allergy.code and allergy.code.coding)
+    negation_attr = ' negationInd="true"' if negated else ""
+    participant = "" if negated else _build_allergen_participant(allergy)
+
+    value_code = _reverse_allergy_value_code(allergy)
+    value = (
+        f'<value xsi:type="CD" code="{value_code}" codeSystem="2.16.840.1.113883.6.96"/>'
+        if value_code
+        else '<value xsi:type="CD" nullFlavor="UNK"/>'
+    )
+
+    onset = f'<effectiveTime><low value="{format_hl7_date(allergy.onsetDateTime)}"/></effectiveTime>' if allergy.onsetDateTime else ""
+    author = (
+        f'<author><time value="{format_hl7_ts(allergy.recordedDate)}"/></author>' if allergy.recordedDate else ""
+    )
+    reactions = "".join(_build_reaction_observation(r) for r in (allergy.reaction or []))
+
+    return (
+        f'<entry typeCode="DRIV"><act classCode="ACT" moodCode="EVN">'
+        f'<templateId root="{ALLERGY_CONCERN_ACT_TEMPLATE_ID}"/>'
+        '<code code="CONC" codeSystem="2.16.840.1.113883.5.6"/>'
+        '<statusCode code="active"/>'
+        f'<entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN"{negation_attr}>'
+        f'<templateId root="{ALLERGY_OBSERVATION_TEMPLATE_ID}"/>'
+        '<code code="ASSERTION" codeSystem="2.16.840.1.113883.5.4"/>'
+        f"{onset}{value}{author}{participant}"
+        f"{_build_allergy_status_observation(allergy)}{_build_criticality_observation(allergy)}{reactions}"
+        "</observation></entryRelationship></act></entry>"
+    )
+
+
+def _build_allergies_section(allergies) -> str:
+    if not allergies:
+        return ""
+    entries = "".join(_build_allergy_entry(a) for a in allergies)
+    return (
+        f'<component><section><templateId root="{ALLERGIES_SECTION_TEMPLATE_ID}"/>'
+        '<code code="48765-2" codeSystem="2.16.840.1.113883.6.1" displayName="Allergies and adverse reactions"/>'
+        f"<title>Allergies</title>{entries}</section></component>"
+    )
+
+
 class CcdReverseBuilder(MessageBuilder):
     def build_message(self, bundle: Bundle) -> str:
         patient = find_resource(bundle, "Patient")
@@ -324,6 +495,7 @@ class CcdReverseBuilder(MessageBuilder):
         encounter = find_resource(bundle, "Encounter")
         conditions = find_resources(bundle, "Condition")
         medication_requests = find_resources(bundle, "MedicationRequest")
+        allergies = find_resources(bundle, "AllergyIntolerance")
 
         document_id = bundle.identifier.value if bundle.identifier else "TT000"
         document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
@@ -331,7 +503,8 @@ class CcdReverseBuilder(MessageBuilder):
 
         problems_section = _build_problems_section(conditions)
         medications_section = _build_medications_section(medication_requests)
-        sections = f"{problems_section}{medications_section}"
+        allergies_section = _build_allergies_section(allergies)
+        sections = f"{problems_section}{medications_section}{allergies_section}"
         body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 
         xml_text = (

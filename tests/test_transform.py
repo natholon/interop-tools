@@ -408,6 +408,47 @@ def test_ccd_round_trip_produces_no_medications_section_when_negated():
     assert not [e for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "MedicationRequest"]
 
 
+def test_ccd_round_trip_preserves_allergy_fields():
+    forward_xml = (FIXTURES / "ccd_allergies_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "AllergyIntolerance")
+
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    allergy = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "AllergyIntolerance")
+
+    assert allergy.code.coding[0].code == original.code.coding[0].code
+    assert allergy.code.coding[0].system == original.code.coding[0].system == "http://snomed.info/sct"
+    assert allergy.type == original.type == "allergy"
+    assert allergy.category == original.category == ["food"]
+    assert allergy.clinicalStatus.coding[0].code == original.clinicalStatus.coding[0].code == "active"
+    assert allergy.criticality == original.criticality == "high"
+    assert allergy.onsetDateTime == original.onsetDateTime
+    assert allergy.recordedDate == original.recordedDate
+    assert allergy.reaction[0].manifestation[0].coding[0].code == original.reaction[0].manifestation[0].coding[0].code
+    assert allergy.reaction[0].severity == original.reaction[0].severity == "moderate"
+
+
+def test_ccd_round_trip_preserves_no_known_allergies_negation():
+    # A negated allergy with no resolvable allergen degrades to the IG's
+    # own generic "No known allergies" text - this is the one shape this
+    # builder can fully round-trip exactly, since there's no coded allergen
+    # to lose in the first place (see cda_ccd.py's own docstring for the
+    # further-lossy case where a negated allergy DID carry a resolvable
+    # allergen).
+    forward_xml = (FIXTURES / "ccd_allergies_no_known.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "AllergyIntolerance")
+    assert original.code.text == "No known allergies"
+    assert not original.code.coding
+
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    allergy = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "AllergyIntolerance")
+    assert allergy.code.text == "No known allergies"
+    assert not allergy.code.coding
+
+
 def test_ccd_missing_patient_raises_mapping_error():
     empty_bundle = Bundle(id="test", type="collection")
     with pytest.raises(MappingError):

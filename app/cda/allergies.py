@@ -43,15 +43,19 @@ _CLINICAL_STATUS_SYSTEM = "http://terminology.hl7.org/CodeSystem/allergyintolera
 # genuinely different vocabularies, so two separate dicts rather than one
 # merged table. The "propensity to adverse reaction" SNOMED codes
 # (418038007 always, 419199007/420134006 for category only) have no row in
-# the published ConceptMaps - disclosed, not guessed at.
-_TYPE_MAP = {
+# the published ConceptMaps - disclosed, not guessed at. Public (not
+# module-private) - app/transform/cda_ccd.py became a real reverse-
+# direction consumer, searching both tables for a source code whose own
+# (type, category) pair matches an AllergyIntolerance's values, rather
+# than maintaining a second, independently-drifting copy.
+TYPE_MAP = {
     "235719002": "intolerance",  # Intolerance to food
     "414285001": "allergy",  # Allergy to food
     "416098002": "allergy",  # Allergy to drug
     "419199007": "allergy",  # Allergy to substance
     "59037007": "intolerance",  # Intolerance to drug
 }
-_CATEGORY_MAP = {
+CATEGORY_MAP = {
     "235719002": "food",
     "414285001": "food",
     "418471000": "food",  # Propensity to adverse reactions to food
@@ -195,10 +199,10 @@ def _build_allergy_intolerance(allergy_observation, patient_id: str) -> AllergyI
 
     value_code = _value_code(allergy_observation)
     if value_code:
-        allergy_type = _TYPE_MAP.get(value_code)
+        allergy_type = TYPE_MAP.get(value_code)
         if allergy_type:
             allergy.type = allergy_type
-        category = _CATEGORY_MAP.get(value_code)
+        category = CATEGORY_MAP.get(value_code)
         if category:
             allergy.category = [category]
 
