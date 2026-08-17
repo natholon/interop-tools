@@ -2,9 +2,11 @@ from pathlib import Path
 
 import pytest
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
+from fhir.resources.R4B.organization import Organization
 from fhir.resources.R4B.patient import Patient
 
 from app.cda.pipeline import convert_cda_to_bundle
+from app.edi.pipeline import convert_edi_to_bundle
 from app.hl7.errors import MappingError
 from app.hl7.pipeline import convert_hl7_to_bundle
 from app.transform.pipeline import build_message_from_bundle
@@ -19,6 +21,10 @@ def test_list_supported_targets_includes_adt_a01():
 
 def test_list_supported_targets_includes_ccd():
     assert ("CDA", "CCD", "") in list_supported_targets()
+
+
+def test_list_supported_targets_includes_270():
+    assert ("EDI", "270", "") in list_supported_targets()
 
 
 def test_get_builder_raises_mapping_error_for_unregistered_target():
@@ -171,3 +177,64 @@ def test_ccd_encounter_and_problems_are_optional():
     round_tripped_bundle = convert_cda_to_bundle(document_text)
     resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
     assert resource_types == {"Patient"}
+
+
+def test_edi_270_round_trip_with_dependent_produces_a_convertible_interchange_again():
+    # The real fixture used to prove the forward direction (with a
+    # dependent), run in reverse then forward again.
+    forward_x12 = (FIXTURES / "edi_270_basic.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+
+    message_text = build_message_from_bundle(bundle, "EDI", "270", "")
+
+    assert message_text.startswith("ISA*")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+
+    organizations = {o.resource.name: o.resource for o in round_tripped_bundle.entry if o.resource.get_resource_type() == "Organization"}
+    assert "ACME HEALTH PLAN" in organizations
+    payer = organizations["ACME HEALTH PLAN"]
+    assert payer.identifier[0].value == "PAYERID001"
+
+    patients = [e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Patient"]
+    assert len(patients) == 2
+    names = {(p.name[0].family, p.name[0].given[0]) for p in patients}
+    assert ("DOE", "JANE") in names
+    assert ("DOE", "JIMMY") in names
+
+    coverage = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Coverage")
+    request = next(
+        e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "CoverageEligibilityRequest"
+    )
+    # The dependent (Jimmy) must still resolve as "the patient", not the
+    # subscriber (Jane) - the precedence rule the real forward fixture's
+    # own mapping test already establishes, now proven to survive a full
+    # reverse-then-forward round trip.
+    assert request.patient.reference == coverage.beneficiary.reference
+    assert coverage.beneficiary.reference != coverage.subscriber.reference
+
+
+def test_edi_270_round_trip_without_dependent():
+    forward_x12 = (FIXTURES / "edi_270_no_dependent.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+
+    message_text = build_message_from_bundle(bundle, "EDI", "270", "")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+
+    patients = [e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Patient"]
+    assert len(patients) == 1
+    coverage = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Coverage")
+    assert coverage.beneficiary.reference == coverage.subscriber.reference
+
+
+def test_edi_270_missing_patient_raises_mapping_error():
+    payer = Organization(id="payer1", name="Payer")
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:payer1", resource=payer)]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "EDI", "270", "")
+
+
+def test_edi_270_missing_payer_raises_mapping_error():
+    empty_bundle = Bundle(id="test", type="collection")
+    with pytest.raises(MappingError):
+        build_message_from_bundle(empty_bundle, "EDI", "270", "")
