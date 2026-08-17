@@ -5,9 +5,16 @@ import pytest
 from app.cda.allergies import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL, build_allergy_intolerances
 from app.cda.ccd import CcdBuilder
 from app.cda.discharge_summary import DischargeSummaryBuilder
+from app.cda.history_and_physical import HistoryAndPhysicalBuilder
 from app.cda.parser import parse_document
+from app.cda.procedures import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as PROCEDURES_ENTRIES_OPTIONAL
+from app.cda.procedures import build_procedures
 from app.cda.registry import SECTION_BUILDERS, get_document_builder
 from app.cda.problems import SECTION_TEMPLATE_ID, build_conditions
+from app.cda.results import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as RESULTS_ENTRIES_OPTIONAL
+from app.cda.results import build_diagnostic_reports
+from app.cda.vitals import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as VITALS_ENTRIES_OPTIONAL
+from app.cda.vitals import build_vital_signs
 from app.hl7.errors import MappingError
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -44,3 +51,18 @@ def test_section_builders_registers_both_allergies_section_variants():
     # just a different section-level cardinality constraint - both must
     # dispatch to the same builder function.
     assert SECTION_BUILDERS[SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL] is build_allergy_intolerances
+
+
+def test_get_document_builder_resolves_history_and_physical():
+    document = parse_document(read_fixture("history_and_physical_basic.xml"))
+    builder = get_document_builder(document)
+    assert isinstance(builder, HistoryAndPhysicalBuilder)
+
+
+def test_section_builders_registers_both_vitals_results_procedures_section_variants():
+    # Same "entries required"/"entries optional" dual registration as
+    # Allergies above - found via a real official HL7 History and Physical
+    # example, see app/cda/procedures.py's own docstring.
+    assert SECTION_BUILDERS[VITALS_ENTRIES_OPTIONAL] is build_vital_signs
+    assert SECTION_BUILDERS[RESULTS_ENTRIES_OPTIONAL] is build_diagnostic_reports
+    assert SECTION_BUILDERS[PROCEDURES_ENTRIES_OPTIONAL] is build_procedures

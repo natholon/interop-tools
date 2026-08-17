@@ -44,6 +44,7 @@ from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_
 from app.cda.allergies import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as ALLERGIES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
+from app.cda.history_and_physical import HISTORY_AND_PHYSICAL_TEMPLATE_ID
 from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID
 from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
 from app.cda.immunizations import STATUS_MAP as IMMUNIZATION_STATUS_MAP
@@ -59,14 +60,19 @@ from app.cda.problems import (
 from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
 from app.cda.procedures import PROCEDURE_TEMPLATE_ID
 from app.cda.procedures import SECTION_TEMPLATE_ID as PROCEDURES_SECTION_TEMPLATE_ID
+from app.cda.procedures import (
+    SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as PROCEDURES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL,
+)
 from app.cda.procedures import STATUS_MAP as PROCEDURE_STATUS_MAP
 from app.cda.results import ORGANIZER_TEMPLATE_ID as RESULT_ORGANIZER_TEMPLATE_ID
 from app.cda.results import OBSERVATION_TEMPLATE_ID as RESULT_OBSERVATION_TEMPLATE_ID
 from app.cda.results import SECTION_TEMPLATE_ID as RESULTS_SECTION_TEMPLATE_ID
+from app.cda.results import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as RESULTS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
 from app.cda.results import STATUS_MAP as RESULT_STATUS_MAP
 from app.cda.vitals import ORGANIZER_TEMPLATE_ID as VITAL_SIGNS_ORGANIZER_TEMPLATE_ID
 from app.cda.vitals import OBSERVATION_TEMPLATE_ID as VITAL_SIGN_OBSERVATION_TEMPLATE_ID
 from app.cda.vitals import SECTION_TEMPLATE_ID as VITALS_SECTION_TEMPLATE_ID
+from app.cda.vitals import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as VITALS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
 from app.generators.base import (
     format_hl7_datetime,
     maybe,
@@ -622,9 +628,20 @@ def _random_vital_signs_organizer(rng: random.Random) -> str:
 def _random_vital_signs_section(rng: random.Random) -> str | None:
     if not maybe(rng, 0.7):
         return None
+    # ~25% "entries optional" templateId instead of "entries required" -
+    # both wrap the identical entry shape, but a real official HL7 History
+    # and Physical example was found declaring both templateIds together
+    # on its own Vital Signs section (see app/cda/vitals.py), and
+    # Procedures' sibling example used ONLY the entries-optional one
+    # standalone - the exact class of gap this app's Allergies section
+    # already shipped once (see _random_allergies_section above). Exists so
+    # that gap can't silently reopen for Vitals/Results/Procedures either.
+    section_template_id = (
+        VITALS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL if maybe(rng, 0.25) else VITALS_SECTION_TEMPLATE_ID
+    )
     entries = "".join(_random_vital_signs_organizer(rng) for _ in range(rng.randint(1, 2)))
     return (
-        f'<component><section><templateId root="{VITALS_SECTION_TEMPLATE_ID}"/>'
+        f'<component><section><templateId root="{section_template_id}"/>'
         '<code code="8716-3" codeSystem="2.16.840.1.113883.6.1" displayName="Vital signs"/>'
         f"<title>Vital Signs</title>{entries}</section></component>"
     )
@@ -687,9 +704,14 @@ def _random_result_organizer(rng: random.Random) -> str:
 def _random_results_section(rng: random.Random) -> str | None:
     if not maybe(rng, 0.7):
         return None
+    # ~25% "entries optional" templateId - see _random_vital_signs_section's
+    # own comment for why.
+    section_template_id = (
+        RESULTS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL if maybe(rng, 0.25) else RESULTS_SECTION_TEMPLATE_ID
+    )
     entries = "".join(_random_result_organizer(rng) for _ in range(rng.randint(1, 2)))
     return (
-        f'<component><section><templateId root="{RESULTS_SECTION_TEMPLATE_ID}"/>'
+        f'<component><section><templateId root="{section_template_id}"/>'
         '<code code="30954-2" codeSystem="2.16.840.1.113883.6.1" displayName="Relevant diagnostic tests and/or laboratory data"/>'
         f"<title>Results</title>{entries}</section></component>"
     )
@@ -736,9 +758,17 @@ def _random_procedure_entry(rng: random.Random) -> str:
 def _random_procedures_section(rng: random.Random) -> str | None:
     if not maybe(rng, 0.7):
         return None
+    # ~25% "entries optional" templateId - see _random_vital_signs_section's
+    # own comment for why; Procedures is the section a real official example
+    # was actually caught using ONLY this variant for (see app/cda/
+    # procedures.py), so this branch is exercising a genuinely observed
+    # real-world shape, not just a defensive guess.
+    section_template_id = (
+        PROCEDURES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL if maybe(rng, 0.25) else PROCEDURES_SECTION_TEMPLATE_ID
+    )
     entries = "".join(_random_procedure_entry(rng) for _ in range(rng.randint(1, 3)))
     return (
-        f'<component><section><templateId root="{PROCEDURES_SECTION_TEMPLATE_ID}"/>'
+        f'<component><section><templateId root="{section_template_id}"/>'
         '<code code="47519-4" codeSystem="2.16.840.1.113883.6.1" displayName="History of procedures"/>'
         f"<title>Procedures</title>{entries}</section></component>"
     )
@@ -851,4 +881,18 @@ def generate_discharge_summary(rng: random.Random) -> str:
         doc_code_display="Discharge Summary",
         title="Discharge Summary",
         force_encounter=True,
+    )
+
+
+def generate_history_and_physical(rng: random.Random) -> str:
+    # componentOf/encompassingEncounter is genuinely optional per the real
+    # fetched example (an H&P can precede any admission, e.g. a pre-op
+    # visit) - same "not force_encounter" treatment as CCD, unlike
+    # Discharge Summary's inherent hospitalization tie.
+    return _generate_sectioned_document(
+        rng,
+        HISTORY_AND_PHYSICAL_TEMPLATE_ID,
+        doc_code="34117-2",
+        doc_code_display="History and physical note",
+        title="History and Physical Note",
     )

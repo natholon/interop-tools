@@ -31,6 +31,7 @@ from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_
 from app.cda.allergies import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as ALLERGIES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
+from app.cda.history_and_physical import HISTORY_AND_PHYSICAL_TEMPLATE_ID
 from app.cda.common import RECOGNIZED_ENCOUNTER_CLASSES, build_codeable_concept_from_cd
 from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP as IMMUNIZATION_STATUS_MAP
 from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
@@ -41,13 +42,18 @@ from app.cda.problems import CONCERN_ACT_TEMPLATE_ID, PROBLEM_OBSERVATION_TEMPLA
 from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
 from app.cda.procedures import PROCEDURE_TEMPLATE_ID, STATUS_MAP as PROCEDURE_STATUS_MAP
 from app.cda.procedures import SECTION_TEMPLATE_ID as PROCEDURES_SECTION_TEMPLATE_ID
+from app.cda.procedures import (
+    SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as PROCEDURES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL,
+)
 from app.cda.results import ORGANIZER_TEMPLATE_ID as RESULT_ORGANIZER_TEMPLATE_ID
 from app.cda.results import OBSERVATION_TEMPLATE_ID as RESULT_OBSERVATION_TEMPLATE_ID
 from app.cda.results import SECTION_TEMPLATE_ID as RESULTS_SECTION_TEMPLATE_ID
+from app.cda.results import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as RESULTS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
 from app.cda.results import STATUS_MAP as RESULT_STATUS_MAP
 from app.cda.vitals import ORGANIZER_TEMPLATE_ID as VITAL_SIGNS_ORGANIZER_TEMPLATE_ID
 from app.cda.vitals import OBSERVATION_TEMPLATE_ID as VITAL_SIGN_OBSERVATION_TEMPLATE_ID
 from app.cda.vitals import SECTION_TEMPLATE_ID as VITALS_SECTION_TEMPLATE_ID
+from app.cda.vitals import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as VITALS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
 from app.hl7.errors import MappingError, MissingSegmentError
 from app.validation.common import is_before, not_in_future, parse_comparable_datetime
 from app.validation.models import ValidationFinding, ValidationReport
@@ -70,6 +76,8 @@ def _resolve_trigger_event(document) -> str | None:
         return "CCD"
     if has_template_id(document, DISCHARGE_SUMMARY_TEMPLATE_ID):
         return "DISCHARGESUMMARY"
+    if has_template_id(document, HISTORY_AND_PHYSICAL_TEMPLATE_ID):
+        return "HISTORYANDPHYSICAL"
     return None
 
 
@@ -112,15 +120,15 @@ def _find_immunizations_section(document):
 
 
 def _find_vitals_section(document):
-    return _find_section(document, VITALS_SECTION_TEMPLATE_ID)
+    return _find_section(document, VITALS_SECTION_TEMPLATE_ID, VITALS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL)
 
 
 def _find_results_section(document):
-    return _find_section(document, RESULTS_SECTION_TEMPLATE_ID)
+    return _find_section(document, RESULTS_SECTION_TEMPLATE_ID, RESULTS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL)
 
 
 def _find_procedures_section(document):
-    return _find_section(document, PROCEDURES_SECTION_TEMPLATE_ID)
+    return _find_section(document, PROCEDURES_SECTION_TEMPLATE_ID, PROCEDURES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL)
 
 
 def _rule_patient_name_missing(patient) -> list[ValidationFinding]:

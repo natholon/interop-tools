@@ -355,6 +355,21 @@ def test_discharge_summary_maps_header_and_recognized_sections_skips_discharge_s
     assert encounter.period.end.isoformat() == "2026-08-05T10:00:00-05:00"
 
 
+def test_history_and_physical_maps_header_and_recognized_section_skips_hp_specific_one():
+    bundle = convert_cda_to_bundle(read_fixture("history_and_physical_basic.xml"))
+    entries = _entries_by_type(bundle)
+
+    # Reason for Visit is an H&P-specific narrative section this app
+    # doesn't recognize and must be silently skipped - only the Procedures
+    # section (using the "entries optional" templateId, the exact shape a
+    # real official HL7 History and Physical example was found using)
+    # converts.
+    assert set(entries.keys()) == {"Patient", "Procedure"}
+    procedure = entries["Procedure"][0].resource
+    assert procedure.code.coding[0].display == "Knee arthroscopy"
+    assert procedure.status == "completed"
+
+
 def test_bundle_round_trips_through_json():
     bundle = convert_cda_to_bundle(read_fixture("ccd_basic.xml"))
     round_tripped = Bundle.model_validate_json(bundle.model_dump_json())

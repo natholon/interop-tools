@@ -27,6 +27,7 @@ from app.cda import allergies, immunizations, medications, problems, procedures,
 from app.cda.base import CdaDocumentBuilder
 from app.cda.ccd import CcdBuilder
 from app.cda.discharge_summary import DischargeSummaryBuilder
+from app.cda.history_and_physical import HistoryAndPhysicalBuilder
 from app.cda.parser import has_template_id
 from app.hl7.errors import MappingError
 
@@ -37,13 +38,17 @@ SECTION_BUILDERS: dict[str, Callable[[Element, str], list[Resource]]] = {
     allergies.SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL: allergies.build_allergy_intolerances,
     immunizations.SECTION_TEMPLATE_ID: immunizations.build_immunizations,
     vitals.SECTION_TEMPLATE_ID: vitals.build_vital_signs,
+    vitals.SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL: vitals.build_vital_signs,
     results.SECTION_TEMPLATE_ID: results.build_diagnostic_reports,
+    results.SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL: results.build_diagnostic_reports,
     procedures.SECTION_TEMPLATE_ID: procedures.build_procedures,
+    procedures.SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL: procedures.build_procedures,
 }
 
 _DOCUMENT_BUILDERS: dict[str, CdaDocumentBuilder] = {
     CcdBuilder.template_id: CcdBuilder(),
     DischargeSummaryBuilder.template_id: DischargeSummaryBuilder(),
+    HistoryAndPhysicalBuilder.template_id: HistoryAndPhysicalBuilder(),
 }
 
 

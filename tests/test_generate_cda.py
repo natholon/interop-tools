@@ -2,7 +2,8 @@ import random
 
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
-from app.cda.generator import generate_ccd, generate_discharge_summary
+from app.cda.generator import generate_ccd, generate_discharge_summary, generate_history_and_physical
+from app.cda.history_and_physical import HISTORY_AND_PHYSICAL_TEMPLATE_ID
 from app.cda.parser import find_all, find_child, has_template_id, parse_document
 from app.cda.pipeline import convert_cda_to_bundle, validate_cda
 
@@ -536,6 +537,25 @@ def test_vital_signs_organizer_and_observation_counts_vary_across_seeds():
     assert len(observation_counts) > 1
 
 
+_VITALS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL = "2.16.840.1.113883.10.20.22.2.4"
+
+
+def test_vitals_section_templateid_variant_varies_across_seeds():
+    # "entries required" (...2.4.1) and "entries optional" (...2.4) wrap the
+    # identical entry shape but are two distinct templateIds - mirroring
+    # the identical Allergies fuzz test above. Direct fuzz coverage so a
+    # future regression in _find_vitals_section's dispatch can't reopen
+    # silently: both variants must actually occur.
+    entries_required = entries_optional = 0
+    for seed in range(60):
+        for section in find_all(_document(seed), "component/structuredBody/component/section"):
+            if has_template_id(section, _VITALS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL):
+                entries_optional += 1
+            elif has_template_id(section, _VITALS_SECTION_TEMPLATE_ID):
+                entries_required += 1
+    assert entries_required > 0 and entries_optional > 0
+
+
 def test_vital_sign_interpretation_varies_across_seeds():
     present = absent = 0
     for seed in range(80):
@@ -571,6 +591,20 @@ def test_results_section_varies_across_seeds():
 
     present, absent = _present_absent(range(60), has_results_section)
     assert present > 0 and absent > 0
+
+
+_RESULTS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL = "2.16.840.1.113883.10.20.22.2.3"
+
+
+def test_results_section_templateid_variant_varies_across_seeds():
+    entries_required = entries_optional = 0
+    for seed in range(60):
+        for section in find_all(_document(seed), "component/structuredBody/component/section"):
+            if has_template_id(section, _RESULTS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL):
+                entries_optional += 1
+            elif has_template_id(section, _RESULTS_SECTION_TEMPLATE_ID):
+                entries_required += 1
+    assert entries_required > 0 and entries_optional > 0
 
 
 def test_result_status_code_varies_across_recognized_and_unrecognized():
@@ -614,6 +648,23 @@ def test_procedures_section_varies_across_seeds():
 
     present, absent = _present_absent(range(60), has_procedures_section)
     assert present > 0 and absent > 0
+
+
+_PROCEDURES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL = "2.16.840.1.113883.10.20.22.2.7"
+
+
+def test_procedures_section_templateid_variant_varies_across_seeds():
+    # This is the section a real official HL7 History and Physical example
+    # was found using ONLY the "entries optional" templateId for - see
+    # app/cda/procedures.py's own docstring.
+    entries_required = entries_optional = 0
+    for seed in range(60):
+        for section in find_all(_document(seed), "component/structuredBody/component/section"):
+            if has_template_id(section, _PROCEDURES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL):
+                entries_optional += 1
+            elif has_template_id(section, _PROCEDURES_SECTION_TEMPLATE_ID):
+                entries_required += 1
+    assert entries_required > 0 and entries_optional > 0
 
 
 def test_procedure_negation_varies_across_seeds():
@@ -725,3 +776,49 @@ def test_generated_discharge_summary_has_no_validation_errors():
 
 def test_generate_discharge_summary_is_reproducible_with_same_seed():
     assert generate_discharge_summary(random.Random(7)) == generate_discharge_summary(random.Random(7))
+
+
+def _history_and_physical_document(seed: int):
+    return parse_document(generate_history_and_physical(random.Random(seed)))
+
+
+def test_generated_history_and_physical_parses_and_has_own_templateid():
+    for seed in range(20):
+        document = _history_and_physical_document(seed)
+        assert has_template_id(document, HISTORY_AND_PHYSICAL_TEMPLATE_ID)
+        assert not has_template_id(document, CCD_TEMPLATE_ID)
+        assert not has_template_id(document, DISCHARGE_SUMMARY_TEMPLATE_ID)
+
+
+def test_generated_history_and_physical_encounter_varies_across_seeds():
+    # Unlike Discharge Summary (force_encounter=True), an H&P's own
+    # componentOf/encompassingEncounter is genuinely optional - a real
+    # official example can precede any admission (e.g. a pre-op visit).
+    present = absent = 0
+    for seed in range(60):
+        document = _history_and_physical_document(seed)
+        if find_child(document, "componentOf") is not None:
+            present += 1
+        else:
+            absent += 1
+    assert present > 0 and absent > 0
+
+
+def test_history_and_physical_round_trips_through_real_converter():
+    for seed in range(1000, 1020):
+        xml_text = generate_history_and_physical(random.Random(seed))
+        bundle = convert_cda_to_bundle(xml_text)
+        resource_types = {e.resource.get_resource_type() for e in bundle.entry}
+        assert "Patient" in resource_types
+
+
+def test_generated_history_and_physical_has_no_validation_errors():
+    for seed in range(1000, 1020):
+        xml_text = generate_history_and_physical(random.Random(seed))
+        report = validate_cda(xml_text)
+        assert report.is_valid, f"seed={seed} findings={report.findings}"
+        assert report.trigger_event == "HISTORYANDPHYSICAL"
+
+
+def test_generate_history_and_physical_is_reproducible_with_same_seed():
+    assert generate_history_and_physical(random.Random(7)) == generate_history_and_physical(random.Random(7))

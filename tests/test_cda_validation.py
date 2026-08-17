@@ -17,12 +17,15 @@ _REACTION_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4
 _IMMUNIZATIONS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.2.1"/>'
 _IMMUNIZATION_ACTIVITY_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.52"/>'
 _VITALS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.4.1"/>'
+_VITALS_SECTION_TEMPLATE_ENTRIES_OPTIONAL = '<templateId root="2.16.840.1.113883.10.20.22.2.4"/>'
 _VITAL_SIGNS_ORGANIZER_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.26"/>'
 _VITAL_SIGN_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.27"/>'
 _RESULTS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.3.1"/>'
+_RESULTS_SECTION_TEMPLATE_ENTRIES_OPTIONAL = '<templateId root="2.16.840.1.113883.10.20.22.2.3"/>'
 _RESULT_ORGANIZER_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.1"/>'
 _RESULT_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.2"/>'
 _PROCEDURES_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.7.1"/>'
+_PROCEDURES_SECTION_TEMPLATE_ENTRIES_OPTIONAL = '<templateId root="2.16.840.1.113883.10.20.22.2.7"/>'
 _PROCEDURE_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.14"/>'
 
 
@@ -567,11 +570,9 @@ def _vitals_organizer(components: str) -> str:
     )
 
 
-def _vitals_section(entries: str) -> str:
-    return (
-        f"<component><structuredBody><component><section>{_VITALS_SECTION_TEMPLATE}"
-        f"{entries}</section></component></structuredBody></component>"
-    )
+def _vitals_section(entries: str, entries_optional: bool = False) -> str:
+    template = _VITALS_SECTION_TEMPLATE_ENTRIES_OPTIONAL if entries_optional else _VITALS_SECTION_TEMPLATE
+    return f"<component><structuredBody><component><section>{template}{entries}</section></component></structuredBody></component>"
 
 
 def test_clean_vitals_produces_no_findings():
@@ -599,6 +600,23 @@ def test_vitals_effective_time_in_future_is_warning():
     assert finding.severity == "warning"
 
 
+def test_vitals_rules_also_run_against_entries_optional_section_variant():
+    # Regression test mirroring test_allergy_rules_also_run_against_entries_
+    # optional_section_variant: "entries required" (...2.4.1) and "entries
+    # optional" (...2.4) wrap the identical entry shape and both dispatch to
+    # build_vital_signs for conversion (app.cda.registry.SECTION_BUILDERS) -
+    # _find_vitals_section must recognize both too, or validate_document()
+    # would silently run zero vitals rules against the "entries optional"
+    # variant, the exact gap a real official HL7 History and Physical
+    # example surfaced for this app's Procedures section (see
+    # app/cda/procedures.py).
+    entry = _vitals_organizer(_vital_sign_observation(code='<code nullFlavor="UNK"/>'))
+    document = _doc(_patient() + _vitals_section(entry, entries_optional=True))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.vitals-missing-code")
+    assert finding.severity == "info"
+
+
 def _result_observation(code: str = "", status: str = "completed", effective_time: str = "") -> str:
     observation_code = code or '<code code="6690-2" codeSystem="2.16.840.1.113883.6.1" displayName="Leukocytes"/>'
     return (
@@ -616,11 +634,9 @@ def _results_organizer(components: str) -> str:
     )
 
 
-def _results_section(entries: str) -> str:
-    return (
-        f"<component><structuredBody><component><section>{_RESULTS_SECTION_TEMPLATE}"
-        f"{entries}</section></component></structuredBody></component>"
-    )
+def _results_section(entries: str, entries_optional: bool = False) -> str:
+    template = _RESULTS_SECTION_TEMPLATE_ENTRIES_OPTIONAL if entries_optional else _RESULTS_SECTION_TEMPLATE
+    return f"<component><structuredBody><component><section>{template}{entries}</section></component></structuredBody></component>"
 
 
 def test_clean_result_produces_no_findings():
@@ -657,6 +673,14 @@ def test_result_effective_time_in_future_is_warning():
     assert finding.severity == "warning"
 
 
+def test_result_rules_also_run_against_entries_optional_section_variant():
+    entry = _results_organizer(_result_observation(code='<code nullFlavor="UNK"/>'))
+    document = _doc(_patient() + _results_section(entry, entries_optional=True))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.result-missing-code")
+    assert finding.severity == "info"
+
+
 def _procedure_entry(status: str = "completed", effective_time: str = "", negation: str = "") -> str:
     effective_time = effective_time or '<effectiveTime value="20260615120000-0500"/>'
     return (
@@ -667,11 +691,9 @@ def _procedure_entry(status: str = "completed", effective_time: str = "", negati
     )
 
 
-def _procedures_section(entries: str) -> str:
-    return (
-        f"<component><structuredBody><component><section>{_PROCEDURES_SECTION_TEMPLATE}"
-        f"{entries}</section></component></structuredBody></component>"
-    )
+def _procedures_section(entries: str, entries_optional: bool = False) -> str:
+    template = _PROCEDURES_SECTION_TEMPLATE_ENTRIES_OPTIONAL if entries_optional else _PROCEDURES_SECTION_TEMPLATE
+    return f"<component><structuredBody><component><section>{template}{entries}</section></component></structuredBody></component>"
 
 
 def test_clean_procedure_produces_no_findings():
@@ -709,6 +731,18 @@ def test_procedure_effective_time_in_future_is_warning():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.procedure-effective-time-in-future")
     assert finding.severity == "warning"
+
+
+def test_procedure_rules_also_run_against_entries_optional_section_variant():
+    # This is the section a real official HL7 History and Physical example
+    # was actually found using ONLY the "entries optional" (...2.7)
+    # templateId for - no paired ...2.7.1 declaration - so this regression
+    # test covers a genuinely observed real-world shape, not a hypothetical.
+    entry = _procedure_entry(status="held")
+    document = _doc(_patient() + _procedures_section(entry, entries_optional=True))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.procedure-status-unrecognized")
+    assert finding.severity == "info"
 
 
 def test_unregistered_document_type_is_info():

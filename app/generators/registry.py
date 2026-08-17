@@ -1,6 +1,6 @@
 import random
 
-from app.cda.generator import generate_ccd, generate_discharge_summary
+from app.cda.generator import generate_ccd, generate_discharge_summary, generate_history_and_physical
 from app.edi.claim_837d_generator import generate_837d
 from app.edi.claim_837i_generator import generate_837i
 from app.edi.claim_837p_generator import generate_837p
@@ -86,6 +86,10 @@ _GENERATORS = {
     # deliberate readability choice, not an inconsistency to "fix".
     ("CDA", "CCD"): (generate_ccd, "CDA^CCD - Continuity of Care Document"),
     ("CDA", "DISCHARGESUMMARY"): (generate_discharge_summary, "CDA^DischargeSummary - Discharge Summary"),
+    ("CDA", "HISTORYANDPHYSICAL"): (
+        generate_history_and_physical,
+        "CDA^HistoryAndPhysical - History and Physical Note",
+    ),
     ("EDI", "270"): (generate_270, "EDI^270 - Eligibility Inquiry"),
     ("EDI", "271"): (generate_271, "EDI^271 - Eligibility Response"),
     ("EDI", "276"): (generate_276, "EDI^276 - Claim Status Request"),

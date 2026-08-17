@@ -60,6 +60,11 @@ from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds,
 # Public (not module-private) - reused by app/cda/generator.py and
 # app/cda/validation.py, same pattern as every other section module.
 SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.3.1"
+# The "entries optional" sibling section - see app/cda/vitals.py's own
+# docstring for how this was found (a real official HL7 History and
+# Physical example) and app/cda/procedures.py's for why it's registered
+# defensively rather than only when directly observed standalone.
+SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL = "2.16.840.1.113883.10.20.22.2.3"
 ORGANIZER_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.1"
 OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.2"
 

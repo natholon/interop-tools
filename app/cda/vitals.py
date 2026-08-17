@@ -50,6 +50,18 @@ from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
 # Public (not module-private) - reused by app/cda/generator.py and
 # app/cda/validation.py, same pattern as every other section module.
 SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.4.1"
+# The "entries optional" sibling section (no trailing ".1", mirroring
+# Allergies' own two-templateId pattern in app/cda/allergies.py) - found by
+# fetching a real official HL7 History and Physical example
+# (HL7/C-CDA-Examples, Documents/History and Physical), which declares BOTH
+# this and SECTION_TEMPLATE_ID together on its own Vital Signs section (a
+# section conforming to both variants at once is legal). Registered
+# defensively alongside SECTION_TEMPLATE_ID in app/cda/registry.py/
+# app/cda/validation.py even though this specific example didn't need it
+# standalone - see app/cda/procedures.py's own docstring for a real example
+# of a section using ONLY its entries-optional templateId, which is exactly
+# the gap this app's own Allergies section already shipped once and fixed.
+SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL = "2.16.840.1.113883.10.20.22.2.4"
 ORGANIZER_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.26"
 OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.27"
 
