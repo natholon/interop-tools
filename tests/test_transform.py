@@ -27,6 +27,10 @@ def test_list_supported_targets_includes_270():
     assert ("EDI", "270", "") in list_supported_targets()
 
 
+def test_list_supported_targets_includes_271():
+    assert ("EDI", "271", "") in list_supported_targets()
+
+
 def test_get_builder_raises_mapping_error_for_unregistered_target():
     with pytest.raises(MappingError):
         get_builder("HL7", "ADT", "A99")
@@ -238,3 +242,49 @@ def test_edi_270_missing_payer_raises_mapping_error():
     empty_bundle = Bundle(id="test", type="collection")
     with pytest.raises(MappingError):
         build_message_from_bundle(empty_bundle, "EDI", "270", "")
+
+
+def test_edi_271_round_trip_produces_a_convertible_interchange_again():
+    forward_x12 = (FIXTURES / "edi_271_basic.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+
+    message_text = build_message_from_bundle(bundle, "EDI", "271", "")
+
+    assert message_text.startswith("ISA*")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+
+    response = next(
+        e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "CoverageEligibilityResponse"
+    )
+    assert response.outcome == "complete"
+    assert response.insurance[0].inforce is True
+    descriptions = {item.description for item in response.insurance[0].item}
+    assert "Gold Plan" in descriptions
+
+
+def test_edi_271_rejection_round_trips_outcome_and_disposition():
+    forward_x12 = (FIXTURES / "edi_271_rejected.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+
+    message_text = build_message_from_bundle(bundle, "EDI", "271", "")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+
+    response = next(
+        e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "CoverageEligibilityResponse"
+    )
+    assert response.outcome == "error"
+    assert response.disposition is not None
+
+
+def test_edi_271_missing_patient_raises_mapping_error():
+    payer = Organization(id="payer1", name="Payer")
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:payer1", resource=payer)]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "EDI", "271", "")
+
+
+def test_edi_271_missing_payer_raises_mapping_error():
+    empty_bundle = Bundle(id="test", type="collection")
+    with pytest.raises(MappingError):
+        build_message_from_bundle(empty_bundle, "EDI", "271", "")

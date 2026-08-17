@@ -80,11 +80,14 @@ _EB01_ACTIVE_COVERAGE = "1"
 # than assumed) - carried as disclosed free text rather than a guessed
 # coding, the same "text-only when no verified coding system exists"
 # treatment Allergies' "no known allergy" fallback already established.
-_EB12_NETWORK_TEXT = {"Y": "In Network", "N": "Out of Network", "U": "Unknown"}
+# Public (not module-private) - app/transform/edi_271.py reuses this table
+# in reverse to rebuild EB12 from CoverageEligibilityResponseInsuranceItem
+# .network.text.
+EB12_NETWORK_TEXT = {"Y": "In Network", "N": "Out of Network", "U": "Unknown"}
 
 
 def _build_network(eb12: str) -> CodeableConcept | None:
-    text = _EB12_NETWORK_TEXT.get(eb12.strip().upper())
+    text = EB12_NETWORK_TEXT.get(eb12.strip().upper())
     return CodeableConcept(text=text) if text else None
 
 
