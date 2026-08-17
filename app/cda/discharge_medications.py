@@ -35,9 +35,12 @@ def build_discharge_medication_requests(section, patient_id: str, recorder=None)
     """One MedicationRequest per Discharge Medication Act entry in the
     section - a section can (and commonly does) have multiple entries.
 
-    `recorder` is accepted (see app/provenance/) but not yet acted on -
-    build_medication_request itself isn't instrumented yet (see
-    app/cda/medications.py::build_medication_requests' own docstring)."""
+    Reuses build_medication_request's own recorder instrumentation as-is
+    (see that function's own docstring and app/cda/medications.py's
+    _ENTRY_BASE for the one disclosed location-string simplification this
+    reuse carries: the recorded paths describe the substanceAdministration
+    element's own relative shape, not this module's own outer
+    act/entryRelationship[SUBJ]/ wrapper)."""
     requests = []
     for entry in find_all(section, "entry"):
         act = find_child(entry, "act")
@@ -51,7 +54,7 @@ def build_discharge_medication_requests(section, patient_id: str, recorder=None)
                 substance_administration, MEDICATION_ACTIVITY_TEMPLATE_ID
             ):
                 continue
-            request = build_medication_request(substance_administration, patient_id)
+            request = build_medication_request(substance_administration, patient_id, recorder=recorder)
             if request is not None:
                 requests.append(request)
     return requests

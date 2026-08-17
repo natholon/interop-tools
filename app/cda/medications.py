@@ -11,8 +11,9 @@ from fhir.resources.R4B.period import Period
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.timing import Timing, TimingRepeat
 
-from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, parse_partial_ts
+from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, effective_time_location, parse_partial_ts
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
+from app.provenance.location import xpath_location
 
 # Public (not module-private) - reused by app/cda/generator.py and
 # app/cda/validation.py, same pattern as app/cda/problems.py's constants.
@@ -47,6 +48,21 @@ _DEFAULT_STATUS = "unknown"
 _MOOD_TO_INTENT = {"INT": "order", "EVN": "plan"}
 _DEFAULT_INTENT = "order"
 
+# The entry element's own relative path - accurate for the plain Medications
+# section (entry/substanceAdministration directly, no wrapping Act, this
+# function's own primary/first consumer). discharge_medications.py's own
+# reuse wraps the identical substanceAdministration one level deeper (inside
+# act[templateId=...4.35]/entryRelationship[SUBJ]/) - a real, disclosed
+# simplification, not a bug: unlike Problems' own reused build_condition
+# (whose two callers both genuinely have an outer <act>, just different
+# templateIds, so "act/..." is accurate for both), Medications' own plain
+# section has no outer act at all, so no single base prefix is literally
+# accurate for both callers. This module deliberately doesn't thread a
+# third parameter through the whole dosage-building chain just to
+# distinguish the two - the recorded location is still close enough to be
+# useful, and correct for the dominant, primary case.
+_ENTRY_BASE = "substanceAdministration"
+
 
 def _resolve_status(substance_administration) -> str:
     status_element = find_child(substance_administration, "statusCode")
@@ -77,14 +93,18 @@ def _resolve_patient_instruction(substance_administration) -> str | None:
     return None
 
 
-def _build_dosage(substance_administration) -> Dosage | None:
-    route = build_codeable_concept_from_cd(find_child(substance_administration, "routeCode"))
-    dose_quantity = build_quantity_from_pq(find_child(substance_administration, "doseQuantity"))
-    rate_quantity = build_quantity_from_pq(find_child(substance_administration, "rateQuantity"))
+def _build_dosage(
+    substance_administration, resource_id: str | None = None, relative_path: str | None = None, recorder=None
+) -> Dosage | None:
+    route_element = find_child(substance_administration, "routeCode")
+    route = build_codeable_concept_from_cd(route_element)
+    dose_quantity_element = find_child(substance_administration, "doseQuantity")
+    dose_quantity = build_quantity_from_pq(dose_quantity_element)
+    rate_quantity_element = find_child(substance_administration, "rateQuantity")
+    rate_quantity = build_quantity_from_pq(rate_quantity_element)
     patient_instruction = _resolve_patient_instruction(substance_administration)
-    bounds_start, bounds_end = (
-        parse_partial_ts(v) for v in ivl_ts_bounds(find_child(substance_administration, "effectiveTime"))
-    )
+    effective_time = find_child(substance_administration, "effectiveTime")
+    bounds_start, bounds_end = (parse_partial_ts(v) for v in ivl_ts_bounds(effective_time))
 
     if not any([route, dose_quantity, rate_quantity, patient_instruction, bounds_start, bounds_end]):
         return None
@@ -92,21 +112,62 @@ def _build_dosage(substance_administration) -> Dosage | None:
     dosage = Dosage()
     if route:
         dosage.route = route
+        if recorder and resource_id and relative_path:
+            route_code = route.coding[0].code
+            recorder.record(
+                resource_id, f"{relative_path}.route.coding[0].code", xpath_location(_ENTRY_BASE, "routeCode", "@code"), route_code
+            )
     if patient_instruction:
         dosage.patientInstruction = patient_instruction
+        if recorder and resource_id and relative_path:
+            recorder.record(
+                resource_id,
+                f"{relative_path}.patientInstruction",
+                xpath_location(_ENTRY_BASE, "entryRelationship[COMP]", "substanceAdministration", "text"),
+                patient_instruction,
+            )
     if dose_quantity or rate_quantity:
         dose_and_rate = DosageDoseAndRate()
         if dose_quantity:
             dose_and_rate.doseQuantity = dose_quantity
+            if recorder and resource_id and relative_path:
+                recorder.record(
+                    resource_id,
+                    f"{relative_path}.doseAndRate[0].doseQuantity.value",
+                    xpath_location(_ENTRY_BASE, "doseQuantity", "@value"),
+                    dose_quantity_element.get("value"),
+                )
         if rate_quantity:
             dose_and_rate.rateQuantity = rate_quantity
+            if recorder and resource_id and relative_path:
+                recorder.record(
+                    resource_id,
+                    f"{relative_path}.doseAndRate[0].rateQuantity.value",
+                    xpath_location(_ENTRY_BASE, "rateQuantity", "@value"),
+                    rate_quantity_element.get("value"),
+                )
         dosage.doseAndRate = [dose_and_rate]
     if bounds_start or bounds_end:
         period = Period()
+        effective_time_base = xpath_location(_ENTRY_BASE, "effectiveTime")
         if bounds_start:
             period.start = bounds_start
+            if recorder and resource_id and relative_path:
+                recorder.record(
+                    resource_id,
+                    f"{relative_path}.timing.repeat.boundsPeriod.start",
+                    effective_time_location(effective_time_base, effective_time, "low"),
+                    bounds_start,
+                )
         if bounds_end:
             period.end = bounds_end
+            if recorder and resource_id and relative_path:
+                recorder.record(
+                    resource_id,
+                    f"{relative_path}.timing.repeat.boundsPeriod.end",
+                    effective_time_location(effective_time_base, effective_time, "high"),
+                    bounds_end,
+                )
         dosage.timing = Timing(repeat=TimingRepeat(boundsPeriod=period))
     return dosage
 
@@ -115,8 +176,10 @@ def _build_dosage(substance_administration) -> Dosage | None:
 # second real consumer once that section was confirmed (against a real
 # official HL7 example) to wrap the byte-for-byte identical Medication
 # Activity template inside a different Act wrapper - only the Act template
-# differs, so the per-entry builder itself is reused as-is.
-def build_medication_request(substance_administration, patient_id: str) -> MedicationRequest | None:
+# differs, so the per-entry builder itself is reused as-is, including its
+# own recorder instrumentation (see _ENTRY_BASE's own docstring above for
+# the one disclosed location-string simplification this reuse carries).
+def build_medication_request(substance_administration, patient_id: str, recorder=None) -> MedicationRequest | None:
     if substance_administration.get("negationInd") == "true":
         # This specific administration/order did NOT happen - disclosed
         # limitation, not modeled as its own resource this slice, same
@@ -129,9 +192,8 @@ def build_medication_request(substance_administration, patient_id: str) -> Medic
     manufactured_material = (
         find_child(manufactured_product, "manufacturedMaterial") if manufactured_product is not None else None
     )
-    medication_code = build_codeable_concept_from_cd(
-        find_child(manufactured_material, "code") if manufactured_material is not None else None
-    )
+    code_element = find_child(manufactured_material, "code") if manufactured_material is not None else None
+    medication_code = build_codeable_concept_from_cd(code_element)
     if medication_code is None:
         # medicationCodeableConcept (or medicationReference, not produced by
         # this converter) is required by fhir.resources - matching
@@ -139,15 +201,55 @@ def build_medication_request(substance_administration, patient_id: str) -> Medic
         # than raising or guessing.
         return None
 
+    medication_request_id = str(uuid.uuid4())
+    status = _resolve_status(substance_administration)
+    intent = _resolve_intent(substance_administration)
     request = MedicationRequest(
-        id=str(uuid.uuid4()),
-        status=_resolve_status(substance_administration),
-        intent=_resolve_intent(substance_administration),
+        id=medication_request_id,
+        status=status,
+        intent=intent,
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
         medicationCodeableConcept=medication_code,
     )
 
-    dosage = _build_dosage(substance_administration)
+    if recorder:
+        code_location = xpath_location(_ENTRY_BASE, "consumable", "manufacturedProduct", "manufacturedMaterial", "code")
+        code_value = code_element.get("code")
+        display_value = code_element.get("displayName")
+        if code_value:
+            recorder.record(medication_request_id, "medicationCodeableConcept.coding[0].code", f"{code_location}/@code", code_value)
+        if display_value:
+            recorder.record(
+                medication_request_id,
+                "medicationCodeableConcept.coding[0].display",
+                f"{code_location}/@displayName",
+                display_value,
+            )
+
+        status_element = find_child(substance_administration, "statusCode")
+        status_code = status_element.get("code") if status_element is not None else None
+        if status_code and status_code.strip().lower() in STATUS_MAP:
+            recorder.record(medication_request_id, "status", xpath_location(_ENTRY_BASE, "statusCode", "@code"), status)
+        else:
+            recorder.record_inferred(
+                medication_request_id,
+                "status",
+                f"statusCode was absent or not one of the recognized CF_MedicationStatus codes - defaults to the disclosed fallback \"{_DEFAULT_STATUS}\".",
+                status,
+            )
+
+        mood_code = (substance_administration.get("moodCode") or "").strip().upper()
+        if mood_code in _MOOD_TO_INTENT:
+            recorder.record(medication_request_id, "intent", xpath_location(_ENTRY_BASE, "@moodCode"), intent)
+        else:
+            recorder.record_inferred(
+                medication_request_id,
+                "intent",
+                f"moodCode was absent or not one of the two recognized CF_MedActivityMood codes (INT/EVN) - defaults to the disclosed fallback \"{_DEFAULT_INTENT}\".",
+                intent,
+            )
+
+    dosage = _build_dosage(substance_administration, resource_id=medication_request_id, relative_path="dosageInstruction[0]", recorder=recorder)
     if dosage:
         request.dosageInstruction = [dosage]
 
@@ -156,15 +258,7 @@ def build_medication_request(substance_administration, patient_id: str) -> Medic
 
 def build_medication_requests(section, patient_id: str, recorder=None) -> list[MedicationRequest]:
     """One MedicationRequest per Medication Activity entry in the section -
-    a section can (and commonly does) have multiple entries.
-
-    `recorder` is accepted (see app/provenance/) but not yet acted on - the
-    Medications section isn't instrumented yet (the Data Specification
-    pillar's current C-CDA scope is header + Problems only); accepting it
-    here lets app.cda.common.build_sectioned_bundle's generic dispatch loop
-    pass recorder uniformly to every registered section builder, the same
-    "accept it now, act on it in a later slice" precedent every HL7v2
-    message type's own to_bundle() already established."""
+    a section can (and commonly does) have multiple entries."""
     requests = []
     for entry in find_all(section, "entry"):
         substance_administration = find_child(entry, "substanceAdministration")
@@ -172,7 +266,7 @@ def build_medication_requests(section, patient_id: str, recorder=None) -> list[M
             substance_administration, MEDICATION_ACTIVITY_TEMPLATE_ID
         ):
             continue
-        request = build_medication_request(substance_administration, patient_id)
+        request = build_medication_request(substance_administration, patient_id, recorder=recorder)
         if request is not None:
             requests.append(request)
     return requests

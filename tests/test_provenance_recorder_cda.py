@@ -56,6 +56,7 @@ _CDA_FIXTURES = [
     "ccd_problem_edge_cases.xml",
     "ccd_unrecognized_section_present.xml",
     "ccd_medications_basic.xml",
+    "ccd_medications_negated.xml",
     "ccd_allergies_basic.xml",
     "ccd_vitals_basic.xml",
     "ccd_results_basic.xml",
@@ -271,22 +272,89 @@ def test_ccd_problem_negated_produces_no_condition_facts():
     assert not any("Condition" in e.fhir_path or "code.coding" in e.fhir_path for e in entries)
 
 
-def test_ccd_medications_section_records_no_facts_yet():
-    # Medications isn't instrumented this slice (see
-    # app/cda/medications.py::build_medication_requests' own docstring) -
-    # a MedicationRequest still gets built (conversion is unaffected), but
-    # zero facts should be recorded against it, only the header's own.
+def test_ccd_medications_basic_crosswalk_matches_known_field_values():
+    # ccd_medications_basic.xml's own two entries exercise both dosage
+    # representations in one fixture: structured dosing (route/doseQuantity/
+    # effectiveTime bounds, moodCode="INT") and the free-text SIG
+    # entryRelationship (moodCode="EVN") - the same fixture
+    # test_ccd_mapping.py itself asserts against.
     recorder = ProvenanceRecorder(source_format="CDA")
     bundle = _build_bundle("ccd_medications_basic.xml", recorder=recorder)
-    medication_requests = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "MedicationRequest"]
-    assert len(medication_requests) > 0
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    medication_indices = [i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "MedicationRequest"]
+    assert len(medication_indices) == 2
+    structured_index, free_text_index = medication_indices
+
+    code_entry = by_path[f"Bundle.entry[{structured_index}].resource.medicationCodeableConcept.coding[0].code"]
+    assert code_entry.value == "314076"
+    assert code_entry.derivation == "direct"
+    assert code_entry.source_location == xpath_location(
+        "substanceAdministration", "consumable", "manufacturedProduct", "manufacturedMaterial", "code", "@code"
+    )
+    display_entry = by_path[f"Bundle.entry[{structured_index}].resource.medicationCodeableConcept.coding[0].display"]
+    assert display_entry.value == "Lisinopril 10 MG Oral Tablet"
+
+    status_entry = by_path[f"Bundle.entry[{structured_index}].resource.status"]
+    assert status_entry.value == "active"
+    assert status_entry.derivation == "direct"
+    assert status_entry.source_location == xpath_location("substanceAdministration", "statusCode", "@code")
+
+    intent_entry = by_path[f"Bundle.entry[{structured_index}].resource.intent"]
+    assert intent_entry.value == "order"
+    assert intent_entry.derivation == "direct"
+    assert intent_entry.source_location == xpath_location("substanceAdministration", "@moodCode")
+
+    route_entry = by_path[f"Bundle.entry[{structured_index}].resource.dosageInstruction[0].route.coding[0].code"]
+    assert route_entry.value == "C38288"
+    dose_entry = by_path[f"Bundle.entry[{structured_index}].resource.dosageInstruction[0].doseAndRate[0].doseQuantity.value"]
+    assert dose_entry.value == "10"
+    start_entry = by_path[f"Bundle.entry[{structured_index}].resource.dosageInstruction[0].timing.repeat.boundsPeriod.start"]
+    assert start_entry.value == "2026-07-01"
+    end_entry = by_path[f"Bundle.entry[{structured_index}].resource.dosageInstruction[0].timing.repeat.boundsPeriod.end"]
+    assert end_entry.value == "2026-10-01"
+
+    # The second entry uses the free-text SIG path instead of structured
+    # dosing - proving both of _build_dosage's own recorded branches.
+    instruction_entry = by_path[f"Bundle.entry[{free_text_index}].resource.dosageInstruction[0].patientInstruction"]
+    assert instruction_entry.value == "Take one capsule by mouth three times daily until gone"
+    assert f"Bundle.entry[{free_text_index}].resource.dosageInstruction[0].route.coding[0].code" not in by_path
+
+    intent_entry_2 = by_path[f"Bundle.entry[{free_text_index}].resource.intent"]
+    assert intent_entry_2.value == "plan"
+
+
+def test_ccd_medications_negated_produces_no_medication_request_facts():
+    # A negated entry produces no MedicationRequest at all (see
+    # app/cda/medications.py's own negationInd handling) - so no
+    # MedicationRequest-scoped facts should exist anywhere in the resolved
+    # crosswalk, mirroring test_ccd_problem_negated_produces_no_condition_facts.
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("ccd_medications_negated.xml", recorder=recorder)
+    assert not any(e.get_resource_type() == "MedicationRequest" for e in bundle.entry)
 
     entries = resolve_bundle_paths(bundle, recorder)
-    recorded_resource_ids = {e.fhir_path.split(".resource.")[0] for e in entries if ".resource." in e.fhir_path}
-    medication_entry_indices = {
+    assert not any("medicationCodeableConcept" in e.fhir_path or "dosageInstruction" in e.fhir_path for e in entries)
+
+
+def test_discharge_medications_reuses_medications_own_recorder_instrumentation():
+    # build_discharge_medication_requests reuses build_medication_request
+    # directly (see app/cda/discharge_medications.py's own docstring) - its
+    # own real fixture's Discharge Medications-sourced MedicationRequest
+    # must carry the identical recorded facts a plain-Medications-sourced
+    # one would, not silently stay uninstrumented just because a different
+    # outer Act template wraps it.
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("discharge_summary_basic.xml", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    medication_index = next(
         i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "MedicationRequest"
-    }
-    assert not any(f"Bundle.entry[{i}]" in recorded_resource_ids for i in medication_entry_indices)
+    )
+    code_entry = by_path[f"Bundle.entry[{medication_index}].resource.medicationCodeableConcept.coding[0].code"]
+    assert code_entry.derivation == "direct"
 
 
 def test_discharge_summary_hospital_discharge_diagnosis_condition_also_recorded():
