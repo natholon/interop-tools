@@ -9,7 +9,7 @@ from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.condition import Condition
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, parse_partial_ts
+from app.cda.common import build_codeable_concept_from_cd, iter_nested_observations, parse_partial_ts
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
 
 # Public (not module-private) - reused by app/cda/generator.py (to build
@@ -42,12 +42,7 @@ STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS = {
 
 
 def _resolve_clinical_status(act, problem_observation) -> CodeableConcept | None:
-    for relationship in find_all(problem_observation, "entryRelationship"):
-        if relationship.get("typeCode") != "REFR":
-            continue
-        status_observation = find_child(relationship, "observation")
-        if status_observation is None:
-            continue
+    for status_observation in iter_nested_observations(problem_observation, "REFR"):
         code_element = find_child(status_observation, "code")
         if code_element is None or code_element.get("code") != STATUS_OBSERVATION_CODE:
             continue

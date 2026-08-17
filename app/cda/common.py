@@ -94,6 +94,41 @@ def build_codeable_concept_from_cd(element) -> CodeableConcept | None:
     return CodeableConcept(coding=[coding])
 
 
+def iter_nested_observations(parent, type_code: str):
+    """Yield each nested <observation> reached via
+    entryRelationship[@typeCode=type_code]/observation - the shared
+    traversal shape behind every Concern-Act-style nested-observation
+    lookup in this app. Promoted here once app/cda/problems.py became a
+    second real consumer of the identical walk app/cda/allergies.py already
+    had: Problems' own Status Observation lookup matches by LOINC code
+    (there's no distinct templateId to key off), while Allergies' Status/
+    Criticality/Severity Observation lookups match by templateId (see
+    find_nested_observation below) - genuinely different match criteria on
+    top of the same traversal, not one duplicating the other by accident,
+    so callers apply their own match test rather than this function
+    guessing which one to use."""
+    for relationship in find_all(parent, "entryRelationship"):
+        if relationship.get("typeCode") != type_code:
+            continue
+        observation = find_child(relationship, "observation")
+        if observation is not None:
+            yield observation
+
+
+def find_nested_observation(parent, type_code: str, template_id: str):
+    """templateId-matching convenience wrapper over
+    iter_nested_observations - the "check the relationship type, not just
+    the nested templateId" discipline this app needs whenever a
+    wrongly-typed relationship's nested element could otherwise falsely
+    match a templateId check alone (see CLAUDE.md's Problems-section
+    history of exactly this bug). Used by every Allergies nested-
+    observation lookup (Status/Criticality/Severity Observations)."""
+    for observation in iter_nested_observations(parent, type_code):
+        if has_template_id(observation, template_id):
+            return observation
+    return None
+
+
 def _build_identifier(id_element, fallback_system: str) -> Identifier | None:
     if id_element is None:
         return None

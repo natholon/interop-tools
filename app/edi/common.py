@@ -5,7 +5,9 @@ sets generally, not 270/271-specific, so this lives here rather than in
 either eligibility module - a future 276/277 builder reuses it directly."""
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
 from fhir.resources.R4B.codeableconcept import CodeableConcept
@@ -22,6 +24,8 @@ from fhir.resources.R4B.resource import Resource
 from app.edi.parser import Delimiters, HlLoop, Segment, component, element, find_segment, group_by_hl_hierarchy
 from app.fhir_models.builders import parse_hl7_date, parse_hl7_datetime
 from app.hl7.errors import MissingSegmentError
+from app.validation.common import not_in_future
+from app.validation.models import ValidationFinding
 
 # X12 270/271 (and, prospectively, other HL-hierarchy transaction sets)
 # carries no data element for "why are we asking" -
@@ -91,6 +95,22 @@ def is_837i_transaction(st03: str) -> bool:
 
 def is_837d_transaction(st03: str) -> bool:
     return ST03_837D_MARKER in st03.strip().upper()
+
+
+def resolve_837_variant(st03: str) -> str:
+    """Returns "837I", "837D", or "837P" (the default) - the single real
+    decision tree behind which 837 variant a given ST03 value indicates,
+    shared by registry.py::get_transaction_builder and validation.py's own
+    837-family dispatch so the two can never disagree about which family a
+    transaction belongs to. Previously each side wrote out the identical
+    is_837i_transaction -> is_837d_transaction -> default if/elif chain
+    independently, kept in sync by comment discipline alone rather than
+    shared code - promoted here once that duplication was flagged."""
+    if is_837i_transaction(st03):
+        return "837I"
+    if is_837d_transaction(st03):
+        return "837D"
+    return "837P"
 
 
 # The system URI used for a Reference-by-identifier back to BHT03 (both
@@ -366,6 +386,154 @@ def build_place_of_service_from_clm05(clm: Segment, delimiters: Delimiters) -> C
     return CodeableConcept(coding=[Coding(system=POS_CODE_SYSTEM, code=facility_code)])
 
 
+# HL03 level codes shared by all three 837 variants (Professional/
+# Institutional/Dental) - "20"/"22"/"23" here mean Billing Provider/
+# Subscriber/Patient, a genuinely different semantic role than 270/271/278's
+# own "20"/"22"/"23" (Information Source/Subscriber/Dependent) despite the
+# numeric coincidence (see each 837 builder's own module docstring for the
+# "don't assume a numeric HL03 code carries the same meaning across TR3s"
+# discipline this reflects) - kept as their own named constants here rather
+# than reused from HL_INFORMATION_SOURCE/HL_SUBSCRIBER/HL_DEPENDENT above,
+# to avoid implying a shared semantic that doesn't exist.
+_HL_837_BILLING_PROVIDER = "20"
+_HL_837_SUBSCRIBER = "22"
+_HL_837_PATIENT = "23"
+
+_NM1_837_BILLING_PROVIDER = "85"
+_NM1_837_SUBSCRIBER = "IL"
+_NM1_837_PAYER = "PR"
+_NM1_837_PATIENT = "QC"
+
+
+def find_nm1_by_entity_code(segments: list[Segment], entity_code: str) -> Segment | None:
+    """NM1 entity identifier code (element 98) lookup, scoped to a specific
+    loop's own flat member list - multiple NM1 segments with different
+    entity codes can appear within one HL loop (e.g. 837's subscriber loop
+    carries both NM1*IL and NM1*PR), so every 837-family caller filters by
+    entity code rather than taking "the first NM1" blindly. Promoted here
+    once claim_837d.py became a third independently-tested consumer of the
+    identical one-line helper claim_837p.py/claim_837i.py each defined
+    privately - also used by each builder's own rendering/attending
+    provider lookup (NM1*82/NM1*71), not just inside resolve_837_loops."""
+    return next((seg for seg in segments if seg[0] == "NM1" and element(seg, 1) == entity_code), None)
+
+
+# DTP01 (Date/Time Qualifier) - "472" is Service Date, the only DTP any 837
+# variant's own item-building code reads. A 2400 loop's member list can
+# carry other DTP-qualified segments too (e.g. "463" Prescription Date on a
+# DME line) - filtering by DTP01 rather than taking "the first DTP" avoids
+# silently attributing a differently-qualified date to servicedDate, the
+# same "check the specific qualifier, don't just grab the first segment of
+# this type" discipline STC01/TXA dedup already established elsewhere in
+# this app. Public - each family's own *_validation.py service-date rule
+# must filter the identical way, so validation can never disagree with
+# conversion about which DTP counts. Promoted here once claim_837d.py
+# became a third real consumer of the identical one-line lookup.
+DTP_SERVICE_DATE = "472"
+
+
+def find_dtp_by_qualifier(segments: list[Segment], qualifier: str) -> Segment | None:
+    return next((seg for seg in segments if seg[0] == "DTP" and element(seg, 1) == qualifier), None)
+
+
+@dataclass
+class Resolved837Loops:
+    """Everything any 837 variant's build_bundle() needs from its 2000A-
+    2000C loop walk - promoted here once claim_837d.py became a third
+    independently-tested implementation of the identical algorithm
+    claim_837p.py/claim_837i.py each carried privately (see each builder's
+    own module docstring for why the promotion was deferred until a third,
+    genuinely proven consumer existed rather than assumed identical from
+    two).
+
+    `claim_loop` and `patient_is_dependent` are deliberately gated
+    *independently*, unlike 270/271/278's own dependent-loop resolvers:
+    `claim_loop` is resolved purely structurally (the 2000C loop whenever
+    HL03="23" was emitted at all, regardless of whether its own NM1
+    resolves) since CLM/HI/service lines are physically nested wherever
+    that HL loop's members actually are - X12 doesn't re-attribute them to
+    2000B just because 2000C's NM1 happens to be malformed, so this
+    resolver can't either. `patient_is_dependent` (and `patient_nm1`/
+    `patient_dmg`) instead gate *which Patient resource* is "the patient"
+    for `Claim.patient`/`Coverage.beneficiary` - only true when the 2000C
+    loop's own NM1*QC actually resolves. Getting this wrong (reusing a
+    single combined gate) let a malformed-but-present 2000C loop's own CLM
+    go invisible to build_bundle() once already, for 837P - caught before
+    commit by a regression test, not a later review."""
+
+    billing_provider_loop: HlLoop
+    subscriber_loop: HlLoop
+    claim_loop: HlLoop
+    billing_provider_nm1: Segment
+    subscriber_nm1: Segment
+    subscriber_dmg: Segment | None
+    payer_nm1: Segment
+    patient_nm1: Segment | None
+    patient_dmg: Segment | None
+    patient_is_dependent: bool
+
+
+def resolve_837_loops(segments: list[Segment], transaction_set_id: str) -> Resolved837Loops:
+    """Walk the strict 2000A(20)->2000B(22)->[2000C(23)] parent chain every
+    837 variant (Professional/Institutional/Dental) requires - identical
+    across all three, confirmed genuinely (not assumed) by each variant's
+    own real X12.org-published example. See Resolved837Loops' own
+    docstring for why claim_loop/patient_is_dependent are gated
+    independently."""
+    roots = group_by_hl_hierarchy(segments)
+    billing_provider_loop = next((loop for loop in roots if loop.hl03 == _HL_837_BILLING_PROVIDER), None)
+    if billing_provider_loop is None:
+        raise MissingSegmentError(f"{transaction_set_id} transaction set is missing its 2000A Billing Provider loop")
+
+    subscriber_loop = next(
+        (child for child in billing_provider_loop.children if child.hl03 == _HL_837_SUBSCRIBER), None
+    )
+    if subscriber_loop is None:
+        raise MissingSegmentError(f"{transaction_set_id} transaction set is missing its 2000B Subscriber loop")
+
+    billing_provider_nm1 = find_nm1_by_entity_code(billing_provider_loop.member_segments, _NM1_837_BILLING_PROVIDER)
+    if billing_provider_nm1 is None:
+        raise MissingSegmentError(f"{transaction_set_id} 2000A loop is missing its NM1*85 (billing provider) segment")
+
+    subscriber_nm1 = find_nm1_by_entity_code(subscriber_loop.member_segments, _NM1_837_SUBSCRIBER)
+    if subscriber_nm1 is None:
+        raise MissingSegmentError(f"{transaction_set_id} 2000B loop is missing its NM1*IL (subscriber) segment")
+    subscriber_dmg = find_segment(subscriber_loop.member_segments, "DMG")
+
+    payer_nm1 = find_nm1_by_entity_code(subscriber_loop.member_segments, _NM1_837_PAYER)
+    if payer_nm1 is None:
+        raise MissingSegmentError(f"{transaction_set_id} 2000B loop is missing its NM1*PR (payer) segment")
+
+    # claim_loop is resolved structurally (loop presence), independent of
+    # whether that loop's own NM1 resolves - see Resolved837Loops' own
+    # docstring for why this must NOT reuse the "no NM1 -> treat loop as
+    # absent" gate every other EDI family's dependent-loop resolver uses.
+    patient_loop = next((child for child in subscriber_loop.children if child.hl03 == _HL_837_PATIENT), None)
+    claim_loop = patient_loop if patient_loop is not None else subscriber_loop
+
+    patient_nm1 = None
+    patient_dmg = None
+    patient_is_dependent = False
+    if patient_loop is not None:
+        patient_nm1 = find_nm1_by_entity_code(patient_loop.member_segments, _NM1_837_PATIENT)
+        if patient_nm1 is not None:
+            patient_dmg = find_segment(patient_loop.member_segments, "DMG")
+            patient_is_dependent = True
+
+    return Resolved837Loops(
+        billing_provider_loop=billing_provider_loop,
+        subscriber_loop=subscriber_loop,
+        claim_loop=claim_loop,
+        billing_provider_nm1=billing_provider_nm1,
+        subscriber_nm1=subscriber_nm1,
+        subscriber_dmg=subscriber_dmg,
+        payer_nm1=payer_nm1,
+        patient_nm1=patient_nm1,
+        patient_dmg=patient_dmg,
+        patient_is_dependent=patient_is_dependent,
+    )
+
+
 def is_person_entity(nm1: Segment) -> bool:
     """NM102 (Entity Type Qualifier): "1" = Person, "2" = Non-Person Entity
     (organization). Callers use this to decide whether a given NM1 loop
@@ -491,3 +659,62 @@ def assemble_bundle(bht: Segment, *resources: Resource) -> Bundle:
 
     bundle.entry = [BundleEntry(fullUrl=f"urn:uuid:{resource.id}", resource=resource) for resource in resources]
     return bundle
+
+
+# The two helpers below build ValidationFinding objects, unlike everything
+# else in this module - a deliberate, established exception to "common.py
+# is conversion-shared logic," not scope creep: every *_validation.py
+# module in this package already imports non-Finding conversion helpers
+# from here directly (resolve_eligibility_parties, iter_diagnosis_hi_
+# segments, ...) specifically so validation can never see a different
+# segment set than conversion does, so this module has already been a
+# validation consumer's dependency from the start. Promoting the two
+# rule shapes that turned out to be genuinely identical across 6 (missing
+# subscriber name) and 3 (service date in future) sibling *_validation.py
+# files here - rather than a new module just for these two functions -
+# keeps that single existing dependency direction intact instead of adding
+# a second shared-helpers module for EDI validation alone.
+
+
+def build_missing_subscriber_name_finding(
+    rule_id: str, segment_path: str, subscriber_nm1: Segment
+) -> ValidationFinding | None:
+    """The "subscriber's NM1 has no resolvable name" info finding, body-
+    identical (modulo rule_id/segment_path) across all six EDI families
+    with a subscriber loop (270, 276, 278, 837P, 837I, 837D) - each family's
+    own segment_path differs only because loop depth differs (e.g. 270's
+    2000C vs 837's 2000B), not because the check itself differs."""
+    if element(subscriber_nm1, 3) or element(subscriber_nm1, 4):
+        return None
+    return ValidationFinding(
+        severity="info",
+        rule_id=rule_id,
+        segment=segment_path,
+        message="The subscriber's NM1 segment has no resolvable name - the converter will still build a Patient, just with no HumanName.",
+    )
+
+
+def check_service_lines_for_future_date(
+    service_lines: list[tuple[Segment, list[Segment]]],
+    resolve_raw_date: Callable[[list[Segment]], str | None],
+    rule_id: str,
+    segment_path: str,
+    message: str,
+    now: datetime,
+) -> list[ValidationFinding]:
+    """The "a service line's date is in the future" warning, body-identical
+    (modulo how each family resolves a line's own raw date string) across
+    837P/837I/837D - `resolve_raw_date` is where the three genuinely
+    diverge: 837P/837I resolve strictly from that line's own DTP*472, while
+    837D additionally falls back to one claim-level DTP*472 default when
+    the line has none of its own (see claim_837d.py's own
+    resolve_line_dtp_raw_date), a real structural difference the other two
+    don't have. Returns as soon as the first future-dated line is found,
+    matching every sibling rule's own "one finding is enough" precedent."""
+    for _leader, members in service_lines:
+        raw_date = resolve_raw_date(members)
+        if not raw_date:
+            continue
+        if not_in_future(raw_date, now) is False:
+            return [ValidationFinding(severity="warning", rule_id=rule_id, segment=segment_path, message=message)]
+    return []

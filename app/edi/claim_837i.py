@@ -24,19 +24,22 @@ loop shape is genuinely identical to 837P's, not coincidentally similar:
 2000A (HL03="20", Billing Provider, `NM1*85`), 2000B (HL03="22",
 Subscriber, `NM1*IL`+`DMG`, with the payer `NM1*PR` nested inside this same
 loop's own members - not its own root loop), 2000C (HL03="23", Patient,
-optional, `NM1*QC`+`DMG`). This module has its own `resolve_837i_loops()`
-rather than importing `claim_837p.py`'s `resolve_837p_loops()` directly -
-deliberately, not an oversight: this codebase's own established discipline
-is "extract a shared helper only once a second real, independently-tested
-consumer exists," and pre-emptively coupling this module to 837P's
-resolver before 837I's own test suite has independently proven every edge
-case (the `claim_loop`/`patient_is_dependent` two-gate split in particular)
-would risk the exact "assumed-identical, actually diverged" trap that
-prompted extracting `build_coverage`/`build_diagnosis_codeable_concepts`
-in the first place - if a follow-up review or a real 837I edge case proves
-the *entire* resolver genuinely identical (not just the happy path this
-one real example exercises), promoting it to `common.py` is the natural
-next step, matching that same precedent.
+optional, `NM1*QC`+`DMG`). At the time this module was written it kept its
+own `resolve_837i_loops()` rather than importing `claim_837p.py`'s
+directly - deliberately, not an oversight: this codebase's own established
+discipline is "extract a shared helper only once a second real,
+independently-tested consumer exists," and pre-emptively coupling this
+module to 837P's resolver before 837I's own test suite had independently
+proven every edge case (the `claim_loop`/`patient_is_dependent` two-gate
+split in particular) would have risked the exact "assumed-identical,
+actually diverged" trap that prompted extracting `build_coverage`/
+`build_diagnosis_codeable_concepts` in the first place. `claim_837d.py`
+became that third, independently-tested consumer once it shipped, proving
+the resolver (and the trivially-duplicated `find_nm1_by_entity_code`/
+`find_dtp_by_qualifier`/`DTP_SERVICE_DATE` alongside it) genuinely
+identical across all three variants, not just superficially similar -
+`resolve_837_loops()`/`Resolved837Loops` now live in `common.py`, shared
+by all three 837 builders.
 
 **Where 837I genuinely diverges from 837P - confirmed by the same real
 example, not assumed from the family name alone:**
@@ -122,7 +125,6 @@ mapped FHIR target this slice (see above); `SV206`/`SV207` (non-covered
 charges) are not read."""
 
 import uuid
-from dataclasses import dataclass
 
 from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.claim import Claim, ClaimCareTeam, ClaimDiagnosis, ClaimInsurance, ClaimItem, ClaimSupportingInfo
@@ -136,25 +138,27 @@ from fhir.resources.R4B.resource import Resource
 
 from app.edi.base import EdiTransactionBuilder
 from app.edi.common import (
+    DTP_SERVICE_DATE,
     assemble_bundle,
     build_coverage,
     build_diagnosis_codeable_concepts,
     build_organization_from_nm1,
     build_patient_from_nm1_dmg,
     build_practitioner_from_nm1,
+    find_dtp_by_qualifier,
+    find_nm1_by_entity_code,
     is_person_entity,
     iter_diagnosis_hi_segments,
     parse_x12_datetime,
+    resolve_837_loops,
 )
 from app.edi.parser import (
     Delimiters,
-    HlLoop,
     Segment,
     TransactionSet,
     component,
     element,
     find_segment,
-    group_by_hl_hierarchy,
     group_by_leader,
     parse_decimal,
 )
@@ -163,18 +167,6 @@ from app.hl7.errors import MappingError, MissingSegmentError
 
 TRANSACTION_SET_ID = "837"
 
-# Same HL03 level codes as claim_837p.py, kept as this module's own local
-# constants for the same reason that module's own bullet gives (not
-# reused from common.py's HL_INFORMATION_SOURCE/HL_SUBSCRIBER, since their
-# meaning here is Billing Provider/Subscriber, not Information Source).
-_HL_BILLING_PROVIDER = "20"
-_HL_SUBSCRIBER = "22"
-_HL_PATIENT = "23"
-
-_NM1_BILLING_PROVIDER = "85"
-_NM1_SUBSCRIBER = "IL"
-_NM1_PAYER = "PR"
-_NM1_PATIENT = "QC"
 _NM1_ATTENDING_PROVIDER = "71"
 
 # NUBC Revenue Codes - a real, verified FHIR-canonical CodeSystem
@@ -207,96 +199,13 @@ _DISCHARGE_STATUS_CATEGORY = "discharge"
 _DISCHARGE_STATUS_CODE_SYSTEM = "https://www.nubc.org/CodeSystem/PatDischargeStatus"
 
 
-@dataclass
-class Resolved837iLoops:
-    """Mirrors claim_837p.py's own Resolved837pLoops field-for-field - see
-    that dataclass's docstring for why claim_loop/patient_is_dependent are
-    gated independently. Kept as this module's own type (not reused
-    directly) since resolve_837i_loops() is this module's own independent
-    implementation, per the module docstring's own "extract on second use,
-    once proven" reasoning."""
-
-    billing_provider_loop: HlLoop
-    subscriber_loop: HlLoop
-    claim_loop: HlLoop
-    billing_provider_nm1: Segment
-    subscriber_nm1: Segment
-    subscriber_dmg: Segment | None
-    payer_nm1: Segment
-    patient_nm1: Segment | None
-    patient_dmg: Segment | None
-    patient_is_dependent: bool
-
-
-def _find_nm1(segments: list[Segment], entity_code: str) -> Segment | None:
-    return next((seg for seg in segments if seg[0] == "NM1" and element(seg, 1) == entity_code), None)
-
-
-# Public - claim_837i_validation.py's own service-date-in-future rule must
-# filter DTP the identical way, or it could report on (or silently ignore)
-# a DTP the real builder would never even read (see claim_837p.py's own
-# find_dtp_by_qualifier/DTP_SERVICE_DATE for the precedent this mirrors).
-DTP_SERVICE_DATE = "472"
-
-
-def find_dtp_by_qualifier(segments: list[Segment], qualifier: str) -> Segment | None:
-    return next((seg for seg in segments if seg[0] == "DTP" and element(seg, 1) == qualifier), None)
-
-
-def resolve_837i_loops(segments: list[Segment], transaction_set_id: str) -> Resolved837iLoops:
-    """Walk the strict 2000A(20)->2000B(22)->[2000C(23)] parent chain an
-    837I transaction set requires - see claim_837p.py::resolve_837p_loops
-    for the identical algorithm and the reasoning behind every design
-    choice in it (claim_loop resolved structurally regardless of NM1
-    validity, payer read from the subscriber loop's own members, etc.)."""
-    roots = group_by_hl_hierarchy(segments)
-    billing_provider_loop = next((loop for loop in roots if loop.hl03 == _HL_BILLING_PROVIDER), None)
-    if billing_provider_loop is None:
-        raise MissingSegmentError(f"{transaction_set_id} transaction set is missing its 2000A Billing Provider loop")
-
-    subscriber_loop = next(
-        (child for child in billing_provider_loop.children if child.hl03 == _HL_SUBSCRIBER), None
-    )
-    if subscriber_loop is None:
-        raise MissingSegmentError(f"{transaction_set_id} transaction set is missing its 2000B Subscriber loop")
-
-    billing_provider_nm1 = _find_nm1(billing_provider_loop.member_segments, _NM1_BILLING_PROVIDER)
-    if billing_provider_nm1 is None:
-        raise MissingSegmentError(f"{transaction_set_id} 2000A loop is missing its NM1*85 (billing provider) segment")
-
-    subscriber_nm1 = _find_nm1(subscriber_loop.member_segments, _NM1_SUBSCRIBER)
-    if subscriber_nm1 is None:
-        raise MissingSegmentError(f"{transaction_set_id} 2000B loop is missing its NM1*IL (subscriber) segment")
-    subscriber_dmg = find_segment(subscriber_loop.member_segments, "DMG")
-
-    payer_nm1 = _find_nm1(subscriber_loop.member_segments, _NM1_PAYER)
-    if payer_nm1 is None:
-        raise MissingSegmentError(f"{transaction_set_id} 2000B loop is missing its NM1*PR (payer) segment")
-
-    patient_loop = next((child for child in subscriber_loop.children if child.hl03 == _HL_PATIENT), None)
-    claim_loop = patient_loop if patient_loop is not None else subscriber_loop
-
-    patient_nm1 = None
-    patient_dmg = None
-    patient_is_dependent = False
-    if patient_loop is not None:
-        patient_nm1 = _find_nm1(patient_loop.member_segments, _NM1_PATIENT)
-        if patient_nm1 is not None:
-            patient_dmg = find_segment(patient_loop.member_segments, "DMG")
-            patient_is_dependent = True
-
-    return Resolved837iLoops(
-        billing_provider_loop=billing_provider_loop,
-        subscriber_loop=subscriber_loop,
-        claim_loop=claim_loop,
-        billing_provider_nm1=billing_provider_nm1,
-        subscriber_nm1=subscriber_nm1,
-        subscriber_dmg=subscriber_dmg,
-        payer_nm1=payer_nm1,
-        patient_nm1=patient_nm1,
-        patient_dmg=patient_dmg,
-        patient_is_dependent=patient_is_dependent,
-    )
+# Resolved837iLoops/resolve_837i_loops/_find_nm1/find_dtp_by_qualifier/
+# DTP_SERVICE_DATE were promoted to app/edi/common.py as
+# Resolved837Loops/resolve_837_loops/find_nm1_by_entity_code/
+# find_dtp_by_qualifier/DTP_SERVICE_DATE once claim_837d.py became a third
+# independently-tested implementation of the identical algorithm - see
+# common.py's own Resolved837Loops docstring for the full reasoning
+# (unchanged from what lived here before the promotion).
 
 
 def _build_procedure_concept(sv2_02: str, delimiters: Delimiters) -> CodeableConcept | None:
@@ -361,7 +270,7 @@ class Edi837iBuilder(EdiTransactionBuilder):
         if bht is None:
             raise MissingSegmentError(f"{self.transaction_set_id} transaction set is missing its BHT segment")
 
-        loops = resolve_837i_loops(transaction_set.segments, self.transaction_set_id)
+        loops = resolve_837_loops(transaction_set.segments, self.transaction_set_id)
 
         billing_provider: Resource = (
             build_practitioner_from_nm1(loops.billing_provider_nm1)
@@ -393,7 +302,7 @@ class Edi837iBuilder(EdiTransactionBuilder):
         cl1 = find_segment(loops.claim_loop.member_segments, "CL1")
         supporting_info = _build_discharge_status_supporting_info(cl1, sequence=1)
 
-        attending_nm1 = _find_nm1(loops.claim_loop.member_segments, _NM1_ATTENDING_PROVIDER)
+        attending_nm1 = find_nm1_by_entity_code(loops.claim_loop.member_segments, _NM1_ATTENDING_PROVIDER)
         attending_provider: Resource | None = None
         if attending_nm1 is not None:
             attending_provider = (

@@ -4,20 +4,8 @@ app/edi/generator.py's own docstring describes."""
 
 import random
 
-from app.edi.generator import (
-    ICD10_DIAGNOSIS_CODES,
-    PAYER_NAMES,
-    PROVIDER_ORG_NAMES,
-    EdiDraft,
-    assemble_generated_interchange,
-    build_dmg,
-    build_isa,
-    build_org_nm1,
-    build_person_nm1,
-    format_x12_date,
-    format_x12_time,
-)
-from app.generators.base import maybe, random_datetime_near_now, random_identifier, random_sex
+from app.edi.generator import ICD10_DIAGNOSIS_CODES, assemble_generated_interchange, build_837_envelope, build_person_nm1, format_x12_date
+from app.generators.base import maybe, random_identifier, random_sex
 
 # CLM05-1 (institutional Facility Type Code, UB-04 Type of Bill's first two
 # digits) - a representative subset. Not mapped to any FHIR field this
@@ -89,52 +77,21 @@ def generate_837i(rng: random.Random) -> str:
     """Mirrors claim_837p_generator.py's own generate_837p almost exactly
     at the envelope/HL-hierarchy level (see claim_837i.py's own module
     docstring for why that top-level shape is genuinely, not
-    coincidentally, identical between the two families) - diverges once
-    the claim loop itself starts, per the same real structural differences
-    (CL1, split diagnosis/other-category HI segments, SV2 instead of SV1,
-    NM1*71 instead of NM1*82) claim_837i.py's own builder discloses."""
-    now = random_datetime_near_now(rng, min_days=-5, max_days=5)
-    sender_id = f"SENDER{random_identifier(rng, digits=4)}"
-    receiver_id = f"RECEIVER{random_identifier(rng, digits=4)}"
-    isa_control = random_identifier(rng, digits=9)
-    gs_control = random_identifier(rng, digits=6)
-    st_control = "0001"
-    bht_reference = random_identifier(rng, digits=8)
-
-    envelope_segments = [
-        build_isa(isa_control, sender_id, receiver_id, now),
-        f"GS*HC*{sender_id}*{receiver_id}*{format_x12_date(now)}*{format_x12_time(now)}*{gs_control}*X*005010X223A2~",
-    ]
-    st_to_hl_segments = [
-        # ST03 (Implementation Convention Reference) is what
-        # app/edi/registry.py::get_transaction_builder uses to tell 837I
-        # apart from 837P, both sharing the literal ST01="837" - always
-        # populated here, matching the real X12.org example this module
-        # was verified against (a real sender omitting it is disclosed and
-        # covered separately by test_get_transaction_builder_defaults_
-        # 837_to_professional_when_st03_absent, not by this generator).
-        f"ST*837*{st_control}*005010X223A2~",
-        f"BHT*0019*00*{bht_reference}*{format_x12_date(now)}*{format_x12_time(now)}*CH~",
-        "HL*1**20*1~",
-    ]
-    if maybe(rng, 0.7):
-        st_to_hl_segments.append(build_org_nm1(rng, "85", PROVIDER_ORG_NAMES))
-    else:
-        st_to_hl_segments.append(build_person_nm1(rng, "85", random_sex(rng), include_id=True))
-
-    subscriber_sex = random_sex(rng)
-    st_to_hl_segments += ["HL*2*1*22*1~", "SBR*P*18*****MB~", build_person_nm1(rng, "IL", subscriber_sex, include_id=True)]
-    if maybe(rng, 0.7):
-        st_to_hl_segments.append(build_dmg(rng, subscriber_sex))
-    st_to_hl_segments.append(build_org_nm1(rng, "PR", PAYER_NAMES))
-
-    # A patient loop (2000C) is present ~40% of the time - same precedence
-    # rule as every other EDI family's dependent loop.
-    if maybe(rng, 0.4):
-        patient_sex = random_sex(rng)
-        st_to_hl_segments += ["HL*3*2*23*0~", build_person_nm1(rng, "QC", patient_sex, include_id=False)]
-        if maybe(rng, 0.7):
-            st_to_hl_segments.append(build_dmg(rng, patient_sex))
+    coincidentally, identical between the two families) - both share
+    app/edi/generator.py::build_837_envelope() for that portion now -
+    diverges once the claim loop itself starts, per the same real
+    structural differences (CL1, split diagnosis/other-category HI
+    segments, SV2 instead of SV1, NM1*71 instead of NM1*82) claim_837i.py's
+    own builder discloses. ST03 (Implementation Convention Reference) is
+    what app/edi/registry.py::get_transaction_builder uses to tell 837I
+    apart from 837P, both sharing the literal ST01="837" - always populated
+    here, matching the real X12.org example this module was verified
+    against (a real sender omitting it is disclosed and covered separately
+    by test_get_transaction_builder_defaults_837_to_professional_when_
+    st03_absent, not by this generator)."""
+    draft = build_837_envelope(rng, "005010X223A2", billing_org_probability=0.7, sbr_segment="SBR*P*18*****MB~", include_pat_segment=False)
+    now = draft.now
+    st_to_hl_segments = draft.st_to_hl_segments
 
     charge = round(rng.uniform(100, 5000), 2)
     facility_type = rng.choice(_FACILITY_TYPE_CODES)
@@ -162,8 +119,4 @@ def generate_837i(rng: random.Random) -> str:
         if maybe(rng, 0.8):
             st_to_hl_segments.append(f"DTP*472*D8*{format_x12_date(now)}~")
 
-    return assemble_generated_interchange(
-        rng,
-        EdiDraft(envelope_segments, st_to_hl_segments, now, st_control, gs_control, isa_control),
-        [],
-    )
+    return assemble_generated_interchange(rng, draft, [])

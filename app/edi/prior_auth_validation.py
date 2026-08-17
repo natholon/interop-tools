@@ -3,6 +3,7 @@ same file-per-family reorganization eligibility_validation.py describes.
 `app/edi/validation.py`'s `validate_interchange` calls `validate_278`
 below."""
 
+from app.edi.common import build_missing_subscriber_name_finding
 from app.edi.parser import TransactionSet, element, find_segment
 from app.edi.prior_auth import BHT02_RESPONSE, HCR01_TO_OUTCOME, ResolvedPriorAuthLoops, resolve_prior_auth_loops
 from app.hl7.errors import MissingSegmentError
@@ -25,16 +26,8 @@ def _rule_278_missing_subscriber_name(transaction_set: TransactionSet) -> list[V
     loops = _find_prior_auth_loops(transaction_set)
     if loops is None:
         return []
-    if not element(loops.subscriber_nm1, 3) and not element(loops.subscriber_nm1, 4):
-        return [
-            ValidationFinding(
-                severity="info",
-                rule_id="edi.278-missing-subscriber-name",
-                segment="2000C/NM1",
-                message="The subscriber's NM1 segment has no resolvable name - the converter will still build a Patient, just with no HumanName.",
-            )
-        ]
-    return []
+    finding = build_missing_subscriber_name_finding("edi.278-missing-subscriber-name", "2000C/NM1", loops.subscriber_nm1)
+    return [finding] if finding else []
 
 
 def _is_prior_auth_response(transaction_set: TransactionSet) -> bool:

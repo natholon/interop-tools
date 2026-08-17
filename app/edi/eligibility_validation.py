@@ -8,7 +8,7 @@ that calls `validate_270`/`validate_271` below."""
 
 from datetime import datetime
 
-from app.edi.common import resolve_eligibility_parties
+from app.edi.common import build_missing_subscriber_name_finding, resolve_eligibility_parties
 from app.edi.parser import Segment, TransactionSet, element, group_by_leader
 from app.hl7.errors import MissingSegmentError
 from app.validation.common import not_in_future
@@ -38,17 +38,8 @@ def _rule_270_missing_subscriber_name(transaction_set: TransactionSet) -> list[V
         parties = resolve_eligibility_parties(transaction_set.segments, transaction_set.st01)
     except MissingSegmentError:
         return []
-    nm1 = parties.subscriber_nm1
-    if not element(nm1, 3) and not element(nm1, 4):
-        return [
-            ValidationFinding(
-                severity="info",
-                rule_id="edi.270-missing-subscriber-name",
-                segment="2000C/NM1",
-                message="The subscriber's NM1 segment has no resolvable name - the converter will still build a Patient, just with no HumanName.",
-            )
-        ]
-    return []
+    finding = build_missing_subscriber_name_finding("edi.270-missing-subscriber-name", "2000C/NM1", parties.subscriber_nm1)
+    return [finding] if finding else []
 
 
 def _rule_270_serviced_date_in_future(transaction_set: TransactionSet, now: datetime) -> list[ValidationFinding]:

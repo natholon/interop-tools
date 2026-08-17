@@ -11,9 +11,32 @@ def _normalize_segment_separators(raw_text: str) -> str:
     return "\r".join(line for line in text.split("\n") if line.strip() != "")
 
 
+def _truncate_to_first_message(normalized_text: str) -> str:
+    """A real HL7v2 file can be a batch - multiple MSH-led messages
+    concatenated back to back, with no wrapper segments (BHS/BTS) this app
+    recognizes. hl7.parse() has no MSH-boundary awareness at all: it
+    happily parses every segment from every concatenated message into one
+    single Message object, so a repeating-segment lookup
+    (optional_segments/group_segments_by_leader, used for OBX/NTE/AIP/...)
+    would silently pull matching segments from every message in the batch
+    into one Bundle - a real correctness hazard, not just a batching
+    inconvenience, since a caller has no way to tell the result apart from
+    a single message with an unusually large number of repeating segments.
+    Mirrors this app's own established "process only the first, disclosed
+    rather than silent" precedent for batched input (see
+    app/edi/parser.py::first_transaction_set's identical scope limit for
+    X12) - truncate to the segments before the second MSH, if a second one
+    is present, before parsing even begins."""
+    segments = normalized_text.split("\r")
+    msh_indices = [i for i, seg in enumerate(segments) if seg.startswith("MSH")]
+    if len(msh_indices) < 2:
+        return normalized_text
+    return "\r".join(segments[: msh_indices[1]])
+
+
 def parse_message(raw_text: str) -> hl7.Message:
     """Parse raw HL7v2 text into an hl7.Message, or raise Hl7ParseError."""
-    normalized = _normalize_segment_separators(raw_text)
+    normalized = _truncate_to_first_message(_normalize_segment_separators(raw_text))
     try:
         return hl7.parse(normalized)
     except hl7.exceptions.ParseException as exc:

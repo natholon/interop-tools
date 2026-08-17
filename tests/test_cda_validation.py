@@ -523,6 +523,15 @@ def test_immunization_occurrence_in_future_is_warning():
     assert finding.severity == "warning"
 
 
+def test_immunization_occurrence_before_birth_is_error():
+    entry = _immunization_entry(effective_time='<effectiveTime value="20100101"/>')
+    document = _doc(_patient(extra='<birthTime value="20200101"/>') + _immunizations_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.immunization-occurrence-before-birth")
+    assert finding.severity == "error"
+    assert report.is_valid is False
+
+
 def test_planned_immunization_int_mood_produces_no_findings():
     # INT-mood entries are out of scope for this slice and excluded from
     # the rule walk entirely - not flagged, same treatment an unrecognized

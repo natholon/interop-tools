@@ -11,7 +11,7 @@ from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, parse_partial_ts
+from app.cda.common import build_codeable_concept_from_cd, find_nested_observation, parse_partial_ts
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
 from app.cda.problems import STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS as _PROBLEM_STATUS_MAP
 
@@ -82,28 +82,13 @@ SEVERITY_MAP = {
 }
 
 
-def _find_nested_observation(parent, type_code: str, template_id: str):
-    """Find a nested observation via entryRelationship[@typeCode=type_code]
-    whose observation carries the given templateId - the same
-    typeCode-then-templateId guard app.cda.problems uses (checking only the
-    nested templateId, without the relationship typeCode, let a
-    wrongly-typed relationship falsely match once already - see CLAUDE.md)."""
-    for relationship in find_all(parent, "entryRelationship"):
-        if relationship.get("typeCode") != type_code:
-            continue
-        observation = find_child(relationship, "observation")
-        if observation is not None and has_template_id(observation, template_id):
-            return observation
-    return None
-
-
 def _value_code(element) -> str | None:
     value_element = find_child(element, "value") if element is not None else None
     return value_element.get("code") if value_element is not None else None
 
 
 def _resolve_clinical_status(allergy_observation) -> CodeableConcept:
-    status_observation = _find_nested_observation(allergy_observation, "REFR", ALLERGY_STATUS_OBSERVATION_TEMPLATE_ID)
+    status_observation = find_nested_observation(allergy_observation, "REFR", ALLERGY_STATUS_OBSERVATION_TEMPLATE_ID)
     value_code = _value_code(status_observation)
     mapped = CLINICAL_STATUS_MAP.get(value_code) if value_code else None
     if mapped:
@@ -118,7 +103,7 @@ def _resolve_clinical_status(allergy_observation) -> CodeableConcept:
 
 
 def _resolve_criticality(allergy_observation) -> str | None:
-    criticality_observation = _find_nested_observation(
+    criticality_observation = find_nested_observation(
         allergy_observation, "SUBJ", CRITICALITY_OBSERVATION_TEMPLATE_ID
     )
     value_code = _value_code(criticality_observation)
@@ -141,7 +126,7 @@ def _build_reaction(reaction_observation) -> AllergyIntoleranceReaction | None:
     if onset_dt:
         reaction.onset = onset_dt
 
-    severity_observation = _find_nested_observation(reaction_observation, "SUBJ", SEVERITY_OBSERVATION_TEMPLATE_ID)
+    severity_observation = find_nested_observation(reaction_observation, "SUBJ", SEVERITY_OBSERVATION_TEMPLATE_ID)
     severity_code = _value_code(severity_observation)
     severity = SEVERITY_MAP.get(severity_code) if severity_code else None
     if severity:

@@ -10,7 +10,7 @@ from app.edi.claim_837d import Edi837dBuilder
 from app.edi.claim_837i import Edi837iBuilder
 from app.edi.claim_837p import Edi837pBuilder
 from app.edi.claim_status import Edi276Builder, Edi277Builder
-from app.edi.common import is_837d_transaction, is_837i_transaction
+from app.edi.common import resolve_837_variant
 from app.edi.eligibility_270 import Edi270Builder
 from app.edi.eligibility_271 import Edi271Builder
 from app.edi.prior_auth import Edi278Builder
@@ -44,10 +44,13 @@ def get_transaction_builder(st01: str, st03: str = "") -> EdiTransactionBuilder:
     purpose, "ST03 will always take precedence over GS08" per multiple
     companion guides, and, unlike GS08, local to the ST segment itself so
     no change to Interchange/FunctionalGroup's own parsed shape was
-    needed) is checked via the shared `common.py::is_837i_transaction`/
-    `is_837d_transaction` - shared, not declared locally here, since
-    `app/edi/validation.py` needs the identical checks for its own
-    837-family rule dispatch and both sides must never disagree. `st03` is
+    needed) is resolved via the shared `common.py::resolve_837_variant` -
+    shared, not a locally-written if/elif chain, since `app/edi/
+    validation.py` needs the identical decision tree for its own
+    837-family rule dispatch and both sides must never disagree (an
+    earlier version had each side write out its own copy of the same
+    is_837i_transaction -> is_837d_transaction -> default chain, kept in
+    sync by comment discipline alone rather than shared code). `st03` is
     situational (a real, disclosed possibility - not every real-world
     sender populates it) - when absent or unrecognized, this defaults to
     `Edi837pBuilder` (Professional), the dominant real-world 837 variant
@@ -61,9 +64,10 @@ def get_transaction_builder(st01: str, st03: str = "") -> EdiTransactionBuilder:
     comparable "identifying field missing" cases elsewhere."""
     normalized_st01 = st01.strip().upper()
     if normalized_st01 == "837":
-        if is_837i_transaction(st03):
+        variant = resolve_837_variant(st03)
+        if variant == "837I":
             return Edi837iBuilder()
-        if is_837d_transaction(st03):
+        if variant == "837D":
             return Edi837dBuilder()
         return Edi837pBuilder()
 

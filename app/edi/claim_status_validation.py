@@ -6,6 +6,7 @@ same file-per-family reorganization eligibility_validation.py describes.
 from datetime import datetime
 
 from app.edi.claim_status import STC_CATEGORY_PREFIX_TO_TASK_STATUS, ResolvedClaimStatusLoops, resolve_claim_status_loops
+from app.edi.common import build_missing_subscriber_name_finding
 from app.edi.parser import Delimiters, Segment, TransactionSet, component, element, find_segment, group_by_leader
 from app.hl7.errors import MissingSegmentError
 from app.validation.common import not_in_future
@@ -33,16 +34,8 @@ def _rule_276_missing_subscriber_name(transaction_set: TransactionSet) -> list[V
     # loops (which raises MissingSegmentError itself otherwise, already
     # caught above) - only the "present but blank name" case reaches here,
     # matching eligibility_validation.py's identical guarantee.
-    if not element(loops.subscriber_nm1, 3) and not element(loops.subscriber_nm1, 4):
-        return [
-            ValidationFinding(
-                severity="info",
-                rule_id="edi.276-missing-subscriber-name",
-                segment="2000D/NM1",
-                message="The subscriber's NM1 segment has no resolvable name - the converter will still build a Patient, just with no HumanName.",
-            )
-        ]
-    return []
+    finding = build_missing_subscriber_name_finding("edi.276-missing-subscriber-name", "2000D/NM1", loops.subscriber_nm1)
+    return [finding] if finding else []
 
 
 def _iter_claim_status_stc(transaction_set: TransactionSet) -> list[Segment]:

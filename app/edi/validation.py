@@ -38,7 +38,7 @@ from app.edi.claim_837d_validation import validate_837d
 from app.edi.claim_837i_validation import validate_837i
 from app.edi.claim_837p_validation import validate_837p
 from app.edi.claim_status_validation import validate_276, validate_277
-from app.edi.common import is_837d_transaction, is_837i_transaction
+from app.edi.common import resolve_837_variant
 from app.edi.eligibility_validation import validate_270, validate_271
 from app.edi.parser import Delimiters, Interchange, TransactionSet, element, first_transaction_set
 from app.edi.prior_auth_validation import validate_278
@@ -227,12 +227,14 @@ def validate_interchange(interchange: Interchange) -> ValidationReport:
         elif normalized_st01 == "837":
             # Mirrors app/edi/registry.py::get_transaction_builder's own
             # 837P-vs-837I-vs-837D dispatch exactly, via the shared
-            # common.py::is_837i_transaction/is_837d_transaction - so
-            # validation can never disagree with conversion about which
-            # variant a given ST03 value indicates.
-            if is_837i_transaction(transaction_set.st03):
+            # common.py::resolve_837_variant - the same decision tree, not
+            # just the same leaf predicates, so validation can never
+            # disagree with conversion about which variant a given ST03
+            # value indicates.
+            variant = resolve_837_variant(transaction_set.st03)
+            if variant == "837I":
                 findings.extend(validate_837i(transaction_set, interchange.delimiters, now))
-            elif is_837d_transaction(transaction_set.st03):
+            elif variant == "837D":
                 findings.extend(validate_837d(transaction_set, interchange.delimiters, now))
             else:
                 findings.extend(validate_837p(transaction_set, interchange.delimiters, now))

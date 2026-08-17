@@ -25,7 +25,7 @@ _837D_BODY = [
     "NM1*85*1*JONES*BEN****XX*1999996666~",
     "HL*2*1*22*0~",
     "NM1*IL*1*SMITH*JANE****MI*111223333~",
-    "NM1*PR*2*DELTA DENTAL****PI*00435~",
+    "NM1*PR*2*DELTA DENTAL*****PI*00435~",
     "CLM*756048Q*89.93***11:B:1*Y*A*Y*I~",
     "HI*ABK:K0201~",
     "DTP*472*D8*20260810~",
@@ -64,7 +64,7 @@ def test_837d_missing_subscriber_name_is_info():
         "NM1*85*1*JONES*BEN****XX*1999996666~",
         "HL*2*1*22*0~",
         "NM1*IL*1~",
-        "NM1*PR*2*DELTA DENTAL****PI*00435~",
+        "NM1*PR*2*DELTA DENTAL*****PI*00435~",
         "CLM*756048Q*89.93***11:B:1*Y*A*Y*I~",
     ]
     report = validate_interchange(parse_interchange(_build(body)))
@@ -80,7 +80,7 @@ def test_837d_missing_diagnosis_is_info():
         "NM1*85*1*JONES*BEN****XX*1999996666~",
         "HL*2*1*22*0~",
         "NM1*IL*1*SMITH*JANE****MI*111223333~",
-        "NM1*PR*2*DELTA DENTAL****PI*00435~",
+        "NM1*PR*2*DELTA DENTAL*****PI*00435~",
         "CLM*756048Q*89.93***11:B:1*Y*A*Y*I~",
         # No HI segment at all - the common real-world dental shape.
     ]
@@ -101,7 +101,7 @@ def test_837d_missing_diagnosis_is_info_when_only_non_diagnosis_hi_present():
         "NM1*85*1*JONES*BEN****XX*1999996666~",
         "HL*2*1*22*0~",
         "NM1*IL*1*SMITH*JANE****MI*111223333~",
-        "NM1*PR*2*DELTA DENTAL****PI*00435~",
+        "NM1*PR*2*DELTA DENTAL*****PI*00435~",
         "CLM*756048Q*89.93***11:B:1*Y*A*Y*I~",
         "HI*BG:09~",
     ]
@@ -117,7 +117,7 @@ def test_837d_service_date_in_future_is_warning_via_claim_level_fallback():
         "NM1*85*1*JONES*BEN****XX*1999996666~",
         "HL*2*1*22*0~",
         "NM1*IL*1*SMITH*JANE****MI*111223333~",
-        "NM1*PR*2*DELTA DENTAL****PI*00435~",
+        "NM1*PR*2*DELTA DENTAL*****PI*00435~",
         "CLM*756048Q*89.93***11:B:1*Y*A*Y*I~",
         "HI*ABK:K0201~",
         "DTP*472*D8*20991231~",  # claim-level, in the future
@@ -143,7 +143,7 @@ def test_837d_line_level_dtp_takes_precedence_over_future_claim_level_dtp():
         "NM1*85*1*JONES*BEN****XX*1999996666~",
         "HL*2*1*22*0~",
         "NM1*IL*1*SMITH*JANE****MI*111223333~",
-        "NM1*PR*2*DELTA DENTAL****PI*00435~",
+        "NM1*PR*2*DELTA DENTAL*****PI*00435~",
         "CLM*756048Q*89.93***11:B:1*Y*A*Y*I~",
         "HI*ABK:K0201~",
         "DTP*472*D8*20991231~",  # claim-level, in the future
@@ -163,7 +163,7 @@ def test_837d_wrongly_qualified_dtp_does_not_trigger_service_date_rule():
         "NM1*85*1*JONES*BEN****XX*1999996666~",
         "HL*2*1*22*0~",
         "NM1*IL*1*SMITH*JANE****MI*111223333~",
-        "NM1*PR*2*DELTA DENTAL****PI*00435~",
+        "NM1*PR*2*DELTA DENTAL*****PI*00435~",
         "CLM*756048Q*89.93***11:B:1*Y*A*Y*I~",
         "HI*ABK:K0201~",
         "DTP*463*D8*20991231~",  # Prescription Date, not Service Date
@@ -174,6 +174,28 @@ def test_837d_wrongly_qualified_dtp_does_not_trigger_service_date_rule():
     assert "edi.837d-service-date-in-future" not in {f.rule_id for f in report.findings}
 
 
+def test_837d_diagnosis_pointer_unresolved_is_info():
+    # Mirrors 837P's identical edi.837p-diagnosis-pointer-unresolved rule
+    # for 837D's own SV3-11 composite - only one diagnosis resolves here,
+    # so a pointer at position 9 doesn't resolve to any HI entry.
+    body = [
+        "BHT*0019*00*0123*20260815*1023*CH~",
+        "HL*1**20*1~",
+        "NM1*85*1*JONES*BEN****XX*1999996666~",
+        "HL*2*1*22*0~",
+        "NM1*IL*1*SMITH*JANE****MI*111223333~",
+        "NM1*PR*2*DELTA DENTAL*****PI*00435~",
+        "CLM*756048Q*89.93***11:B:1*Y*A*Y*I~",
+        "HI*ABK:K0201~",
+        "LX*1~",
+        _sv3(quantity="1", pointers="9"),
+    ]
+    report = validate_interchange(parse_interchange(_build(body)))
+    finding = next(f for f in report.findings if f.rule_id == "edi.837d-diagnosis-pointer-unresolved")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
 def test_would_not_convert_is_error_when_clm_missing():
     body = [
         "BHT*0019*00*0123*20260815*1023*CH~",
@@ -181,7 +203,7 @@ def test_would_not_convert_is_error_when_clm_missing():
         "NM1*85*1*JONES*BEN****XX*1999996666~",
         "HL*2*1*22*0~",
         "NM1*IL*1*SMITH*JANE****MI*111223333~",
-        "NM1*PR*2*DELTA DENTAL****PI*00435~",
+        "NM1*PR*2*DELTA DENTAL*****PI*00435~",
         # No CLM segment.
     ]
     report = validate_interchange(parse_interchange(_build(body)))

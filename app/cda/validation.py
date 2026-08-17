@@ -489,8 +489,11 @@ def _iter_evn_immunization_activities(section):
         yield substance_administration
 
 
-def _rule_immunizations(section, now: datetime) -> list[ValidationFinding]:
+def _rule_immunizations(section, patient, now: datetime) -> list[ValidationFinding]:
     findings = []
+    raw_birth = ts_value(find_child(patient, "birthTime")) if patient is not None else None
+    birth_dt = parse_comparable_datetime(raw_birth) if raw_birth else None
+
     for substance_administration in _iter_evn_immunization_activities(section):
         consumable = find_child(substance_administration, "consumable")
         manufactured_product = find_child(consumable, "manufacturedProduct") if consumable is not None else None
@@ -524,15 +527,25 @@ def _rule_immunizations(section, now: datetime) -> list[ValidationFinding]:
 
         occurrence, _ = ivl_ts_bounds(find_child(substance_administration, "effectiveTime"))
         occurrence_dt = parse_comparable_datetime(occurrence) if occurrence else None
-        if occurrence_dt is not None and not_in_future(occurrence, now) is False:
-            findings.append(
-                ValidationFinding(
-                    severity="warning",
-                    rule_id="cda.immunization-occurrence-in-future",
-                    segment="Immunizations/.../substanceAdministration/effectiveTime",
-                    message="An Immunization Activity's occurrence date is in the future.",
+        if occurrence_dt is not None:
+            if not_in_future(occurrence, now) is False:
+                findings.append(
+                    ValidationFinding(
+                        severity="warning",
+                        rule_id="cda.immunization-occurrence-in-future",
+                        segment="Immunizations/.../substanceAdministration/effectiveTime",
+                        message="An Immunization Activity's occurrence date is in the future.",
+                    )
                 )
-            )
+            if raw_birth and birth_dt is not None and is_before(occurrence, occurrence_dt, raw_birth, birth_dt):
+                findings.append(
+                    ValidationFinding(
+                        severity="error",
+                        rule_id="cda.immunization-occurrence-before-birth",
+                        segment="Immunizations/.../substanceAdministration/effectiveTime",
+                        message="An Immunization Activity's occurrence date is before the patient's birthTime.",
+                    )
+                )
     return findings
 
 
@@ -615,7 +628,7 @@ def validate_document(document) -> ValidationReport:
 
     immunizations_section = _find_immunizations_section(document)
     if immunizations_section is not None:
-        findings.extend(_rule_immunizations(immunizations_section, now))
+        findings.extend(_rule_immunizations(immunizations_section, patient, now))
 
     findings.extend(_check_convertibility(document))
 

@@ -18,14 +18,16 @@ established, confirmed genuinely identical by the same real example, not
 assumed from the "another 837 variant" family resemblance**: 2000A(`"20"`,
 Billing Provider)->`NM1*85`, 2000B(`"22"`, Subscriber)->`NM1*IL`+`DMG` with
 the payer `NM1*PR` nested in the same loop's own members, 2000C(`"23"`,
-Patient, optional)->`NM1*QC`+`DMG`. This module has its own independent
-`resolve_837d_loops()` rather than importing `claim_837p.py`'s or
-`claim_837i.py`'s directly - same "extract on second use, once genuinely
-proven, not preemptively" discipline `claim_837i.py`'s own module docstring
-already established; a shared `resolve_837_loops()` in `common.py` remains
-a natural future step once a third independently-tested implementation
-exists to actually prove the whole shape (not just the happy path one real
-example exercises) is identical across all three.
+Patient, optional)->`NM1*QC`+`DMG`. This app's own "extract on second use,
+once genuinely proven, not preemptively" discipline meant `claim_837i.py`
+kept its own independent resolver rather than importing `claim_837p.py`'s
+- but this module (837D) is the third independently-tested implementation
+that discipline itself was waiting for: `resolve_837_loops()`/
+`Resolved837Loops` (and the trivially-duplicated `find_nm1_by_entity_code`/
+`find_dtp_by_qualifier`/`DTP_SERVICE_DATE`) now live in `common.py`,
+shared by all three 837 builders, once a follow-up review confirmed all
+three copies really were byte-for-byte identical, not just superficially
+similar.
 
 **Where 837D genuinely diverges from 837P/837I, confirmed by the same real
 example and a cross-referenced X12 segment reference, not assumed**:
@@ -54,12 +56,17 @@ example and a cross-referenced X12 segment reference, not assumed**:
     (Diagnosis Code Pointer) -> `Claim.item.diagnosisSequence`, resolved
     against `Claim.diagnosis[]` the identical way 837P's own `SV1-07`
     already is (up to 4 1-based positions, out-of-range/non-numeric
-    pointers silently skipped) - **its own composite sub-structure was
-    not independently confirmed against a primary source** (the one real
-    example never populates it), inferred by analogy with `SV1-07`'s own
-    confirmed shape rather than guessed at from nothing, and disclosed as
-    such. `SV3-04` (Oral Cavity Designation, a genuinely separate concept
-    from tooth number/surface) has no FHIR target mapped this slice.
+    pointers silently skipped) - **confirmed, not just inferred by
+    analogy**: the one real X12.org example this builder was verified
+    against never populates SV3-11 itself, so this shape was originally
+    disclosed as inferred-by-analogy-only; a follow-up review fetched a
+    2025 CMS/CGS 837D companion guide and two independent X12 5010
+    segment schemas, all of which confirm SV3-11 genuinely is the
+    identical `C004` Composite Diagnosis Code Pointer `SV1-07` uses, not
+    a caret-repeated simple element as an earlier, since-corrected
+    secondary-source check briefly suggested. `SV3-04` (Oral Cavity
+    Designation, a genuinely separate concept from tooth number/surface)
+    has no FHIR target mapped this slice.
   - **`TOO` (Tooth Information) is its own segment, not part of `SV3` at
     all, but a member of the identical `LX` service-line group** - the
     real example confirms this directly (`LX*1~` / `SV3*...~` / `TOO*...~`
@@ -118,7 +125,6 @@ reason, copay status, provider agreement, predetermination indicator) have
 no mapped FHIR target this slice."""
 
 import uuid
-from dataclasses import dataclass
 
 from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.claim import Claim, ClaimCareTeam, ClaimDiagnosis, ClaimInsurance, ClaimItem
@@ -132,6 +138,7 @@ from fhir.resources.R4B.resource import Resource
 
 from app.edi.base import EdiTransactionBuilder
 from app.edi.common import (
+    DTP_SERVICE_DATE,
     assemble_bundle,
     build_coverage,
     build_diagnosis_codeable_concepts,
@@ -139,19 +146,20 @@ from app.edi.common import (
     build_patient_from_nm1_dmg,
     build_place_of_service_from_clm05,
     build_practitioner_from_nm1,
+    find_dtp_by_qualifier,
+    find_nm1_by_entity_code,
     is_person_entity,
     iter_diagnosis_hi_segments,
     parse_x12_datetime,
+    resolve_837_loops,
 )
 from app.edi.parser import (
     Delimiters,
-    HlLoop,
     Segment,
     TransactionSet,
     component,
     element,
     find_segment,
-    group_by_hl_hierarchy,
     group_by_leader,
     parse_decimal,
 )
@@ -160,17 +168,6 @@ from app.hl7.errors import MappingError, MissingSegmentError
 
 TRANSACTION_SET_ID = "837"
 
-# Same HL03 level codes as claim_837p.py/claim_837i.py - kept as this
-# module's own local constants for the same reason those modules' own
-# bullets give.
-_HL_BILLING_PROVIDER = "20"
-_HL_SUBSCRIBER = "22"
-_HL_PATIENT = "23"
-
-_NM1_BILLING_PROVIDER = "85"
-_NM1_SUBSCRIBER = "IL"
-_NM1_PAYER = "PR"
-_NM1_PATIENT = "QC"
 _NM1_RENDERING_PROVIDER = "82"
 
 # Real, verified FHIR-canonical CodeSystem (confirmed by direct fetch) for
@@ -201,34 +198,14 @@ DEFAULT_PRIORITY = "normal"
 _CARE_TEAM_ROLE_SYSTEM = "http://terminology.hl7.org/CodeSystem/claimcareteamrole"
 _RENDERING_PROVIDER_ROLE = "primary"
 
-_DTP_SERVICE_DATE = "472"
-_MAX_DIAGNOSIS_POINTERS = 4  # inferred by analogy with SV1-07's own confirmed cap - see module docstring
+_MAX_DIAGNOSIS_POINTERS = 4  # SV3-11's own composite cap, confirmed identical to SV1-07's - see module docstring
 
-
-@dataclass
-class Resolved837dLoops:
-    """Mirrors claim_837p.py's/claim_837i.py's own Resolved837*Loops
-    field-for-field - see claim_837i.py's own dataclass docstring for why
-    claim_loop/patient_is_dependent are gated independently."""
-
-    billing_provider_loop: HlLoop
-    subscriber_loop: HlLoop
-    claim_loop: HlLoop
-    billing_provider_nm1: Segment
-    subscriber_nm1: Segment
-    subscriber_dmg: Segment | None
-    payer_nm1: Segment
-    patient_nm1: Segment | None
-    patient_dmg: Segment | None
-    patient_is_dependent: bool
-
-
-def _find_nm1(segments: list[Segment], entity_code: str) -> Segment | None:
-    return next((seg for seg in segments if seg[0] == "NM1" and element(seg, 1) == entity_code), None)
-
-
-def find_dtp_by_qualifier(segments: list[Segment], qualifier: str) -> Segment | None:
-    return next((seg for seg in segments if seg[0] == "DTP" and element(seg, 1) == qualifier), None)
+# Resolved837dLoops/resolve_837d_loops/_find_nm1/find_dtp_by_qualifier/
+# DTP_SERVICE_DATE were promoted to app/edi/common.py as
+# Resolved837Loops/resolve_837_loops/find_nm1_by_entity_code/
+# find_dtp_by_qualifier/DTP_SERVICE_DATE - this module is what made the
+# third-consumer promotion bar its own earlier docstring described. See
+# common.py's own Resolved837Loops docstring for the full reasoning.
 
 
 def find_claim_level_segments(claim_loop_members: list[Segment]) -> list[Segment]:
@@ -247,59 +224,18 @@ def find_claim_level_segments(claim_loop_members: list[Segment]) -> list[Segment
     return claim_loop_members[:first_lx_index]
 
 
-def resolve_837d_loops(segments: list[Segment], transaction_set_id: str) -> Resolved837dLoops:
-    """Walk the strict 2000A(20)->2000B(22)->[2000C(23)] parent chain an
-    837D transaction set requires - see claim_837i.py::resolve_837i_loops
-    for the identical algorithm and the reasoning behind every design
-    choice in it."""
-    roots = group_by_hl_hierarchy(segments)
-    billing_provider_loop = next((loop for loop in roots if loop.hl03 == _HL_BILLING_PROVIDER), None)
-    if billing_provider_loop is None:
-        raise MissingSegmentError(f"{transaction_set_id} transaction set is missing its 2000A Billing Provider loop")
-
-    subscriber_loop = next(
-        (child for child in billing_provider_loop.children if child.hl03 == _HL_SUBSCRIBER), None
-    )
-    if subscriber_loop is None:
-        raise MissingSegmentError(f"{transaction_set_id} transaction set is missing its 2000B Subscriber loop")
-
-    billing_provider_nm1 = _find_nm1(billing_provider_loop.member_segments, _NM1_BILLING_PROVIDER)
-    if billing_provider_nm1 is None:
-        raise MissingSegmentError(f"{transaction_set_id} 2000A loop is missing its NM1*85 (billing provider) segment")
-
-    subscriber_nm1 = _find_nm1(subscriber_loop.member_segments, _NM1_SUBSCRIBER)
-    if subscriber_nm1 is None:
-        raise MissingSegmentError(f"{transaction_set_id} 2000B loop is missing its NM1*IL (subscriber) segment")
-    subscriber_dmg = find_segment(subscriber_loop.member_segments, "DMG")
-
-    payer_nm1 = _find_nm1(subscriber_loop.member_segments, _NM1_PAYER)
-    if payer_nm1 is None:
-        raise MissingSegmentError(f"{transaction_set_id} 2000B loop is missing its NM1*PR (payer) segment")
-
-    patient_loop = next((child for child in subscriber_loop.children if child.hl03 == _HL_PATIENT), None)
-    claim_loop = patient_loop if patient_loop is not None else subscriber_loop
-
-    patient_nm1 = None
-    patient_dmg = None
-    patient_is_dependent = False
-    if patient_loop is not None:
-        patient_nm1 = _find_nm1(patient_loop.member_segments, _NM1_PATIENT)
-        if patient_nm1 is not None:
-            patient_dmg = find_segment(patient_loop.member_segments, "DMG")
-            patient_is_dependent = True
-
-    return Resolved837dLoops(
-        billing_provider_loop=billing_provider_loop,
-        subscriber_loop=subscriber_loop,
-        claim_loop=claim_loop,
-        billing_provider_nm1=billing_provider_nm1,
-        subscriber_nm1=subscriber_nm1,
-        subscriber_dmg=subscriber_dmg,
-        payer_nm1=payer_nm1,
-        patient_nm1=patient_nm1,
-        patient_dmg=patient_dmg,
-        patient_is_dependent=patient_is_dependent,
-    )
+def _resolve_qualifier_system(qualifier: str, recognized_qualifier: str, canonical_system: str, fallback_system: str) -> str:
+    """Shared "canonical system when the qualifier is the one recognized
+    value, else a disclosed local fallback keyed by the qualifier itself,
+    else the bare fallback system" resolution - both SV3-01's procedure
+    qualifier ("AD" -> CDT) and TOO01's tooth-number qualifier ("JP" ->
+    Universal/National) follow this identical shape, previously each
+    written out as its own hard-to-scan nested ternary."""
+    if qualifier == recognized_qualifier:
+        return canonical_system
+    if qualifier:
+        return f"{fallback_system}:{qualifier}"
+    return fallback_system
 
 
 def _build_procedure_concept(sv3_01: str, delimiters: Delimiters) -> CodeableConcept | None:
@@ -309,7 +245,7 @@ def _build_procedure_concept(sv3_01: str, delimiters: Delimiters) -> CodeableCon
     code = component(sv3_01, delimiters, 2)
     if not code:
         return None
-    system = _CDT_CODE_SYSTEM if qualifier == "AD" else f"{_PROCEDURE_QUALIFIER_FALLBACK_SYSTEM}:{qualifier}" if qualifier else _PROCEDURE_QUALIFIER_FALLBACK_SYSTEM
+    system = _resolve_qualifier_system(qualifier, "AD", _CDT_CODE_SYSTEM, _PROCEDURE_QUALIFIER_FALLBACK_SYSTEM)
     return CodeableConcept(coding=[Coding(system=system, code=code)])
 
 
@@ -338,7 +274,7 @@ def _build_tooth_body_site(too: Segment | None) -> CodeableConcept | None:
     if not tooth_number:
         return None
     qualifier = element(too, 1).strip().upper()
-    system = _TOOTH_NUMBER_SYSTEM if qualifier == _TOO_UNIVERSAL_QUALIFIER else f"{_TOOTH_NUMBER_FALLBACK_SYSTEM}:{qualifier}" if qualifier else _TOOTH_NUMBER_FALLBACK_SYSTEM
+    system = _resolve_qualifier_system(qualifier, _TOO_UNIVERSAL_QUALIFIER, _TOOTH_NUMBER_SYSTEM, _TOOTH_NUMBER_FALLBACK_SYSTEM)
     return CodeableConcept(coding=[Coding(system=system, code=tooth_number)])
 
 
@@ -430,7 +366,7 @@ class Edi837dBuilder(EdiTransactionBuilder):
         if bht is None:
             raise MissingSegmentError(f"{self.transaction_set_id} transaction set is missing its BHT segment")
 
-        loops = resolve_837d_loops(transaction_set.segments, self.transaction_set_id)
+        loops = resolve_837_loops(transaction_set.segments, self.transaction_set_id)
 
         billing_provider: Resource = (
             build_practitioner_from_nm1(loops.billing_provider_nm1)
@@ -459,7 +395,7 @@ class Edi837dBuilder(EdiTransactionBuilder):
         for hi in iter_diagnosis_hi_segments(loops.claim_loop.member_segments, delimiters):
             diagnosis_concepts.extend(build_diagnosis_codeable_concepts(hi, delimiters))
 
-        rendering_nm1 = _find_nm1(loops.claim_loop.member_segments, _NM1_RENDERING_PROVIDER)
+        rendering_nm1 = find_nm1_by_entity_code(loops.claim_loop.member_segments, _NM1_RENDERING_PROVIDER)
         rendering_provider: Resource | None = None
         if rendering_nm1 is not None:
             rendering_provider = (
@@ -481,7 +417,7 @@ class Edi837dBuilder(EdiTransactionBuilder):
         # own docstring for why a naive whole-claim-loop scan risks grabbing
         # a per-line DTP instead.
         claim_level_dtp = find_dtp_by_qualifier(
-            find_claim_level_segments(loops.claim_loop.member_segments), _DTP_SERVICE_DATE
+            find_claim_level_segments(loops.claim_loop.member_segments), DTP_SERVICE_DATE
         )
 
         line_groups = group_by_leader(loops.claim_loop.member_segments, "LX", ["SV3", "TOO", "DTP"])
@@ -491,7 +427,7 @@ class Edi837dBuilder(EdiTransactionBuilder):
             if sv3 is None:
                 continue
             too = find_segment(members, "TOO")
-            dtp = find_dtp_by_qualifier(members, _DTP_SERVICE_DATE)
+            dtp = find_dtp_by_qualifier(members, DTP_SERVICE_DATE)
             items.append(
                 _build_service_line_item(
                     len(items) + 1,

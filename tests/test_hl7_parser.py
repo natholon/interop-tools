@@ -8,6 +8,7 @@ from app.hl7.parser import (
     field_str,
     group_segments_by_leader,
     optional_segment,
+    optional_segments,
     parse_message,
     raw_field_str,
     require_segment,
@@ -35,6 +36,34 @@ def test_parse_minimal_message():
 def test_parse_malformed_message_raises():
     with pytest.raises(Hl7ParseError):
         parse_message(read_fixture("adt_a01_malformed.hl7"))
+
+
+def test_parse_message_truncates_to_first_message_when_multiple_msh_present():
+    # Two MSH-led messages concatenated with no batch wrapper (BHS/BTS) -
+    # hl7.parse() itself has no MSH-boundary awareness and would otherwise
+    # merge both messages' repeating segments (OBX here) into one Message.
+    first = (
+        "MSH|^~\\&|SEND|FAC|RECV|FAC|20260101120000||ADT^A01|MSG001|P|2.5\r"
+        "PID|1||111111||DOE^JOHN\r"
+        "OBX|1|ST|A||first-message-value\r"
+    )
+    second = (
+        "MSH|^~\\&|SEND|FAC|RECV|FAC|20260101130000||ADT^A01|MSG002|P|2.5\r"
+        "PID|1||222222||SMITH^JANE\r"
+        "OBX|1|ST|A||second-message-value\r"
+    )
+    msg = parse_message(first + second)
+
+    msh = require_segment(msg, "MSH")
+    assert field_str(msh, 10) == "MSG001"
+
+    pid_segments = optional_segments(msg, "PID")
+    assert len(pid_segments) == 1
+    assert field_str(pid_segments[0], 3) == "111111"
+
+    obx_segments = optional_segments(msg, "OBX")
+    assert len(obx_segments) == 1
+    assert field_str(obx_segments[0], 5) == "first-message-value"
 
 
 def test_require_segment_missing_raises():

@@ -95,7 +95,6 @@ necessarily whoever rendered it) - every `Claim.item[]` this module builds
 carries `careTeamSequence=[1]` back to it when present."""
 
 import uuid
-from dataclasses import dataclass
 
 from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.claim import Claim, ClaimCareTeam, ClaimDiagnosis, ClaimInsurance, ClaimItem
@@ -109,6 +108,7 @@ from fhir.resources.R4B.resource import Resource
 
 from app.edi.base import EdiTransactionBuilder
 from app.edi.common import (
+    DTP_SERVICE_DATE,
     assemble_bundle,
     build_coverage,
     build_diagnosis_codeable_concepts,
@@ -116,18 +116,19 @@ from app.edi.common import (
     build_patient_from_nm1_dmg,
     build_place_of_service_from_clm05,
     build_practitioner_from_nm1,
+    find_dtp_by_qualifier,
+    find_nm1_by_entity_code,
     is_person_entity,
     parse_x12_datetime,
+    resolve_837_loops,
 )
 from app.edi.parser import (
     Delimiters,
-    HlLoop,
     Segment,
     TransactionSet,
     component,
     element,
     find_segment,
-    group_by_hl_hierarchy,
     group_by_leader,
     parse_decimal,
 )
@@ -136,27 +137,6 @@ from app.hl7.errors import MappingError, MissingSegmentError
 
 TRANSACTION_SET_ID = "837"
 
-# Local, 837P-specific HL03 level codes - deliberately NOT imported from
-# common.py's HL_INFORMATION_SOURCE/HL_SUBSCRIBER/HL_DEPENDENT even though
-# two of the three literal string values coincide ("22"/"23"), since the
-# *semantic role* of "20" genuinely differs here (Billing Provider, not
-# Information Source) - reusing those names in an 837P context would read
-# as though this file shared 270/271/278's loop semantics, which it does
-# not (see module docstring's own "don't assume a numeric HL03 code carries
-# the same meaning" note).
-_HL_BILLING_PROVIDER = "20"
-_HL_SUBSCRIBER = "22"
-_HL_PATIENT = "23"
-
-# NM1 entity identifier codes (element 98) this module reads, each scoped
-# to a specific loop - multiple NM1 segments with different entity codes
-# can appear within one flat HL member list (e.g. the subscriber loop
-# carries both NM1*IL and NM1*PR), so every lookup here filters by entity
-# code via _find_nm1 rather than taking "the first NM1" blindly.
-_NM1_BILLING_PROVIDER = "85"
-_NM1_SUBSCRIBER = "IL"
-_NM1_PAYER = "PR"
-_NM1_PATIENT = "QC"
 _NM1_RENDERING_PROVIDER = "82"
 
 # SV1-01's procedure-code qualifier (X12 code list 235) - "HC" is a
@@ -177,121 +157,13 @@ _RENDERING_PROVIDER_ROLE = "primary"
 
 _MAX_DIAGNOSIS_POINTERS = 4  # SV1-07's own composite cap, per the 5010 IG
 
-
-@dataclass
-class Resolved837pLoops:
-    """Everything Edi837pBuilder.build_bundle() needs from the 2000A-2000C
-    loop walk.
-
-    `claim_loop` and `patient_is_dependent` are deliberately gated
-    *independently*, unlike 270/271/278's own dependent-loop resolvers:
-    `claim_loop` is resolved purely structurally (the 2000C loop whenever
-    HL03="23" was emitted at all, regardless of whether its own NM1
-    resolves) since CLM/HI/NM1*82/2400 service lines are physically nested
-    wherever that HL loop's members actually are - X12 doesn't re-attribute
-    them to 2000B just because 2000C's NM1 happens to be malformed, so
-    this resolver can't either. `patient_is_dependent` (and
-    `patient_nm1`/`patient_dmg`) instead gate *which Patient resource* is
-    "the patient" for `Claim.patient`/`Coverage.beneficiary` - only true
-    when the 2000C loop's own NM1*QC actually resolves, the same
-    "resource construction and segment lookup are gated by different
-    conditions" split every dependent/patient loop in this app needs to
-    get right, just newly explicit here since 837P's claim data itself
-    depends on loop *presence*, not loop *validity*, unlike every earlier
-    EDI family in this app."""
-
-    billing_provider_loop: HlLoop
-    subscriber_loop: HlLoop
-    claim_loop: HlLoop
-    billing_provider_nm1: Segment
-    subscriber_nm1: Segment
-    subscriber_dmg: Segment | None
-    payer_nm1: Segment
-    patient_nm1: Segment | None
-    patient_dmg: Segment | None
-    patient_is_dependent: bool
-
-
-def _find_nm1(segments: list[Segment], entity_code: str) -> Segment | None:
-    return next((seg for seg in segments if seg[0] == "NM1" and element(seg, 1) == entity_code), None)
-
-
-# DTP01 (Date/Time Qualifier) - "472" is Service Date, the only DTP this
-# module reads. A 2400 loop's member list can carry other DTP-qualified
-# segments too (e.g. "463" Prescription Date on a DME line) - filtering by
-# DTP01 rather than taking "the first DTP" avoids silently attributing a
-# differently-qualified date to servicedDate, the same "check the specific
-# qualifier, don't just grab the first segment of this type" discipline
-# STC01/TXA dedup already established elsewhere in this app. Public - the
-# validation.py plausibility rule for service-line dates must filter the
-# identical way, or it could report on (or silently ignore) a DTP the real
-# builder would never even read.
-DTP_SERVICE_DATE = "472"
-
-
-def find_dtp_by_qualifier(segments: list[Segment], qualifier: str) -> Segment | None:
-    return next((seg for seg in segments if seg[0] == "DTP" and element(seg, 1) == qualifier), None)
-
-
-def resolve_837p_loops(segments: list[Segment], transaction_set_id: str) -> Resolved837pLoops:
-    """Walk the strict 2000A(20)->2000B(22)->[2000C(23)] parent chain an
-    837P transaction set requires. Mirrors every other EDI family's own
-    "raise here, not in the caller" discipline for each required loop/NM1 -
-    see module docstring for why this chain is only three levels deep
-    (unlike 270/271/278's four) and why the payer NM1 is read from the
-    *subscriber* loop's own members rather than a separate root loop."""
-    roots = group_by_hl_hierarchy(segments)
-    billing_provider_loop = next((loop for loop in roots if loop.hl03 == _HL_BILLING_PROVIDER), None)
-    if billing_provider_loop is None:
-        raise MissingSegmentError(f"{transaction_set_id} transaction set is missing its 2000A Billing Provider loop")
-
-    subscriber_loop = next(
-        (child for child in billing_provider_loop.children if child.hl03 == _HL_SUBSCRIBER), None
-    )
-    if subscriber_loop is None:
-        raise MissingSegmentError(f"{transaction_set_id} transaction set is missing its 2000B Subscriber loop")
-
-    billing_provider_nm1 = _find_nm1(billing_provider_loop.member_segments, _NM1_BILLING_PROVIDER)
-    if billing_provider_nm1 is None:
-        raise MissingSegmentError(f"{transaction_set_id} 2000A loop is missing its NM1*85 (billing provider) segment")
-
-    subscriber_nm1 = _find_nm1(subscriber_loop.member_segments, _NM1_SUBSCRIBER)
-    if subscriber_nm1 is None:
-        raise MissingSegmentError(f"{transaction_set_id} 2000B loop is missing its NM1*IL (subscriber) segment")
-    subscriber_dmg = find_segment(subscriber_loop.member_segments, "DMG")
-
-    payer_nm1 = _find_nm1(subscriber_loop.member_segments, _NM1_PAYER)
-    if payer_nm1 is None:
-        raise MissingSegmentError(f"{transaction_set_id} 2000B loop is missing its NM1*PR (payer) segment")
-
-    # claim_loop is resolved structurally (loop presence), independent of
-    # whether that loop's own NM1 resolves - see Resolved837pLoops' own
-    # docstring for why this must NOT reuse the "no NM1 -> treat loop as
-    # absent" gate every other EDI family's dependent-loop resolver uses.
-    patient_loop = next((child for child in subscriber_loop.children if child.hl03 == _HL_PATIENT), None)
-    claim_loop = patient_loop if patient_loop is not None else subscriber_loop
-
-    patient_nm1 = None
-    patient_dmg = None
-    patient_is_dependent = False
-    if patient_loop is not None:
-        patient_nm1 = _find_nm1(patient_loop.member_segments, _NM1_PATIENT)
-        if patient_nm1 is not None:
-            patient_dmg = find_segment(patient_loop.member_segments, "DMG")
-            patient_is_dependent = True
-
-    return Resolved837pLoops(
-        billing_provider_loop=billing_provider_loop,
-        subscriber_loop=subscriber_loop,
-        claim_loop=claim_loop,
-        billing_provider_nm1=billing_provider_nm1,
-        subscriber_nm1=subscriber_nm1,
-        subscriber_dmg=subscriber_dmg,
-        payer_nm1=payer_nm1,
-        patient_nm1=patient_nm1,
-        patient_dmg=patient_dmg,
-        patient_is_dependent=patient_is_dependent,
-    )
+# Resolved837pLoops/resolve_837p_loops/_find_nm1/find_dtp_by_qualifier/
+# DTP_SERVICE_DATE were promoted to app/edi/common.py as
+# Resolved837Loops/resolve_837_loops/find_nm1_by_entity_code/
+# find_dtp_by_qualifier/DTP_SERVICE_DATE once claim_837d.py became a third
+# independently-tested implementation of the identical algorithm - see
+# common.py's own Resolved837Loops docstring for the full reasoning
+# (unchanged from what lived here before the promotion).
 
 
 def _build_procedure_concept(sv1_01: str, delimiters: Delimiters) -> CodeableConcept | None:
@@ -367,7 +239,7 @@ class Edi837pBuilder(EdiTransactionBuilder):
         if bht is None:
             raise MissingSegmentError(f"{self.transaction_set_id} transaction set is missing its BHT segment")
 
-        loops = resolve_837p_loops(transaction_set.segments, self.transaction_set_id)
+        loops = resolve_837_loops(transaction_set.segments, self.transaction_set_id)
 
         billing_provider: Resource = (
             build_practitioner_from_nm1(loops.billing_provider_nm1)
@@ -395,7 +267,7 @@ class Edi837pBuilder(EdiTransactionBuilder):
         hi = find_segment(loops.claim_loop.member_segments, "HI")
         diagnosis_concepts = build_diagnosis_codeable_concepts(hi, delimiters)
 
-        rendering_nm1 = _find_nm1(loops.claim_loop.member_segments, _NM1_RENDERING_PROVIDER)
+        rendering_nm1 = find_nm1_by_entity_code(loops.claim_loop.member_segments, _NM1_RENDERING_PROVIDER)
         rendering_provider: Resource | None = None
         if rendering_nm1 is not None:
             rendering_provider = (

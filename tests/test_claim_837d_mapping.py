@@ -223,7 +223,7 @@ def test_diagnosis_pointer_out_of_range_is_skipped():
         "CLM*756048Q*89.93***11:B:1*Y*A*Y*I~"
         "HI*ABK:J209~"
         "LX*1~"
-        "SV3*AD:D1120*85****1*********9~"  # pointer 9 - only 1 diagnosis exists
+        "SV3*AD:D1120*85****1*****9~"  # pointer 9 (SV3-11) - only 1 diagnosis exists
     )
     raw = _minimal_raw(body)
     interchange = parse_interchange(raw)
