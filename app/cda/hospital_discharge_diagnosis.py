@@ -37,8 +37,15 @@ from app.cda.problems import PROBLEM_OBSERVATION_TEMPLATE_ID, build_condition
 SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.24"
 HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.33"
 
-_CATEGORY_SYSTEM = "http://terminology.hl7.org/CodeSystem/condition-category"
-_CATEGORY_CODE = "encounter-diagnosis"
+# Public (not module-private) - promoted once
+# app/transform/cda_discharge_summary.py became a real reverse-direction
+# consumer: Condition.category == "encounter-diagnosis" is the one reliable,
+# real signal distinguishing a Condition sourced from this section from one
+# sourced from a plain Problems section (which never populates .category at
+# all), so the reverse builder checks for this exact (system, code) pair
+# rather than a re-derived copy.
+CATEGORY_SYSTEM = "http://terminology.hl7.org/CodeSystem/condition-category"
+CATEGORY_CODE = "encounter-diagnosis"
 
 
 def build_hospital_discharge_diagnoses(section, patient_id: str) -> list[Condition]:
@@ -57,6 +64,6 @@ def build_hospital_discharge_diagnoses(section, patient_id: str) -> list[Conditi
                 continue
             condition = build_condition(act, observation, patient_id)
             if condition is not None:
-                condition.category = [CodeableConcept(coding=[Coding(system=_CATEGORY_SYSTEM, code=_CATEGORY_CODE)])]
+                condition.category = [CodeableConcept(coding=[Coding(system=CATEGORY_SYSTEM, code=CATEGORY_CODE)])]
                 conditions.append(condition)
     return conditions

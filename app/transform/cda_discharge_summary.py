@@ -10,24 +10,26 @@ way the forward direction's own `DischargeSummaryBuilder` was (both
 document types share CCD's own `recordTarget`/`componentOf` header shape,
 verified against a real HL7 C-CDA-Examples Discharge Summary).
 
-**Disclosed scope limit, matching the forward direction's own first
-Discharge Summary slice exactly**: the two discharge-specific sections
-(Hospital Discharge Diagnosis, Discharge Medications) are not
-reconstructed here - on the FHIR side, a `Condition`/`MedicationRequest`
-built from either of those sections is structurally close to but not
-perfectly indistinguishable from one built from a plain Problems/
-Medications section (Hospital Discharge Diagnosis's own `Condition.
-category = "encounter-diagnosis"` is a real, disclosed marker; Discharge
-Medications has no equivalent marker at all, since it reuses
-`build_medication_request` with zero modification) - reliably telling
-them apart to route them into the *correct* discharge-specific section on
-the way back out, rather than folding them into the plain Problems/
-Medications sections this slice already reverses, is real, additional
-scope this slice deliberately doesn't attempt, the same "one thing per
-slice" precedent this project's own forward direction already followed
-(Discharge Summary shipped with only its already-recognized general
-sections before Hospital Discharge Diagnosis/Discharge Medications were
-added as their own later slice)."""
+**One of the two discharge-specific sections is now genuinely reversed,
+the other is a disclosed, permanent limitation, not a deferred slice -
+resolved as a follow-up once each was actually researched, the same
+"partial gap turned out to be fixable, the rest genuinely isn't" shape
+Discharge Summary's own forward-direction Hospital Discharge Diagnosis/
+Discharge Medications slice already went through**: `include_discharge_specific_sections=True`
+tells `build_sectioned_document` to split out any `Condition` carrying
+`category == "encounter-diagnosis"` (the real, reliable marker
+`app.cda.hospital_discharge_diagnosis`'s own forward module sets - a plain
+Problems section never populates `.category` at all) into its own Hospital
+Discharge Diagnosis section rather than folding it into Problems. Discharge
+Medications, by contrast, genuinely cannot be split the same way: the
+forward `app.cda.discharge_medications` module reuses
+`build_medication_request` with zero modification, so a `MedicationRequest`
+sourced from that section is byte-for-byte structurally identical, on the
+FHIR side, to one sourced from a plain Medications section (confirmed by
+reading that module's own docstring, not assumed) - there is no marker
+this builder could reverse even in principle, so every `MedicationRequest`
+continues to route into the plain Medications section. This is the most
+correct behavior achievable, not a placeholder awaiting a future fix."""
 
 from fhir.resources.R4B.bundle import Bundle
 
@@ -39,5 +41,10 @@ from app.transform.cda_ccd import build_sectioned_document
 class DischargeSummaryReverseBuilder(MessageBuilder):
     def build_message(self, bundle: Bundle) -> str:
         return build_sectioned_document(
-            bundle, DISCHARGE_SUMMARY_TEMPLATE_ID, "18842-5", "Discharge Summary", "Discharge Summary"
+            bundle,
+            DISCHARGE_SUMMARY_TEMPLATE_ID,
+            "18842-5",
+            "Discharge Summary",
+            "Discharge Summary",
+            include_discharge_specific_sections=True,
         )

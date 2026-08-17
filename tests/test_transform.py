@@ -647,6 +647,55 @@ def test_discharge_summary_missing_patient_raises_mapping_error():
         build_message_from_bundle(empty_bundle, "CDA", "DISCHARGESUMMARY", "")
 
 
+def test_discharge_summary_round_trip_splits_discharge_diagnosis_from_plain_problems():
+    # The real fixture carries one Condition with category="encounter-
+    # diagnosis" (from the Hospital Discharge Diagnosis section) and one
+    # plain Condition (from a bare Problem List section) - both must
+    # round-trip into their own correct section, not get folded together.
+    forward_xml = (FIXTURES / "discharge_summary_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original_conditions = {c.code.coding[0].code: c for c in (e.resource for e in bundle.entry if e.resource.get_resource_type() == "Condition")}
+    assert original_conditions["385093006"].category[0].coding[0].code == "encounter-diagnosis"
+    assert not original_conditions["38341003"].category
+
+    document_text = build_message_from_bundle(bundle, "CDA", "DISCHARGESUMMARY", "")
+    # The discharge-diagnosis Condition's own code must appear inside the
+    # regenerated Hospital Discharge Diagnosis Act, not the plain Concern
+    # Act - checked by finding which templateId segment its own code sits
+    # closer to.
+    hospital_discharge_idx = document_text.index("2.16.840.1.113883.10.20.22.2.24")
+    problems_idx = document_text.index("2.16.840.1.113883.10.20.22.2.5.1")
+    pneumonia_idx = document_text.index("385093006")
+    hypertension_idx = document_text.index("38341003")
+    assert hospital_discharge_idx < pneumonia_idx < problems_idx
+    assert problems_idx < hypertension_idx
+
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    conditions = {c.code.coding[0].code: c for c in (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Condition")}
+    assert conditions["385093006"].category[0].coding[0].code == "encounter-diagnosis"
+    assert not conditions["38341003"].category
+
+    # Discharge Medications has no FHIR-side marker at all (see this
+    # builder's own module docstring) - the medication must still survive,
+    # just always via the plain Medications section.
+    original_med = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "MedicationRequest")
+    med = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "MedicationRequest")
+    assert med.medicationCodeableConcept.coding[0].code == original_med.medicationCodeableConcept.coding[0].code
+    assert "10160-0" in document_text  # plain Medications section LOINC code
+    assert "10183-2" not in document_text  # Discharge Medications section LOINC code - never regenerated
+
+
+def test_ccd_round_trip_never_splits_out_hospital_discharge_diagnosis_section():
+    # CCD's own reverse builder must not pass include_discharge_specific_sections
+    # - any Condition it encounters (even one carrying a stray
+    # category="encounter-diagnosis", which this app's own CCD generator
+    # never produces) stays folded into the plain Problems section.
+    forward_xml = (FIXTURES / "ccd_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    assert "2.16.840.1.113883.10.20.22.2.24" not in document_text
+
+
 def test_list_supported_targets_includes_history_and_physical():
     assert ("CDA", "HISTORYANDPHYSICAL", "") in list_supported_targets()
 

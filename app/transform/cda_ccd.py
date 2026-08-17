@@ -55,6 +55,10 @@ from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPL
 from app.cda.problems import PROBLEM_OBSERVATION_TEMPLATE_ID
 from app.cda.problems import CONCERN_ACT_TEMPLATE_ID
 from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
+from app.cda.hospital_discharge_diagnosis import CATEGORY_CODE as DISCHARGE_DIAGNOSIS_CATEGORY_CODE
+from app.cda.hospital_discharge_diagnosis import CATEGORY_SYSTEM as DISCHARGE_DIAGNOSIS_CATEGORY_SYSTEM
+from app.cda.hospital_discharge_diagnosis import HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID
+from app.cda.hospital_discharge_diagnosis import SECTION_TEMPLATE_ID as HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
 from app.transform.common import find_resource, find_resources, format_hl7_date, format_hl7_ts
@@ -238,7 +242,14 @@ def _build_cd_attrs(coding) -> str:
     return f'code="{coding.code}"{code_system_attr}{display}'
 
 
-def _build_problem_entry(condition) -> str:
+def _build_problem_entry(condition, act_template_id: str = CONCERN_ACT_TEMPLATE_ID) -> str:
+    """`act_template_id` defaults to Problems' own Concern Act, but is
+    overridden by `_build_hospital_discharge_diagnosis_entry` below with
+    the Hospital Discharge Diagnosis Act's templateId instead - both wrap
+    the byte-for-byte identical Problem Observation entry, confirmed by the
+    forward `app.cda.hospital_discharge_diagnosis` module's own docstring
+    (verified against a real HL7 C-CDA-Examples guide example), so only the
+    outer Act templateId genuinely differs between the two."""
     code = condition.code.coding[0] if condition.code and condition.code.coding else None
     value = f'<value xsi:type="CD" {_build_cd_attrs(code)}/>' if code else '<value xsi:type="CD" nullFlavor="UNK"/>'
     act_status = "active"
@@ -257,7 +268,7 @@ def _build_problem_entry(condition) -> str:
 
     return (
         f'<entry typeCode="DRIV"><act classCode="ACT" moodCode="EVN">'
-        f'<templateId root="{CONCERN_ACT_TEMPLATE_ID}"/>'
+        f'<templateId root="{act_template_id}"/>'
         '<code code="CONC" codeSystem="2.16.840.1.113883.5.6"/>'
         f'<statusCode code="{act_status}"/>'
         f'<entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN">'
@@ -277,6 +288,34 @@ def _build_problems_section(conditions) -> str:
         f'<component><section><templateId root="{PROBLEMS_SECTION_TEMPLATE_ID}"/>'
         '<code code="11450-4" codeSystem="2.16.840.1.113883.6.1" displayName="Problem List"/>'
         f"<title>Problems</title>{entries}</section></component>"
+    )
+
+
+def _is_hospital_discharge_diagnosis(condition) -> bool:
+    """The one reliable, real signal (not a guess) distinguishing a
+    Condition sourced from the Hospital Discharge Diagnosis section from
+    one sourced from a plain Problems section - see
+    app.cda.hospital_discharge_diagnosis's own module docstring: Problems
+    never populates Condition.category at all, so any condition carrying
+    this exact (system, code) pair unambiguously came from there."""
+    return bool(
+        condition.category
+        and any(
+            coding.system == DISCHARGE_DIAGNOSIS_CATEGORY_SYSTEM and coding.code == DISCHARGE_DIAGNOSIS_CATEGORY_CODE
+            for category in condition.category
+            for coding in (category.coding or [])
+        )
+    )
+
+
+def _build_hospital_discharge_diagnosis_section(conditions) -> str:
+    if not conditions:
+        return ""
+    entries = "".join(_build_problem_entry(c, act_template_id=HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID) for c in conditions)
+    return (
+        f'<component><section><templateId root="{HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="11535-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital Discharge Diagnosis"/>'
+        f"<title>Discharge Diagnosis</title>{entries}</section></component>"
     )
 
 
@@ -849,7 +888,14 @@ def _build_procedures_section(procedures) -> str:
     )
 
 
-def build_sectioned_document(bundle: Bundle, template_id: str, doc_code: str, doc_code_display: str, title: str) -> str:
+def build_sectioned_document(
+    bundle: Bundle,
+    template_id: str,
+    doc_code: str,
+    doc_code_display: str,
+    title: str,
+    include_discharge_specific_sections: bool = False,
+) -> str:
     """Header + all seven general-purpose sections (Problems/Medications/
     Allergies/Immunizations/Vital Signs/Results/Procedures) - the reverse-
     direction mirror of app.cda.common.build_sectioned_bundle's own role on
@@ -858,7 +904,24 @@ def build_sectioned_document(bundle: Bundle, template_id: str, doc_code: str, do
     the identical header+section assembly, confirmed structurally identical
     the same way the forward `DischargeSummaryBuilder` itself was (both
     document types share CCD's own recordTarget/componentOf header shape,
-    verified against a real HL7 C-CDA-Examples Discharge Summary)."""
+    verified against a real HL7 C-CDA-Examples Discharge Summary).
+
+    `include_discharge_specific_sections=True` (only `DischargeSummaryReverseBuilder`
+    passes this) additionally splits out a Hospital Discharge Diagnosis
+    section: any `Condition` carrying `category == "encounter-diagnosis"`
+    (the one real, reliable marker `app.cda.hospital_discharge_diagnosis`'s
+    own forward module sets, and a plain Problems section never does) is
+    routed there instead of into the plain Problems section. **Discharge
+    Medications is deliberately NOT split out the same way, a genuine,
+    permanent limitation rather than a deferred slice**: unlike Hospital
+    Discharge Diagnosis, the forward `app.cda.discharge_medications` module
+    reuses `build_medication_request` with zero modification - no field on
+    the resulting `MedicationRequest` distinguishes it from one sourced from
+    a plain Medications section (confirmed by reading that module's own
+    docstring, not assumed) - so every `MedicationRequest` in the Bundle
+    continues to route into the plain Medications section regardless of
+    which document type is being reversed, since there is no FHIR-side
+    signal this builder could reverse even in principle."""
     patient = find_resource(bundle, "Patient")
     if patient is None:
         raise MappingError("Bundle has no Patient resource - cannot build a CDA document")
@@ -875,7 +938,14 @@ def build_sectioned_document(bundle: Bundle, template_id: str, doc_code: str, do
     document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
     effective_time = format_hl7_ts(bundle.timestamp) if bundle.timestamp else ""
 
-    problems_section = _build_problems_section(conditions)
+    hospital_discharge_diagnosis_section = ""
+    if include_discharge_specific_sections:
+        discharge_diagnoses = [c for c in conditions if _is_hospital_discharge_diagnosis(c)]
+        problem_conditions = [c for c in conditions if not _is_hospital_discharge_diagnosis(c)]
+        hospital_discharge_diagnosis_section = _build_hospital_discharge_diagnosis_section(discharge_diagnoses)
+        problems_section = _build_problems_section(problem_conditions)
+    else:
+        problems_section = _build_problems_section(conditions)
     medications_section = _build_medications_section(medication_requests)
     allergies_section = _build_allergies_section(allergies)
     immunizations_section = _build_immunizations_section(immunizations)
@@ -884,7 +954,7 @@ def build_sectioned_document(bundle: Bundle, template_id: str, doc_code: str, do
     results_section = _build_results_section(diagnostic_reports, observations_by_id)
     procedures_section = _build_procedures_section(procedures)
     sections = (
-        f"{problems_section}{medications_section}{allergies_section}"
+        f"{hospital_discharge_diagnosis_section}{problems_section}{medications_section}{allergies_section}"
         f"{immunizations_section}{vitals_section}{results_section}{procedures_section}"
     )
     body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
