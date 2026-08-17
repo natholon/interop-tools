@@ -1,11 +1,21 @@
-"""FHIR Bundle -> HL7v2 SIU^S12 - the fifth reverse-direction slice, and
-the first proof this architecture handles a genuinely different FHIR
-shape (`Appointment`, not `Encounter`) - not just another ADT-shaped
-variant. Scoped to S12 (new booking) alone, the same "one thing per
-slice" precedent every earlier reverse slice already established (and the
-same trigger the *forward* direction's own SIU support could have started
-with, though it actually shipped S12-S15 together - this reverse slice
-draws its own, narrower first-slice boundary independently).
+"""FHIR Bundle -> HL7v2 SIU - the fifth reverse-direction slice, and the
+first proof this architecture handles a genuinely different FHIR shape
+(`Appointment`, not `Encounter`) - not just another ADT-shaped variant.
+Originally S12 (new booking) alone; **S13/S14/S15/S17/S26 shipped as a
+follow-up breadth pass**, mirroring `app/mappings/siu.py`'s own
+`_BookedSiuMapper`/`_UntimedSiuMapper` split exactly: `_BookedSiuBuilder`
+(S12/S13/S14/S26) overrides `_validate` to require a resolvable
+`Appointment.start`, the same "require the field this builder structurally
+depends on" precedent `hl7_adt.py`'s own `AdtA03Builder` already
+established, since the forward `_BookedSiuMapper` itself raises
+`MappingError` without one; `_BaseSiuBuilder`'s own default `_validate`
+(a no-op) covers S15/S17's genuinely untimed shape directly, with no
+subclass override needed. Every other field this builder emits is
+trigger-agnostic - unlike ORU's/MDM's own breadth passes (a bare
+`trigger_event`-only subclass swap), SIU's is the one HL7v2 breadth pass
+needing a real, disclosed per-trigger behavioral split, because SIU is
+the one message type here whose forward mappers themselves split the
+same way.
 
 Reverses `app/mappings/siu.py::build_appointment_core`/`_build_participants`
 field-for-field: `SCH-1`/`-2` (placer/filler identifiers), `SCH-7`/`-8`
@@ -128,18 +138,27 @@ def _build_aig(index: int, resource, resource_type: str) -> str:
     return segment("AIG", fields, 4)
 
 
-class SiuS12Builder(MessageBuilder):
+class _BaseSiuBuilder(MessageBuilder):
+    trigger_event: str
+
+    def _validate(self, appointment) -> None:
+        """Overridden by _BookedSiuBuilder - S15/S17's own untimed shape has
+        no structural requirement beyond "an Appointment exists"."""
+
     def build_message(self, bundle: Bundle) -> str:
         patient = find_resource(bundle, "Patient")
         if patient is None:
-            raise MappingError("Bundle has no Patient resource - cannot build a SIU^S12 message")
+            raise MappingError(f"Bundle has no Patient resource - cannot build a SIU^{self.trigger_event} message")
         appointment = find_resource(bundle, "Appointment")
         if appointment is None:
-            raise MappingError("Bundle has no Appointment resource - cannot build a SIU^S12 message")
+            raise MappingError(
+                f"Bundle has no Appointment resource - cannot build a SIU^{self.trigger_event} message"
+            )
+        self._validate(appointment)
 
         by_id = {r.id: r for r in (e.resource for e in bundle.entry or [])}
 
-        msh, _msh_dt = build_msh(bundle, "SIU", "S12")
+        msh, _msh_dt = build_msh(bundle, "SIU", self.trigger_event)
         sch = _build_sch(appointment)
         tq1 = _build_tq1(appointment)
         nte_segments = _build_nte_segments(appointment)
@@ -181,3 +200,41 @@ class SiuS12Builder(MessageBuilder):
         segments.extend(aip_segments)
 
         return "\r".join(segments) + "\r"
+
+
+class _BookedSiuBuilder(_BaseSiuBuilder):
+    """S12/S13/S14/S26 - mirrors the forward `_BookedSiuMapper`'s own
+    required-resolvable-start-time check, the one genuine per-trigger
+    difference this reverse direction needs (every other field this
+    builder emits is trigger-agnostic)."""
+
+    def _validate(self, appointment) -> None:
+        if not appointment.start:
+            raise MappingError(
+                f"SIU^{self.trigger_event} requires a resolvable appointment start time - "
+                "cannot build a booked/no-show message with no start"
+            )
+
+
+class SiuS12Builder(_BookedSiuBuilder):
+    trigger_event = "S12"
+
+
+class SiuS13Builder(_BookedSiuBuilder):
+    trigger_event = "S13"
+
+
+class SiuS14Builder(_BookedSiuBuilder):
+    trigger_event = "S14"
+
+
+class SiuS26Builder(_BookedSiuBuilder):
+    trigger_event = "S26"
+
+
+class SiuS15Builder(_BaseSiuBuilder):
+    trigger_event = "S15"
+
+
+class SiuS17Builder(_BaseSiuBuilder):
+    trigger_event = "S17"

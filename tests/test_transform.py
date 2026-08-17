@@ -33,6 +33,12 @@ def test_list_supported_targets_includes_siu_s12():
     assert ("HL7", "SIU", "S12") in list_supported_targets()
 
 
+def test_list_supported_targets_includes_all_six_siu_triggers():
+    targets = list_supported_targets()
+    for trigger in ("S12", "S13", "S14", "S15", "S17", "S26"):
+        assert ("HL7", "SIU", trigger) in targets
+
+
 def test_list_supported_targets_includes_oru_r01():
     assert ("HL7", "ORU", "R01") in list_supported_targets()
 
@@ -460,6 +466,47 @@ def test_siu_s12_missing_appointment_raises_mapping_error():
     bundle.entry = [BundleEntry(fullUrl="urn:uuid:p1", resource=patient)]
     with pytest.raises(MappingError):
         build_message_from_bundle(bundle, "HL7", "SIU", "S12")
+
+
+@pytest.mark.parametrize(
+    "trigger,fixture,expected_status",
+    [
+        ("S13", "siu_s13_basic.hl7", "booked"),
+        ("S14", "siu_s14_basic.hl7", "booked"),
+        ("S15", "siu_s15_basic.hl7", "cancelled"),
+        ("S17", "siu_s17_basic.hl7", "entered-in-error"),
+        ("S26", "siu_s26_basic.hl7", "noshow"),
+    ],
+)
+def test_siu_trigger_round_trips_and_preserves_status(trigger, fixture, expected_status):
+    # S12/S13/S14/S26 (booked-timing-required) and S15/S17 (untimed) each
+    # reuse the identical base builder, split only by _validate - this
+    # confirms both branches produce a correct round trip.
+    forward_text = (FIXTURES / fixture).read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+
+    message_text = build_message_from_bundle(bundle, "HL7", "SIU", trigger)
+    assert f"||SIU^{trigger}|" in message_text
+
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    original = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Appointment")
+    appointment = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Appointment")
+    assert appointment.status == expected_status == original.status
+
+
+def test_siu_s26_missing_start_time_raises_mapping_error():
+    # S26 is one of the booked-timing-required triggers, mirroring S12's
+    # own requirement - an Appointment with no start can't round-trip
+    # through a trigger the forward mapper itself would reject.
+    appointment = Appointment(id="a1", status="noshow", participant=[])
+    patient = Patient(id="p1", name=[{"family": "Solo"}])
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [
+        BundleEntry(fullUrl="urn:uuid:p1", resource=patient),
+        BundleEntry(fullUrl="urn:uuid:a1", resource=appointment),
+    ]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "HL7", "SIU", "S26")
 
 
 def test_oru_r01_round_trip_preserves_report_and_observation_grouping():

@@ -331,6 +331,13 @@ def test_index_transform_target_dropdown_includes_siu_s12():
     assert "HL7 SIU^S12" in response.text
 
 
+def test_index_transform_target_dropdown_includes_all_six_siu_triggers():
+    response = client.get("/")
+    assert response.status_code == 200
+    for trigger in ("S12", "S13", "S14", "S15", "S17", "S26"):
+        assert f"HL7 SIU^{trigger}" in response.text
+
+
 def test_api_transform_builds_siu_s12_message():
     convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("siu_s12_basic.hl7")})
     bundle_json = json.dumps(convert_response.json()["bundle"])
