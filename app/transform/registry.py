@@ -10,6 +10,7 @@ from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
 from app.transform.cda_ccd import CcdReverseBuilder
 from app.transform.cda_discharge_summary import DischargeSummaryReverseBuilder
+from app.transform.cda_history_and_physical import HistoryAndPhysicalReverseBuilder
 from app.transform.edi_270 import Edi270Builder
 from app.transform.edi_271 import Edi271Builder
 from app.transform.hl7_adt import (
@@ -70,6 +71,7 @@ _BUILDERS: dict[tuple[str, str, str], MessageBuilder] = {
     ("HL7", "MDM", "T11"): MdmT11Builder(),
     ("CDA", "CCD", ""): CcdReverseBuilder(),
     ("CDA", "DISCHARGESUMMARY", ""): DischargeSummaryReverseBuilder(),
+    ("CDA", "HISTORYANDPHYSICAL", ""): HistoryAndPhysicalReverseBuilder(),
     ("EDI", "270", ""): Edi270Builder(),
     ("EDI", "271", ""): Edi271Builder(),
 }

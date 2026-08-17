@@ -647,6 +647,36 @@ def test_discharge_summary_missing_patient_raises_mapping_error():
         build_message_from_bundle(empty_bundle, "CDA", "DISCHARGESUMMARY", "")
 
 
+def test_list_supported_targets_includes_history_and_physical():
+    assert ("CDA", "HISTORYANDPHYSICAL", "") in list_supported_targets()
+
+
+def test_history_and_physical_round_trip_produces_a_convertible_document_again():
+    forward_xml = (FIXTURES / "history_and_physical_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original_resource_types = {e.resource.get_resource_type() for e in bundle.entry}
+    assert "Procedure" in original_resource_types
+
+    document_text = build_message_from_bundle(bundle, "CDA", "HISTORYANDPHYSICAL", "")
+    assert document_text.startswith('<?xml version="1.0"')
+    assert "34117-2" in document_text
+
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
+    assert resource_types == original_resource_types
+
+    original_procedure = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Procedure")
+    procedure = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Procedure")
+    assert procedure.code.coding[0].code == original_procedure.code.coding[0].code
+    assert procedure.status == original_procedure.status
+
+
+def test_history_and_physical_missing_patient_raises_mapping_error():
+    empty_bundle = Bundle(id="test", type="collection")
+    with pytest.raises(MappingError):
+        build_message_from_bundle(empty_bundle, "CDA", "HISTORYANDPHYSICAL", "")
+
+
 def test_edi_270_round_trip_with_dependent_produces_a_convertible_interchange_again():
     # The real fixture used to prove the forward direction (with a
     # dependent), run in reverse then forward again.

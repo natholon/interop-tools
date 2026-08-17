@@ -488,6 +488,31 @@ def test_api_transform_builds_discharge_summary_document():
     assert "18842-5" in document_text
 
 
+def test_index_transform_target_dropdown_includes_history_and_physical():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "CDA HISTORYANDPHYSICAL" in response.text
+
+
+def test_api_transform_builds_history_and_physical_document():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("history_and_physical_basic.xml")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={
+            "bundle_json": bundle_json,
+            "target_format": "CDA",
+            "target_type": "HISTORYANDPHYSICAL",
+            "target_trigger": "",
+        },
+    )
+    assert response.status_code == 200
+    document_text = response.json()["message_text"]
+    assert document_text.startswith('<?xml version="1.0"')
+    assert "34117-2" in document_text
+
+
 def test_index_transform_target_dropdown_includes_270():
     response = client.get("/")
     assert response.status_code == 200
