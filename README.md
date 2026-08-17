@@ -9,15 +9,17 @@ A healthcare interoperability toolkit - transformation, FHIR conversion, validat
 - HL7v2 **SIU** → FHIR R4 Bundle (Patient + Appointment, plus real Practitioner/Location/Device resources for the appointment's personnel/location/equipment participants) — S12 New booking, S13 Reschedule, S14 Modify, S15 Cancel, S17 Delete, S26 Patient No-Show.
 - HL7v2 **ORU** → FHIR R4 Bundle (Patient + optional Encounter + DiagnosticReport + Observation per result, with positional OBR/OBX grouping so each report only references its own results) — R01 Observation result, R30/R31/R32/R40 point-of-care result.
 - HL7v2 **MDM** → FHIR R4 Bundle (Patient + optional Encounter + DocumentReference, with document text content carried via a separate Binary resource) — T02 New document, T04 Document status update, T06 Document addendum, T08 Document edit, T10 Document replacement, T11 Document cancel.
-- **C-CDA → FHIR R4 Bundle**: two document types (CCD, Discharge Summary) sharing a common header (Patient + optional Encounter) and four recognized sections - Problems → Condition, Medications → MedicationRequest, Allergies → AllergyIntolerance, Immunizations → Immunization.
+- **C-CDA → FHIR R4 Bundle**: three document types (CCD, Discharge Summary, History and Physical Note) sharing a common header (Patient + optional Encounter) and seven general-purpose sections recognized on any of them - Problems → Condition, Medications → MedicationRequest, Allergies → AllergyIntolerance, Immunizations → Immunization, Vital Signs → an Observation panel, Results → DiagnosticReport + Observation, Procedures → Procedure - plus two sections specific to Discharge Summary (Hospital Discharge Diagnosis → Condition, Discharge Medications → MedicationRequest).
 - **X12 EDI → FHIR R4 Bundle**: the full "big five" HIPAA transaction-set suite - **270/271** Eligibility Inquiry/Response → CoverageEligibilityRequest/Response, **276/277** Claim Status Request/Response → Task, **278** Prior Authorization → Claim/ClaimResponse, **835** Remittance Advice → PaymentReconciliation, **837P/837I/837D** Professional/Institutional/Dental Claims → Claim.
 - Input format (HL7v2 / C-CDA XML / X12 EDI) is auto-detected — paste or upload any supported format into the same textarea/file field and **Convert to FHIR** routes to the right pipeline automatically.
+- **Bundle deduplication** — an opt-in post-conversion pass that merges duplicate Patient/Practitioner/Organization/Location entries within one already-converted Bundle (matched by identifier, or by name when no identifier is present) and rewrites every surviving reference to point at the kept, canonical resource.
+- **Bidirectional transformation (FHIR Bundle → source-format text)** — the reverse of every conversion pillar above, at full family-level breadth: every HL7v2 trigger event this app converts *to* FHIR (all ADT/SIU/ORU/MDM triggers, including all three cancel triggers) is also a reverse target; all three C-CDA document types convert back out, with Hospital Discharge Diagnosis reversing via its own real category marker (Discharge Medications is a disclosed, permanent exception - the forward mapping leaves no FHIR-side signal to reverse); and every X12 EDI transaction-set family above, including all three 837 variants, round-trips back to X12 text.
 - A synthetic test-data **generator** covering every combination above, with realistic field-level randomization (required fields always populated, optional fields randomly included or omitted), selectable from a dropdown in the web UI or via the JSON API.
 - A message **validator**, independent of conversion — checks any message or document (supported for conversion or not) and returns a report of `error`/`warning`/`info` findings, each pointing at the offending location, covering structural correctness (required fields, well-formed values) as well as healthcare data-quality plausibility (a birth date in the future, a discharge before an admit, an appointment ending before it starts, a lab value outside its own reference range).
 
-Conversion, generation, and validation are all available for every input format, through the same web UI and JSON API.
+Conversion, generation, validation, deduplication, and bidirectional transformation are all available for every input format, through the same web UI and JSON API.
 
-**Planned next:** H&P as a next C-CDA document type on the existing section-dispatch infrastructure.
+**Planned next:** History and Physical's own IG-required narrative sections (Reason for Visit, History of Present Illness, Physical Exam, etc.) are the one disclosed gap remaining - they carry no structured entries recognized by this app's section-dispatch infrastructure, and mapping them properly would need a full FHIR Composition, a deliberately out-of-scope redesign for now.
 
 ## Reference sources
 
@@ -63,8 +65,9 @@ curl -X POST http://127.0.0.1:8000/api/validate -H "Content-Type: application/js
 curl "http://127.0.0.1:8000/api/generate?message_type=ADT&trigger_event=A01"
 curl "http://127.0.0.1:8000/api/generate?message_type=CDA&trigger_event=CCD"
 curl "http://127.0.0.1:8000/api/generate?message_type=EDI&trigger_event=837P"
+curl -X POST http://127.0.0.1:8000/api/transform -H "Content-Type: application/json" -d '{\"bundle_json\": \"{...}\", \"target_format\": \"HL7\", \"target_type\": \"ADT\", \"target_trigger\": \"A01\"}'
 ```
-Pass `&seed=<int>` to `/api/generate` for a reproducible message instead of a fresh random one.
+Pass `&seed=<int>` to `/api/generate` for a reproducible message instead of a fresh random one. `/api/transform` takes a FHIR Bundle back the other way, to any of the targets `/api/convert` can produce - see [CLAUDE.md](CLAUDE.md) for the full list.
 
 ## Running tests
 
