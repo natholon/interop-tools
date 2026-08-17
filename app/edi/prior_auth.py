@@ -338,7 +338,11 @@ def _build_claim_response(
 class Edi278Builder(EdiTransactionBuilder):
     transaction_set_id = TRANSACTION_SET_ID
 
-    def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters) -> Bundle:
+    def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters, recorder=None) -> Bundle:
+        # recorder is accepted (see app/provenance/) but not yet acted on -
+        # 278 isn't instrumented yet (this phase's scope is 270/271 only) -
+        # Bundle.identifier/.timestamp still get recorded "for free" via
+        # the shared assemble_bundle call below.
         bht = find_segment(transaction_set.segments, "BHT")
         if bht is None:
             raise MissingSegmentError(f"{self.transaction_set_id} transaction set is missing its BHT segment")
@@ -375,4 +379,4 @@ class Edi278Builder(EdiTransactionBuilder):
             if response is not None:
                 resources.append(response)
 
-        return assemble_bundle(bht, *resources)
+        return assemble_bundle(bht, *resources, recorder=recorder)

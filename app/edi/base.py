@@ -28,5 +28,5 @@ class EdiTransactionBuilder(ABC):
     transaction_set_id: str
 
     @abstractmethod
-    def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters) -> Bundle:
+    def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters, recorder=None) -> Bundle:
         ...

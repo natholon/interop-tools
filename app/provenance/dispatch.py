@@ -2,17 +2,14 @@
 provenance-tracking mirror of `app/pipeline.py::convert_to_bundle`, but
 deliberately NOT built by threading a `recorder` parameter through
 `app/pipeline.py`/`app/cda/pipeline.py`/`app/edi/pipeline.py` themselves.
-Doing that would add a dead, no-op parameter to `app/edi/pipeline.py`,
-whose own builder ABC (`EdiTransactionBuilder.build_bundle`) doesn't do
-anything with it yet - widening the diff into a file that doesn't need to
-change. Instead this module reuses `app.pipeline`'s own `is_x12`/`is_xml`
-sniffing functions directly (the real, stable, single-purpose functions -
-not re-derived) and, for HL7v2 and C-CDA, does the same tiny
-parse-then-dispatch `app/hl7/pipeline.py::convert_hl7_to_bundle`/
-`app/cda/pipeline.py::convert_cda_to_bundle` already do, just with a
+Instead this module reuses `app.pipeline`'s own `is_x12`/`is_xml` sniffing
+functions directly (the real, stable, single-purpose functions - not
+re-derived) and, for all three formats, does the same tiny parse-then-
+dispatch `app/hl7/pipeline.py::convert_hl7_to_bundle`/
+`app/cda/pipeline.py::convert_cda_to_bundle`/
+`app/edi/pipeline.py::convert_edi_to_bundle` already do, just with a
 `ProvenanceRecorder` threaded into the one call
-(`mapper.to_bundle(message, recorder=recorder)`/
-`builder.build_bundle(document, recorder=recorder)`) that actually needs
+(`mapper.to_bundle(...)`/`builder.build_bundle(...)`) that actually needs
 it."""
 
 from fhir.resources.R4B.bundle import Bundle
@@ -20,7 +17,9 @@ from fhir.resources.R4B.bundle import Bundle
 from app.cda.parser import parse_document
 from app.cda.registry import get_document_builder
 from app.cda.validation import resolve_trigger_event as resolve_cda_trigger_event
-from app.edi.pipeline import convert_edi_to_bundle
+from app.edi.parser import first_transaction_set, parse_interchange
+from app.edi.registry import get_transaction_builder
+from app.hl7.errors import MissingSegmentError
 from app.hl7.parser import field_str, parse_message, require_segment
 from app.mappings.registry import get_mapper
 from app.pipeline import is_x12, is_xml
@@ -28,7 +27,14 @@ from app.provenance.models import CrosswalkReport
 from app.provenance.recorder import ProvenanceRecorder
 from app.provenance.resolver import resolve_bundle_paths
 
-_EDI_UNSUPPORTED_REASON = "Field-level provenance for X12 EDI is not implemented yet."
+# X12 transaction-set families (keyed by ST01) with real, complete
+# field-level instrumentation - the EDI-format mirror of
+# _INSTRUMENTED_MESSAGE_TYPES below. Extended as each family's own
+# provenance slice actually ships. 270/271 became this pillar's own first
+# proof the architecture generalizes to a delimited-text format with no
+# XML/pipe-delimited structure to lean on - see CLAUDE.md's own Data
+# Specification section for the edi_location() design notes.
+_INSTRUMENTED_TRANSACTION_SETS = {"270", "271"}
 # C-CDA is only PARTIALLY instrumented (document header + the Problems
 # section, and - for free, via a shared entry-level builder, see
 # app/cda/hospital_discharge_diagnosis.py - Discharge Summary's own
@@ -59,23 +65,24 @@ def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:
     to what convert_to_bundle would produce - conversion behavior itself
     is never altered by requesting provenance) and a CrosswalkReport.
 
-    EDI input converts normally but always reports `unsupported=True` with
-    an empty `entries` list - no field-level instrumentation exists for
-    that format at all yet. C-CDA input converts normally and threads a
-    recorder through (so `entries` may be genuinely non-empty for a
-    document with a header and/or a Problems section), but also always
-    reports `unsupported=True` - see `_CDA_UNSUPPORTED_REASON`'s own
-    comment for why no CDA document type is "fully instrumented" yet. An
-    HL7v2 message whose message_type isn't in `_INSTRUMENTED_MESSAGE_TYPES`
-    converts normally too and reports `unsupported=True` for the identical
-    reason - checked explicitly against that set, not inferred from
-    "the recorder produced zero facts": every message type's own
-    to_bundle() accepts a recorder and threads it into the PID/MSH fields
-    it shares with every other type via build_patient/assemble_bundle, so a
-    not-yet-instrumented type's own recorder can still accumulate a few
-    real facts despite having no instrumentation for its own type-specific
-    resource at all - an empty-entries heuristic would have misreported
-    such a type as fully supported.
+    EDI input converts normally and threads a recorder through when its own
+    ST01 is in `_INSTRUMENTED_TRANSACTION_SETS` (so `entries` is genuinely
+    non-empty for a 270/271 transaction set) and reports `unsupported=True`
+    for every other transaction-set family, checked explicitly the same
+    way HL7v2's own `_INSTRUMENTED_MESSAGE_TYPES` is - not inferred from
+    "the recorder produced zero facts," since every EDI family's own
+    `build_bundle()` accepts a recorder and threads it into the shared
+    `assemble_bundle()` call it shares with every other family (see
+    app/edi/common.py), so a not-yet-instrumented family's own recorder can
+    still accumulate a Bundle.identifier/.timestamp fact or two despite
+    having no instrumentation for its own resource-specific fields at all.
+    C-CDA input converts normally and threads a recorder through too (so
+    `entries` may be genuinely non-empty for a document with a header
+    and/or a Problems section), but also always reports `unsupported=True`
+    - see `_CDA_UNSUPPORTED_REASON`'s own comment for why no CDA document
+    type is "fully instrumented" yet. An HL7v2 message whose message_type
+    isn't in `_INSTRUMENTED_MESSAGE_TYPES` converts normally too and
+    reports `unsupported=True` for the identical reason.
 
     Raises the same exception shapes convert_to_bundle does
     (Hl7ParseError/CdaParseError/EdiParseError, MissingSegmentError,
@@ -83,9 +90,26 @@ def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:
     unconvertible message - this function never swallows a real
     conversion failure into an "unsupported" report."""
     if is_x12(raw_text):
-        bundle = convert_edi_to_bundle(raw_text)
+        interchange = parse_interchange(raw_text)
+        transaction_set = first_transaction_set(interchange)
+        if transaction_set is None:
+            raise MissingSegmentError("Interchange contains no ST/SE transaction set to convert")
+        builder = get_transaction_builder(transaction_set.st01, transaction_set.st03)
+        recorder = ProvenanceRecorder(source_format="EDI")
+        bundle = builder.build_bundle(transaction_set, interchange.delimiters, recorder=recorder)
+        entries = resolve_bundle_paths(bundle, recorder)
+        st01 = transaction_set.st01.strip().upper()
+        unsupported = st01 not in _INSTRUMENTED_TRANSACTION_SETS
+        unsupported_reason = (
+            f"Field-level provenance for X12 {st01} is not implemented yet." if unsupported else None
+        )
         return bundle, CrosswalkReport(
-            source_format="EDI", entries=[], unsupported=True, unsupported_reason=_EDI_UNSUPPORTED_REASON
+            message_type="EDI",
+            trigger_event=st01,
+            source_format="EDI",
+            entries=entries,
+            unsupported=unsupported,
+            unsupported_reason=unsupported_reason,
         )
     if is_xml(raw_text):
         document = parse_document(raw_text)

@@ -24,6 +24,7 @@ from fhir.resources.R4B.resource import Resource
 from app.edi.parser import Delimiters, HlLoop, Segment, component, element, find_segment, group_by_hl_hierarchy
 from app.fhir_models.builders import parse_hl7_date, parse_hl7_datetime
 from app.hl7.errors import MissingSegmentError
+from app.provenance.location import edi_location
 from app.validation.common import not_in_future
 from app.validation.models import ValidationFinding
 
@@ -158,7 +159,7 @@ def resolve_id_qualifier_system(qualifier: str, fallback_system: str) -> str:
     return f"{fallback_system}:{qualifier}" if qualifier else fallback_system
 
 
-def _build_nm1_identifier(nm1: Segment) -> Identifier | None:
+def _build_nm1_identifier(nm1: Segment, resource_id: str | None = None, recorder=None) -> Identifier | None:
     # Normalized the same way DMG03's gender code is normalized below (and
     # the way app/mappings/mdm.py::_resolve_content_type normalizes TXA-3
     # before its own disclosed-fallback coded lookup) - a real-world sender
@@ -169,6 +170,8 @@ def _build_nm1_identifier(nm1: Segment) -> Identifier | None:
     value = element(nm1, 9)
     if not value:
         return None
+    if recorder and resource_id:
+        recorder.record(resource_id, "identifier[0].value", edi_location("NM1", 9), value)
     return Identifier(system=resolve_id_qualifier_system(qualifier, _NM1_ID_FALLBACK_SYSTEM), value=value)
 
 
@@ -274,12 +277,25 @@ def resolve_eligibility_parties(segments: list[Segment], transaction_set_id: str
     )
 
 
-def build_service_type_category(code: str) -> CodeableConcept | None:
+def build_service_type_category(
+    code: str,
+    resource_id: str | None = None,
+    relative_path: str | None = None,
+    source_location: str | None = None,
+    recorder=None,
+) -> CodeableConcept | None:
     """270's EQ01 and 271's EB03 (Service Type Code) share the same X12
     external code list - one shared builder for both directions, on
-    SERVICE_TYPE_CODE_SYSTEM (see module-level comment)."""
+    SERVICE_TYPE_CODE_SYSTEM (see module-level comment). `source_location`
+    is passed in by the caller (rather than composed here from a raw
+    segment, the way app.fhir_models.builders::build_codeable_concept_from_cwe
+    does) since this function only ever receives the already-extracted code
+    string, not the segment itself - 270's own EQ-1 and 271's own EB-3 are
+    two different segment/element pairs for the identical target field."""
     if not code:
         return None
+    if recorder and resource_id and relative_path and source_location:
+        recorder.record(resource_id, f"{relative_path}.coding[0].code", source_location, code)
     return CodeableConcept(coding=[Coding(system=SERVICE_TYPE_CODE_SYSTEM, code=code)])
 
 
@@ -542,15 +558,18 @@ def is_person_entity(nm1: Segment) -> bool:
     return element(nm1, 2) == "1"
 
 
-def build_organization_from_nm1(nm1: Segment) -> Organization:
+def build_organization_from_nm1(nm1: Segment, recorder=None) -> Organization:
     """NM1 (non-person entity) -> Organization. Used for the payer (NM1*PR)
     loop, and the provider (NM1*1P/41) loop when NM102 indicates an
     organization rather than an individual."""
-    organization = Organization(id=str(uuid.uuid4()))
+    organization_id = str(uuid.uuid4())
+    organization = Organization(id=organization_id)
     name = element(nm1, 3)
     if name:
         organization.name = name
-    identifier = _build_nm1_identifier(nm1)
+        if recorder:
+            recorder.record(organization_id, "name", edi_location("NM1", 3), name)
+    identifier = _build_nm1_identifier(nm1, resource_id=organization_id, recorder=recorder)
     if identifier:
         organization.identifier = [identifier]
     return organization
@@ -569,28 +588,41 @@ def _build_person_name(nm1: Segment) -> HumanName | None:
     return name
 
 
-def build_practitioner_from_nm1(nm1: Segment) -> Practitioner:
+def _record_person_name(resource_id: str, name: HumanName | None, recorder) -> None:
+    if not recorder or name is None:
+        return
+    if name.family:
+        recorder.record(resource_id, "name[0].family", edi_location("NM1", 3), name.family)
+    if name.given:
+        recorder.record(resource_id, "name[0].given[0]", edi_location("NM1", 4), name.given[0])
+
+
+def build_practitioner_from_nm1(nm1: Segment, recorder=None) -> Practitioner:
     """NM1 (person) -> Practitioner. Used for the provider (NM1*1P/41) loop
     when NM102 indicates an individual rather than an organization."""
-    practitioner = Practitioner(id=str(uuid.uuid4()))
+    practitioner_id = str(uuid.uuid4())
+    practitioner = Practitioner(id=practitioner_id)
     name = _build_person_name(nm1)
     if name:
         practitioner.name = [name]
-    identifier = _build_nm1_identifier(nm1)
+        _record_person_name(practitioner_id, name, recorder)
+    identifier = _build_nm1_identifier(nm1, resource_id=practitioner_id, recorder=recorder)
     if identifier:
         practitioner.identifier = [identifier]
     return practitioner
 
 
-def build_patient_from_nm1_dmg(nm1: Segment, dmg: Segment | None) -> Patient:
+def build_patient_from_nm1_dmg(nm1: Segment, dmg: Segment | None, recorder=None) -> Patient:
     """NM1 (person) + optional DMG -> Patient. Used for the subscriber
     (NM1*IL) and dependent (NM1*QC) loops - both are always person entities
     in 270/271, unlike the payer/provider loops."""
-    patient = Patient(id=str(uuid.uuid4()))
+    patient_id = str(uuid.uuid4())
+    patient = Patient(id=patient_id)
     name = _build_person_name(nm1)
     if name:
         patient.name = [name]
-    identifier = _build_nm1_identifier(nm1)
+        _record_person_name(patient_id, name, recorder)
+    identifier = _build_nm1_identifier(nm1, resource_id=patient_id, recorder=recorder)
     if identifier:
         patient.identifier = [identifier]
 
@@ -599,18 +631,24 @@ def build_patient_from_nm1_dmg(nm1: Segment, dmg: Segment | None) -> Patient:
         # 271 - other X12-legal date/time qualifiers exist but aren't used
         # in this transaction family, disclosed rather than handled.
         if element(dmg, 1) == "D8":
-            birth_date = parse_hl7_date(element(dmg, 2))
+            dmg02_raw = element(dmg, 2)
+            birth_date = parse_hl7_date(dmg02_raw)
             if birth_date:
                 patient.birthDate = birth_date
-        gender_code = element(dmg, 3).strip().upper()
+                if recorder:
+                    recorder.record(patient_id, "birthDate", edi_location("DMG", 2), birth_date, source_value=dmg02_raw)
+        dmg03_raw = element(dmg, 3)
+        gender_code = dmg03_raw.strip().upper()
         gender = _DMG_GENDER_MAP.get(gender_code)
         if gender:
             patient.gender = gender
+            if recorder:
+                recorder.record(patient_id, "gender", edi_location("DMG", 3), gender, source_value=dmg03_raw)
 
     return patient
 
 
-def build_coverage(patient: Resource, payer: Resource, subscriber: Resource) -> Coverage:
+def build_coverage(patient: Resource, payer: Resource, subscriber: Resource, recorder=None) -> Coverage:
     """A minimal, always-active Coverage linking a beneficiary (patient),
     payer, and subscriber - independently written the identical way three
     separate times (eligibility_270.py, eligibility_271.py, prior_auth.py)
@@ -619,8 +657,16 @@ def build_coverage(patient: Resource, payer: Resource, subscriber: Resource) -> 
     resource whenever the patient isn't a dependent - callers pass
     whichever resource they already resolved for each role rather than
     this function re-deriving patient/dependent precedence itself."""
+    coverage_id = str(uuid.uuid4())
+    if recorder:
+        recorder.record_inferred(
+            coverage_id,
+            "status",
+            "Every Coverage this app builds is a minimal, synthesized resource always recorded as status=\"active\" - no X12 field in any family this converter reads carries a real policy-status value to read this from.",
+            "active",
+        )
     return Coverage(
-        id=str(uuid.uuid4()),
+        id=coverage_id,
         status="active",
         beneficiary=Reference(reference=f"urn:uuid:{patient.id}"),
         payor=[Reference(reference=f"urn:uuid:{payer.id}")],
@@ -628,7 +674,7 @@ def build_coverage(patient: Resource, payer: Resource, subscriber: Resource) -> 
     )
 
 
-def assemble_bundle(bht: Segment, *resources: Resource) -> Bundle:
+def assemble_bundle(bht: Segment, *resources: Resource, recorder=None) -> Bundle:
     """Wrap any number of resources into a Bundle, with BHT-derived
     metadata (BHT03 Reference Identification -> Bundle.identifier, BHT04+
     BHT05 Date+Time -> Bundle.timestamp) - the X12-header equivalent of
@@ -643,6 +689,8 @@ def assemble_bundle(bht: Segment, *resources: Resource) -> Bundle:
     reference_id = element(bht, 3)
     if reference_id:
         bundle.identifier = Identifier(system=BHT_REFERENCE_SYSTEM, value=reference_id)
+        if recorder:
+            recorder.record(bundle.id, "identifier.value", edi_location("BHT", 3), reference_id)
 
     # Bundle.timestamp is FHIR "instant", which (unlike Coverage's or
     # CoverageEligibilityRequest's plain `date`/`dateTime` fields) has NO
@@ -653,9 +701,19 @@ def assemble_bundle(bht: Segment, *resources: Resource) -> Bundle:
     # app/cda/common.py::assemble_bundle already shipped once and disclosed
     # in CLAUDE.md - call parse_hl7_datetime directly here (no date-only
     # fallback) rather than parse_x12_datetime, matching that fix.
-    timestamp = parse_hl7_datetime(element(bht, 4) + element(bht, 5))
+    bht04_raw = element(bht, 4)
+    bht05_raw = element(bht, 5)
+    timestamp = parse_hl7_datetime(bht04_raw + bht05_raw)
     if timestamp:
         bundle.timestamp = timestamp
+        if recorder:
+            recorder.record(
+                bundle.id,
+                "timestamp",
+                f"{edi_location('BHT', 4)}+{edi_location('BHT', 5)}",
+                timestamp,
+                source_value=bht04_raw + bht05_raw,
+            )
 
     bundle.entry = [BundleEntry(fullUrl=f"urn:uuid:{resource.id}", resource=resource) for resource in resources]
     return bundle

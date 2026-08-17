@@ -171,7 +171,12 @@ def _assemble_835_bundle(trace_number: str, *resources: Resource) -> Bundle:
 class Edi835Builder(EdiTransactionBuilder):
     transaction_set_id = TRANSACTION_SET_ID
 
-    def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters) -> Bundle:
+    def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters, recorder=None) -> Bundle:
+        # recorder is accepted (see app/provenance/) but not yet acted on -
+        # 835 isn't instrumented yet (this phase's scope is 270/271 only),
+        # and unlike every sibling family it has no BHT segment to feed the
+        # shared assemble_bundle with, so it doesn't even get free
+        # Bundle-level facts the way the BHT-based families do.
         segments = transaction_set.segments
 
         bpr = find_segment(segments, "BPR")

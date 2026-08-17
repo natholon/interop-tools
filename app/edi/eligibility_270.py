@@ -47,24 +47,28 @@ from app.edi.common import (
 from app.edi.parser import Delimiters, TransactionSet, element, find_segment, group_by_leader
 from app.fhir_models.builders import parse_hl7_date
 from app.hl7.errors import MappingError, MissingSegmentError
+from app.provenance.location import edi_location
 
 TRANSACTION_SET_ID = "270"
 
 
-def _build_serviced_date(dtp_segments: list) -> str | None:
+def _build_serviced_date(dtp_segments: list, resource_id: str | None = None, recorder=None) -> str | None:
     """DTP02 qualifier "D8" (a simple CCYYMMDD date) is handled; "RD8" (a
     CCYYMMDD-CCYYMMDD range) is deferred this slice, disclosed rather than
     guessed at - see the module's Phase-1 scope notes in CLAUDE.md."""
     for dtp in dtp_segments:
         if element(dtp, 2) == "D8":
-            date_value = parse_hl7_date(element(dtp, 3))
+            raw = element(dtp, 3)
+            date_value = parse_hl7_date(raw)
             if date_value:
+                if recorder and resource_id:
+                    recorder.record(resource_id, "servicedDate", edi_location("DTP", 3), date_value, source_value=raw)
                 return date_value
     return None
 
 
 def _build_items_and_serviced_date(
-    patient_loop_members: list,
+    patient_loop_members: list, resource_id: str | None = None, recorder=None
 ) -> tuple[list[CoverageEligibilityRequestItem], str | None]:
     """CoverageEligibilityRequest.servicedDate is a single top-level field
     (not per-item, confirmed by inspecting model_fields directly rather
@@ -75,19 +79,25 @@ def _build_items_and_serviced_date(
     items: list[CoverageEligibilityRequestItem] = []
     serviced_date: str | None = None
     for eq, members in eq_groups:
-        category = build_service_type_category(element(eq, 1))
+        category = build_service_type_category(
+            element(eq, 1),
+            resource_id=resource_id,
+            relative_path=f"item[{len(items)}]",
+            source_location=edi_location("EQ", 1),
+            recorder=recorder,
+        )
         if category is not None:
             items.append(CoverageEligibilityRequestItem(category=category))
         if serviced_date is None:
             dtp_segments = [m for m in members if m[0] == "DTP"]
-            serviced_date = _build_serviced_date(dtp_segments)
+            serviced_date = _build_serviced_date(dtp_segments, resource_id=resource_id, recorder=recorder)
     return items, serviced_date
 
 
 class Edi270Builder(EdiTransactionBuilder):
     transaction_set_id = TRANSACTION_SET_ID
 
-    def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters) -> Bundle:
+    def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters, recorder=None) -> Bundle:
         # delimiters unused - no field this builder reads is a composite
         # element. Accepted only to satisfy EdiTransactionBuilder's shared
         # interface (see its own docstring for why the parameter exists).
@@ -97,43 +107,68 @@ class Edi270Builder(EdiTransactionBuilder):
 
         parties = resolve_eligibility_parties(transaction_set.segments, "270")
 
-        payer = build_organization_from_nm1(parties.payer_nm1)
+        payer = build_organization_from_nm1(parties.payer_nm1, recorder=recorder)
         provider: Resource = (
-            build_practitioner_from_nm1(parties.provider_nm1)
+            build_practitioner_from_nm1(parties.provider_nm1, recorder=recorder)
             if is_person_entity(parties.provider_nm1)
-            else build_organization_from_nm1(parties.provider_nm1)
+            else build_organization_from_nm1(parties.provider_nm1, recorder=recorder)
         )
-        subscriber = build_patient_from_nm1_dmg(parties.subscriber_nm1, parties.subscriber_dmg)
+        subscriber = build_patient_from_nm1_dmg(parties.subscriber_nm1, parties.subscriber_dmg, recorder=recorder)
 
         # .patient = the 2000D dependent when present (and its own NM1
         # resolves), else the subscriber themselves - see module docstring.
         patient = (
-            build_patient_from_nm1_dmg(parties.patient_nm1, parties.patient_dmg)
+            build_patient_from_nm1_dmg(parties.patient_nm1, parties.patient_dmg, recorder=recorder)
             if parties.patient_is_dependent
             else subscriber
         )
 
-        coverage = build_coverage(patient, payer, subscriber)
+        coverage = build_coverage(patient, payer, subscriber, recorder=recorder)
 
-        items, serviced_date = _build_items_and_serviced_date(parties.patient_loop_members)
+        request_id = str(uuid.uuid4())
+        items, serviced_date = _build_items_and_serviced_date(
+            parties.patient_loop_members, resource_id=request_id, recorder=recorder
+        )
 
         # created is FHIR-required (confirmed by construction) with BHT04
         # (+ optional BHT05) as its only real source - a business-rule
         # requirement this converter enforces directly, the same way
         # AdtA03Mapper requires a resolvable discharge time rather than
         # guessing one.
-        created = parse_x12_datetime(element(bht, 4), element(bht, 5))
+        bht04_raw = element(bht, 4)
+        bht05_raw = element(bht, 5)
+        created = parse_x12_datetime(bht04_raw, bht05_raw)
         if created is None:
             raise MappingError("270 transaction set's BHT segment has no resolvable creation date (BHT04)")
 
         request = CoverageEligibilityRequest(
-            id=str(uuid.uuid4()),
+            id=request_id,
             status="active",
             purpose=[DEFAULT_PURPOSE],
             created=created,
             patient=Reference(reference=f"urn:uuid:{patient.id}"),
             insurer=Reference(reference=f"urn:uuid:{payer.id}"),
         )
+        if recorder:
+            recorder.record_inferred(
+                request_id,
+                "status",
+                'Every CoverageEligibilityRequest this app builds is a synthesized, always-active resource - no X12 field carries a request-level status separate from whether it was successfully created.',
+                "active",
+            )
+            recorder.record_inferred(
+                request_id,
+                "purpose[0]",
+                '270 carries no data element for "why are we asking" - CoverageEligibilityRequest.purpose is FHIR-required with no source field to derive it from, so this always defaults to the dominant real-world use.',
+                DEFAULT_PURPOSE,
+            )
+            recorder.record(
+                request_id,
+                "created",
+                f"{edi_location('BHT', 4)}+{edi_location('BHT', 5)}",
+                created,
+                source_value=bht04_raw + bht05_raw,
+            )
         request.provider = Reference(reference=f"urn:uuid:{provider.id}")
         request.insurance = [
             CoverageEligibilityRequestInsurance(coverage=Reference(reference=f"urn:uuid:{coverage.id}"))
@@ -148,4 +183,4 @@ class Edi270Builder(EdiTransactionBuilder):
             resources.append(patient)
         resources.extend([coverage, request])
 
-        return assemble_bundle(bht, *resources)
+        return assemble_bundle(bht, *resources, recorder=recorder)
