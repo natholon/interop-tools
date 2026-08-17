@@ -179,7 +179,7 @@ def build_visit_identifier(pv1) -> Identifier | None:
     return Identifier(system="urn:interop-tools:visit-number", value=visit_number)
 
 
-def build_minimal_encounter(pv1, patient_id: str) -> Encounter:
+def build_minimal_encounter(pv1, patient_id: str, recorder=None) -> Encounter:
     """A minimal Encounter for message types whose PV1 (when present) gives
     context rather than an admit/discharge lifecycle event - ORU's optional
     result-reporting encounter and MDM's optional document-context encounter
@@ -189,15 +189,27 @@ def build_minimal_encounter(pv1, patient_id: str) -> Encounter:
     once (byte-for-byte) between oru.py and mdm.py before being extracted
     here - the same kind of silent-duplication risk build_minimal_pv1_fields
     (in app/generators/base.py) was created to avoid on the generator side."""
+    encounter_id = str(uuid.uuid4())
+    encounter_class = resolve_encounter_class(pv1)
     encounter = Encounter(
-        id=str(uuid.uuid4()),
+        id=encounter_id,
         status="unknown",
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
-        class_fhir=resolve_encounter_class(pv1),
+        class_fhir=encounter_class,
     )
+    if recorder:
+        recorder.record_inferred(
+            encounter_id,
+            "status",
+            "This Encounter's own PV1 gives result/document context, not an admit-discharge lifecycle event - no real signal exists to infer a more specific status from, so it's always \"unknown\".",
+            "unknown",
+        )
+        recorder.record(encounter_id, "class.code", hl7_location("PV1", 2), encounter_class.code, source_value=field_str(pv1, 2))
     visit_identifier = build_visit_identifier(pv1)
     if visit_identifier:
         encounter.identifier = [visit_identifier]
+        if recorder:
+            recorder.record(encounter_id, "identifier[0].value", hl7_location("PV1", 19), visit_identifier.value)
     return encounter
 
 

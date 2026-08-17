@@ -28,15 +28,15 @@ _EDI_UNSUPPORTED_REASON = "Field-level provenance for X12 EDI is not implemented
 _CDA_UNSUPPORTED_REASON = "Field-level provenance for C-CDA is not implemented yet."
 
 # Message types with real, complete field-level instrumentation - not "any
-# type whose recorder produced at least one fact," since ORU/MDM's own
+# type whose recorder produced at least one fact," since MDM's own
 # to_bundle() already accepts a recorder and passes it into build_patient/
-# assemble_bundle "for free" (see each of their own to_bundle docstrings),
-# so an ORU/MDM message DOES produce a few real Patient/Bundle-level facts
-# despite its own DiagnosticReport/DocumentReference fields having no
+# assemble_bundle/build_minimal_encounter "for free" (see its own to_bundle
+# docstring), so an MDM message DOES produce a few real Patient/Encounter/
+# Bundle-level facts despite its own DocumentReference fields having no
 # instrumentation at all - "entries is non-empty" alone would incorrectly
-# report those two types as fully supported. Extended as each message
-# type's own provenance slice actually ships.
-_INSTRUMENTED_MESSAGE_TYPES = {"ADT", "SIU"}
+# report that type as fully supported. Extended as each message type's own
+# provenance slice actually ships.
+_INSTRUMENTED_MESSAGE_TYPES = {"ADT", "SIU", "ORU"}
 
 
 def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:

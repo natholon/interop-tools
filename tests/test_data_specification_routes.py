@@ -80,19 +80,20 @@ def test_api_data_specification_cda_input_converts_but_is_unsupported():
 
 
 def test_api_data_specification_non_instrumented_hl7_type_converts_but_is_unsupported():
-    # ORU's own to_bundle() already threads a recorder into build_patient/
-    # assemble_bundle (shared with ADT/SIU), so it produces a few real PID/
-    # MSH facts despite its own DiagnosticReport/Observation fields having
-    # no instrumentation at all - unsupported must still be True (see
-    # app/provenance/dispatch.py's own _INSTRUMENTED_MESSAGE_TYPES), and
-    # those partial facts should still be visible, not silently dropped.
-    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("oru_r01_basic.hl7")})
+    # MDM's own to_bundle() already threads a recorder into build_patient/
+    # assemble_bundle/build_minimal_encounter (shared with ADT/SIU/ORU), so
+    # it produces a few real PID/PV1/MSH facts despite its own
+    # DocumentReference fields having no instrumentation at all -
+    # unsupported must still be True (see app/provenance/dispatch.py's own
+    # _INSTRUMENTED_MESSAGE_TYPES), and those partial facts should still be
+    # visible, not silently dropped.
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("mdm_t02_basic.hl7")})
     assert response.status_code == 200
     report = response.json()["report"]
     assert report["unsupported"] is True
     assert report["source_format"] == "HL7v2"
     assert len(report["entries"]) > 0
-    assert "ORU^R01" in report["unsupported_reason"]
+    assert "MDM^T02" in report["unsupported_reason"]
 
 
 def test_api_data_specification_siu_type_is_now_instrumented():
@@ -106,6 +107,18 @@ def test_api_data_specification_siu_type_is_now_instrumented():
     assert report["unsupported"] is False
     assert report["message_type"] == "SIU"
     assert report["trigger_event"] == "S12"
+    assert len(report["entries"]) > 0
+
+
+def test_api_data_specification_oru_type_is_now_instrumented():
+    # ORU is instrumented as of this slice - a regression test proving it
+    # stays that way, mirroring the SIU regression test above.
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("oru_r01_basic.hl7")})
+    assert response.status_code == 200
+    report = response.json()["report"]
+    assert report["unsupported"] is False
+    assert report["message_type"] == "ORU"
+    assert report["trigger_event"] == "R01"
     assert len(report["entries"]) > 0
 
 

@@ -19,6 +19,7 @@ from app.mappings.adt import (
     AdtA13Mapper,
     AdtA38Mapper,
 )
+from app.mappings.oru import OruR01Mapper, OruR30Mapper, OruR31Mapper, OruR32Mapper, OruR40Mapper
 from app.mappings.siu import SiuS12Mapper, SiuS13Mapper, SiuS14Mapper, SiuS15Mapper, SiuS17Mapper, SiuS26Mapper
 from app.provenance.location import hl7_location
 from app.provenance.recorder import ProvenanceRecorder
@@ -364,3 +365,158 @@ def test_siu_s12_aig_device_records_type_and_identifier():
     assert name_entry.source_location in (hl7_location("AIG", 3, component=1), hl7_location("AIG", 3, component=2))
     type_entry = by_path[f"Bundle.entry[{device_index}].resource.type.coding[0].code"]
     assert type_entry.source_location == hl7_location("AIG", 4, component=1)
+
+
+# ---------------------------------------------------------------------------
+# ORU
+# ---------------------------------------------------------------------------
+
+_ORU_FIXTURES = [
+    (OruR01Mapper, "oru_r01_basic.hl7"),
+    (OruR01Mapper, "oru_r01_minimal.hl7"),
+    (OruR01Mapper, "oru_r01_shared_performer.hl7"),
+    (OruR01Mapper, "oru_r01_ft_with_caret.hl7"),
+    (OruR30Mapper, "oru_r30_basic.hl7"),
+    (OruR31Mapper, "oru_r31_basic.hl7"),
+    (OruR32Mapper, "oru_r32_basic.hl7"),
+    (OruR40Mapper, "oru_r40_basic.hl7"),
+]
+
+
+@pytest.mark.parametrize("mapper_cls,fixture", _ORU_FIXTURES)
+def test_oru_provenance_recording_does_not_change_bundle_output(mapper_cls, fixture):
+    message = parse_message(read_fixture(fixture))
+
+    with patch("uuid.uuid4", side_effect=_deterministic_uuids()):
+        untraced = mapper_cls().to_bundle(message)
+
+    with patch("uuid.uuid4", side_effect=_deterministic_uuids()):
+        recorder = ProvenanceRecorder(source_format="HL7v2")
+        traced = mapper_cls().to_bundle(message, recorder=recorder)
+
+    assert untraced.model_dump(exclude_none=True) == traced.model_dump(exclude_none=True)
+    assert len(recorder.facts) > 0
+
+    entries = resolve_bundle_paths(traced, recorder)
+    assert len(entries) == len(recorder.facts)
+
+
+def test_oru_r01_basic_crosswalk_matches_known_field_values():
+    # oru_r01_basic.hl7 carries two OBR-led groups (CBC with two OBX results,
+    # one carrying an OBX-16 performer; GLU with one OBX result) - see
+    # test_oru_mapping.py::test_basic_fixture_groups_observations_under_correct_report
+    # for the same fixture's own Bundle-shape assertions this mirrors.
+    message = parse_message(read_fixture("oru_r01_basic.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = OruR01Mapper().to_bundle(message, recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    reports = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "DiagnosticReport"]
+    cbc_report = next(r for r in reports if r.code.coding[0].code == "CBC")
+    cbc_index = next(i for i, e in enumerate(bundle.entry) if e.resource is cbc_report)
+    glu_report = next(r for r in reports if r.code.coding[0].code == "GLU")
+    glu_index = next(i for i, e in enumerate(bundle.entry) if e.resource is glu_report)
+
+    cbc_status = by_path[f"Bundle.entry[{cbc_index}].resource.status"]
+    assert cbc_status.value == "final"
+    assert cbc_status.source_value == "F"
+    assert cbc_status.source_location == hl7_location("OBR", 25)
+
+    cbc_code = by_path[f"Bundle.entry[{cbc_index}].resource.code.coding[0].code"]
+    assert cbc_code.value == "CBC"
+    assert cbc_code.source_location == hl7_location("OBR", 4, component=1)
+
+    cbc_effective = by_path[f"Bundle.entry[{cbc_index}].resource.effectiveDateTime"]
+    assert cbc_effective.source_location == hl7_location("OBR", 7)
+
+    cbc_issued = by_path[f"Bundle.entry[{cbc_index}].resource.issued"]
+    assert cbc_issued.source_location == hl7_location("OBR", 22)
+
+    glu_status = by_path[f"Bundle.entry[{glu_index}].resource.status"]
+    assert glu_status.value == "preliminary"
+    assert glu_status.source_value == "P"
+
+    # WBC observation: NM value type -> valueQuantity, plus referenceRange/
+    # interpretation/effectiveDateTime and an OBX-16 performer.
+    observations = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Observation"]
+    wbc_obs = next(o for o in observations if o.code.coding[0].code == "WBC")
+    wbc_index = next(i for i, e in enumerate(bundle.entry) if e.resource is wbc_obs)
+
+    wbc_value = by_path[f"Bundle.entry[{wbc_index}].resource.valueQuantity.value"]
+    assert float(wbc_value.value) == 7.2
+    assert wbc_value.source_location == hl7_location("OBX", 5)
+    wbc_unit = by_path[f"Bundle.entry[{wbc_index}].resource.valueQuantity.unit"]
+    assert wbc_unit.value == "10*3/uL"
+    assert wbc_unit.source_location == hl7_location("OBX", 6)
+
+    wbc_range = by_path[f"Bundle.entry[{wbc_index}].resource.referenceRange[0].text"]
+    assert wbc_range.value == "4.0-11.0"
+    assert wbc_range.source_location == hl7_location("OBX", 7)
+
+    wbc_interp = by_path[f"Bundle.entry[{wbc_index}].resource.interpretation[0].coding[0].code"]
+    assert wbc_interp.value == "N"
+    assert wbc_interp.source_location == hl7_location("OBX", 8)
+
+    wbc_effective = by_path[f"Bundle.entry[{wbc_index}].resource.effectiveDateTime"]
+    assert wbc_effective.source_location == hl7_location("OBX", 14)
+
+    performer = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Practitioner")
+    performer_index = next(i for i, e in enumerate(bundle.entry) if e.resource is performer)
+    performer_family = by_path[f"Bundle.entry[{performer_index}].resource.name[0].family"]
+    assert performer_family.value == "Rivera"
+    assert performer_family.source_location == hl7_location("OBX", 16, component=2)
+    performer_given = by_path[f"Bundle.entry[{performer_index}].resource.name[0].given[0]"]
+    assert performer_given.value == "Ana"
+    performer_id = by_path[f"Bundle.entry[{performer_index}].resource.identifier[0].value"]
+    assert performer_id.value == "5678"
+    assert performer_id.source_location == hl7_location("OBX", 16, component=1)
+
+
+def test_oru_r01_shared_performer_recorded_once_not_once_per_observation():
+    # OBX-16's Practitioner is deduped across the message (_resolve_performer)
+    # - the crosswalk must reflect exactly one materialized Practitioner's
+    # worth of facts, not one per referencing Observation, and the resolved
+    # entry count must still match len(recorder.facts) exactly (no stale
+    # fact left over from a cache-hit call that skipped recording).
+    message = parse_message(read_fixture("oru_r01_shared_performer.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = OruR01Mapper().to_bundle(message, recorder=recorder)
+    practitioners = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Practitioner"]
+    assert len(practitioners) == 1
+
+    entries = resolve_bundle_paths(bundle, recorder)
+    assert len(entries) == len(recorder.facts)
+    family_facts = [e for e in entries if e.fhir_path.endswith("resource.name[0].family") and e.value == "Rivera"]
+    assert len(family_facts) == 1
+
+
+def test_oru_r01_free_text_value_with_caret_is_not_truncated_in_crosswalk():
+    # _build_observation_value's ST/FT/TX branch reads via raw_field_str, not
+    # field_str, specifically so a literal caret in free text isn't mistaken
+    # for a component separator - the crosswalk's own recorded value must
+    # reflect the same untruncated text the Bundle itself carries (see the
+    # `hl7` library gotcha section in CLAUDE.md).
+    message = parse_message(read_fixture("oru_r01_ft_with_caret.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = OruR01Mapper().to_bundle(message, recorder=recorder)
+    observation = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Observation")
+    assert observation.valueString == "Grade II^ tear noted; recommend follow-up"
+
+    entries = resolve_bundle_paths(bundle, recorder)
+    obs_index = next(i for i, e in enumerate(bundle.entry) if e.resource is observation)
+    value_entry = next(e for e in entries if e.fhir_path == f"Bundle.entry[{obs_index}].resource.valueString")
+    assert value_entry.value == "Grade II^ tear noted; recommend follow-up"
+    assert value_entry.source_location == hl7_location("OBX", 5)
+
+
+def test_oru_minimal_fixture_without_pv1_records_no_encounter_facts():
+    # oru_r01_minimal.hl7 has no PV1 segment at all - build_minimal_encounter
+    # never runs, so no Encounter-scoped fact should appear anywhere in the
+    # resolved crosswalk.
+    message = parse_message(read_fixture("oru_r01_minimal.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = OruR01Mapper().to_bundle(message, recorder=recorder)
+    assert not any(e.resource.get_resource_type() == "Encounter" for e in bundle.entry)
+    entries = resolve_bundle_paths(bundle, recorder)
+    assert len(entries) == len(recorder.facts)
