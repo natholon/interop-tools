@@ -546,6 +546,46 @@ def test_ccd_round_trip_preserves_result_report_and_observations():
     assert st.valueString == st_original.valueString
 
 
+def test_ccd_round_trip_preserves_procedure_fields():
+    forward_xml = (FIXTURES / "ccd_procedures_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original_procedures = sorted(
+        (e.resource for e in bundle.entry if e.resource.get_resource_type() == "Procedure"),
+        key=lambda p: p.code.coding[0].code,
+    )
+    assert len(original_procedures) == 2
+
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    procedures = sorted(
+        (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Procedure"),
+        key=lambda p: p.code.coding[0].code,
+    )
+    assert len(procedures) == 2
+
+    for original, procedure in zip(original_procedures, procedures):
+        assert procedure.status == original.status
+        assert procedure.code.coding[0].code == original.code.coding[0].code
+        assert procedure.performedDateTime == original.performedDateTime
+        if original.performedPeriod:
+            assert procedure.performedPeriod.start == original.performedPeriod.start
+            assert procedure.performedPeriod.end == original.performedPeriod.end
+        if original.bodySite:
+            assert procedure.bodySite[0].coding[0].code == original.bodySite[0].coding[0].code
+        if original.identifier:
+            assert [i.value or i.system for i in procedure.identifier] == [
+                i.value or i.system for i in original.identifier
+            ]
+
+    # The negated (not-done) procedure's own identifier is a root-only <id>
+    # (no @extension) - the reverse path _reverse_identifier_root itself
+    # never needed to handle, confirming Procedures' own dedicated
+    # _reverse_generic_identifier covers all three build_identifier shapes.
+    negated = next(p for p in procedures if p.status == "not-done")
+    assert negated.identifier[0].value == "urn:oid:d1e2f3a4-0002-4a1a-8a1a-000000000002"
+    assert negated.identifier[0].system == "urn:ietf:rfc:3986"
+
+
 def test_ccd_missing_patient_raises_mapping_error():
     empty_bundle = Bundle(id="test", type="collection")
     with pytest.raises(MappingError):

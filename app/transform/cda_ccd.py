@@ -46,6 +46,9 @@ from app.cda.vitals import ORGANIZER_TEMPLATE_ID as VITALS_ORGANIZER_TEMPLATE_ID
 from app.cda.vitals import OBSERVATION_TEMPLATE_ID as VITALS_OBSERVATION_TEMPLATE_ID
 from app.cda.vitals import PANEL_CODE as VITALS_PANEL_CODE
 from app.cda.vitals import SECTION_TEMPLATE_ID as VITALS_SECTION_TEMPLATE_ID
+from app.cda.procedures import PROCEDURE_TEMPLATE_ID
+from app.cda.procedures import STATUS_MAP as PROCEDURE_STATUS_MAP
+from app.cda.procedures import SECTION_TEMPLATE_ID as PROCEDURES_SECTION_TEMPLATE_ID
 from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID
 from app.cda.medications import STATUS_MAP as MEDICATION_STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
@@ -758,6 +761,94 @@ def _build_results_section(reports, observations_by_id: dict) -> str:
     )
 
 
+# Reverse of app.cda.procedures.STATUS_MAP - a genuine bijection (each of
+# its four target values is distinct), inverted directly rather than
+# hand-picked, unlike every other many-to-one status map this app has
+# reversed so far. The one real ambiguity - "not-done" also has a second
+# forward source, negationInd="true" (unconditional, regardless of
+# statusCode) - is deliberately resolved by always reversing via the
+# table's own exact-match "cancelled" statusCode instead, since it needs
+# no additional attribute and is an equally valid, equally disclosed
+# representative; a real negationInd="true" origin can't be distinguished
+# from a genuine statusCode="cancelled" one on the FHIR side, so which one
+# this builder regenerates is a deliberate choice, not a guess. "unknown"
+# (the forward side's own fallback for an absent/unrecognized statusCode)
+# reverses by omitting <statusCode> entirely, the same "regenerate the
+# fallback, don't fabricate a fake code" precedent Results' own STATUS_MAP
+# reversal already established.
+_PROCEDURE_STATUS_TO_ACT_STATUS = {v: k for k, v in PROCEDURE_STATUS_MAP.items()}
+
+
+def _reverse_generic_identifier(identifier) -> str:
+    """Reverse of app.cda.common.build_identifier's own three-shape
+    resolution (root+extension, root-only, fallback-system-with-no-root) -
+    Procedures is this app's first reverse consumer of that function's
+    full three-way shape (patient/encounter identifiers only ever reverse
+    the simpler root+extension shape via the narrower
+    _reverse_identifier_root above, which always has a real extension to
+    work with)."""
+    if identifier.system == "urn:ietf:rfc:3986" and identifier.value and identifier.value.startswith("urn:oid:"):
+        # Root-only shape: build_identifier stashed "urn:oid:<root>" as
+        # the Identifier.value itself, not its system, when no @extension
+        # was present on the source <id>.
+        root = identifier.value[len("urn:oid:") :]
+        return f'<id root="{root}"/>'
+    if identifier.system and identifier.system.startswith("urn:oid:"):
+        root = identifier.system[len("urn:oid:") :]
+        return f'<id root="{root}" extension="{identifier.value}"/>'
+    return f'<id extension="{identifier.value or ""}"/>'
+
+
+def _build_procedure_entry(procedure) -> str:
+    ids = "".join(_reverse_generic_identifier(i) for i in (procedure.identifier or []))
+
+    code = ""
+    if procedure.code and procedure.code.coding:
+        code = f"<code {_build_cd_attrs(procedure.code.coding[0])}/>"
+
+    status_value = _PROCEDURE_STATUS_TO_ACT_STATUS.get(procedure.status)
+    status_element = f'<statusCode code="{status_value}"/>' if status_value else ""
+
+    effective_time = ""
+    if procedure.performedDateTime:
+        effective_time = f'<effectiveTime value="{format_hl7_ts(procedure.performedDateTime)}"/>'
+    elif procedure.performedPeriod:
+        low = (
+            f'<low value="{format_hl7_ts(procedure.performedPeriod.start)}"/>'
+            if procedure.performedPeriod.start
+            else ""
+        )
+        high = (
+            f'<high value="{format_hl7_ts(procedure.performedPeriod.end)}"/>'
+            if procedure.performedPeriod.end
+            else ""
+        )
+        if low or high:
+            effective_time = f"<effectiveTime>{low}{high}</effectiveTime>"
+
+    body_site = ""
+    if procedure.bodySite and procedure.bodySite[0].coding:
+        body_site = f"<targetSiteCode {_build_cd_attrs(procedure.bodySite[0].coding[0])}/>"
+
+    return (
+        '<entry typeCode="DRIV"><procedure classCode="PROC" moodCode="EVN">'
+        f'<templateId root="{PROCEDURE_TEMPLATE_ID}"/>'
+        f"{ids}{code}{status_element}{effective_time}{body_site}"
+        "</procedure></entry>"
+    )
+
+
+def _build_procedures_section(procedures) -> str:
+    if not procedures:
+        return ""
+    entries = "".join(_build_procedure_entry(p) for p in procedures)
+    return (
+        f'<component><section><templateId root="{PROCEDURES_SECTION_TEMPLATE_ID}"/>'
+        '<code code="47519-4" codeSystem="2.16.840.1.113883.6.1" displayName="History of Procedures"/>'
+        f"<title>Procedures</title>{entries}</section></component>"
+    )
+
+
 class CcdReverseBuilder(MessageBuilder):
     def build_message(self, bundle: Bundle) -> str:
         patient = find_resource(bundle, "Patient")
@@ -770,6 +861,7 @@ class CcdReverseBuilder(MessageBuilder):
         immunizations = find_resources(bundle, "Immunization")
         observations = find_resources(bundle, "Observation")
         diagnostic_reports = find_resources(bundle, "DiagnosticReport")
+        procedures = find_resources(bundle, "Procedure")
 
         document_id = bundle.identifier.value if bundle.identifier else "TT000"
         document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
@@ -782,9 +874,10 @@ class CcdReverseBuilder(MessageBuilder):
         vitals_section = _build_vitals_section(observations)
         observations_by_id = {o.id: o for o in observations}
         results_section = _build_results_section(diagnostic_reports, observations_by_id)
+        procedures_section = _build_procedures_section(procedures)
         sections = (
             f"{problems_section}{medications_section}{allergies_section}"
-            f"{immunizations_section}{vitals_section}{results_section}"
+            f"{immunizations_section}{vitals_section}{results_section}{procedures_section}"
         )
         body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 
