@@ -322,7 +322,13 @@ _HI_QUALIFIER_FALLBACK_SYSTEM = "urn:interop-tools:x12-hi-qualifier"
 _MAX_HI_DIAGNOSIS_POSITIONS = 12  # HI01-HI12, per the 5010 IG's own cap on both 278 and 837
 
 
-def build_diagnosis_codeable_concepts(hi: Segment | None, delimiters: Delimiters) -> list[CodeableConcept]:
+def build_diagnosis_codeable_concepts(
+    hi: Segment | None,
+    delimiters: Delimiters,
+    resource_id: str | None = None,
+    relative_path_prefix: str | None = None,
+    recorder=None,
+) -> list[CodeableConcept]:
     """Parse an HI segment's repeating diagnosis-code composites
     (`HI*ABK:J209*ABF:E119~` = two diagnoses, not two segments) into one
     CodeableConcept per resolved diagnosis, in composite position order -
@@ -333,7 +339,16 @@ def build_diagnosis_codeable_concepts(hi: Segment | None, delimiters: Delimiters
     breaking the whole scan (a qualifier-only or malformed composite
     shouldn't silently drop every diagnosis after it), but an entirely
     empty element still stops the scan (HI's own repetition is positional
-    and left-packed - a real sender never leaves a gap)."""
+    and left-packed - a real sender never leaves a gap).
+
+    `resource_id`/`relative_path_prefix`/`recorder` are optional (see
+    app/provenance/recorder.py) - when given, each resolved diagnosis is
+    recorded against `{relative_path_prefix}[{index}].diagnosisCodeableConcept
+    .coding[0].code`, the real FHIR `ClaimDiagnosis` shape both 278 and
+    837P wrap this function's own returned CodeableConcepts in - hardcoding
+    that wrapper name here (rather than leaving it to each caller) is safe
+    since both of this function's real consumers target the identical
+    `Claim.diagnosis[]` field."""
     if hi is None:
         return []
     concepts = []
@@ -347,6 +362,13 @@ def build_diagnosis_codeable_concepts(hi: Segment | None, delimiters: Delimiters
             continue
         system = HI_QUALIFIER_SYSTEM.get(qualifier, f"{_HI_QUALIFIER_FALLBACK_SYSTEM}:{qualifier}" if qualifier else _HI_QUALIFIER_FALLBACK_SYSTEM)
         concepts.append(CodeableConcept(coding=[Coding(system=system, code=code)]))
+        if recorder and resource_id and relative_path_prefix:
+            recorder.record(
+                resource_id,
+                f"{relative_path_prefix}[{len(concepts) - 1}].diagnosisCodeableConcept.coding[0].code",
+                edi_location("HI", position, component=2),
+                code,
+            )
     return concepts
 
 

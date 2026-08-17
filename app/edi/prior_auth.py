@@ -119,6 +119,7 @@ from app.edi.common import (
 )
 from app.edi.parser import Delimiters, HlLoop, Segment, TransactionSet, element, find_segment, group_by_hl_hierarchy
 from app.hl7.errors import MissingSegmentError
+from app.provenance.location import edi_location
 
 TRANSACTION_SET_ID = "278"
 
@@ -236,8 +237,10 @@ def resolve_prior_auth_loops(segments: list[Segment], transaction_set_id: str) -
     )
 
 
-def _build_diagnoses(hi: Segment | None, delimiters: Delimiters) -> list[ClaimDiagnosis]:
-    concepts = build_diagnosis_codeable_concepts(hi, delimiters)
+def _build_diagnoses(hi: Segment | None, delimiters: Delimiters, resource_id: str | None = None, recorder=None) -> list[ClaimDiagnosis]:
+    concepts = build_diagnosis_codeable_concepts(
+        hi, delimiters, resource_id=resource_id, relative_path_prefix="diagnosis", recorder=recorder
+    )
     return [ClaimDiagnosis(sequence=i, diagnosisCodeableConcept=concept) for i, concept in enumerate(concepts, start=1)]
 
 
@@ -249,21 +252,44 @@ def _build_claim(
     requester: Resource,
     coverage: Coverage,
     delimiters: Delimiters,
+    recorder=None,
 ) -> Claim:
     um = find_segment(loops.patient_event_loop.member_segments, "UM")
     hi = find_segment(loops.patient_event_loop.member_segments, "HI")
 
-    created = parse_x12_datetime(element(bht, 4), element(bht, 5))
+    bht04_raw = element(bht, 4)
+    bht05_raw = element(bht, 5)
+    created = parse_x12_datetime(bht04_raw, bht05_raw)
     if created is None:
         raise MissingSegmentError(f"{TRANSACTION_SET_ID} transaction set's BHT segment has no resolvable date (BHT04)")
 
-    item_category = build_service_type_category(element(um, 3)) if um is not None else None
-    item = ClaimItem(sequence=1, productOrService=item_category or CodeableConcept(text="Unspecified service"))
+    claim_id = str(uuid.uuid4())
+
+    item_category = (
+        build_service_type_category(
+            element(um, 3),
+            resource_id=claim_id,
+            relative_path="item[0].productOrService",
+            source_location=edi_location("UM", 3),
+            recorder=recorder,
+        )
+        if um is not None
+        else None
+    )
+    product_or_service = item_category or CodeableConcept(text="Unspecified service")
+    item = ClaimItem(sequence=1, productOrService=product_or_service)
+    if recorder and item_category is None:
+        recorder.record_inferred(
+            claim_id,
+            "item[0].productOrService.text",
+            "No UM segment was present in the 2000E Patient Event loop, or its own Service Type Code (UM03) was empty - Claim.item[0].productOrService defaults to a generic placeholder text.",
+            "Unspecified service",
+        )
 
     insurance = ClaimInsurance(sequence=1, focal=True, coverage=Reference(reference=f"urn:uuid:{coverage.id}"))
 
     claim = Claim(
-        id=str(uuid.uuid4()),
+        id=claim_id,
         status="active",
         type=CodeableConcept(coding=[Coding(system="http://terminology.hl7.org/CodeSystem/claim-type", code=DEFAULT_CLAIM_TYPE)]),
         use="preauthorization",
@@ -275,14 +301,42 @@ def _build_claim(
     )
     claim.insurer = Reference(reference=f"urn:uuid:{payer.id}")
     claim.item = [item]
-    diagnoses = _build_diagnoses(hi, delimiters)
+    if recorder:
+        recorder.record_inferred(
+            claim_id,
+            "status",
+            "Every Claim this app builds from a 278 transaction set has status=\"active\" - not read from any X12 field.",
+            "active",
+        )
+        recorder.record_inferred(
+            claim_id,
+            "type.coding[0].code",
+            'UM01 (Request Category Code) has no clean target in base FHIR Claim.type (a fixed institutional|oral|pharmacy|professional|vision set) - always defaults to "professional", the dominant real-world prior-authorization case.',
+            DEFAULT_CLAIM_TYPE,
+        )
+        recorder.record_inferred(
+            claim_id,
+            "use",
+            'Every Claim this app builds from a 278 transaction set has use="preauthorization" - that\'s what a 278 request/response fundamentally is, not read from any field.',
+            "preauthorization",
+        )
+        recorder.record(
+            claim_id, "created", f"{edi_location('BHT', 4)}+{edi_location('BHT', 5)}", created, source_value=bht04_raw + bht05_raw
+        )
+        recorder.record_inferred(
+            claim_id,
+            "priority.text",
+            "278 carries no data element for a review's own priority - Claim.priority defaults to \"normal\", the same \"default to the most common real value\" precedent as 270's DEFAULT_PURPOSE.",
+            DEFAULT_PRIORITY,
+        )
+    diagnoses = _build_diagnoses(hi, delimiters, resource_id=claim_id, recorder=recorder)
     if diagnoses:
         claim.diagnosis = diagnoses
     return claim
 
 
 def _build_claim_response(
-    loops: ResolvedPriorAuthLoops, claim: Claim, patient: Resource, payer: Resource, coverage: Coverage
+    loops: ResolvedPriorAuthLoops, claim: Claim, patient: Resource, payer: Resource, coverage: Coverage, recorder=None
 ) -> ClaimResponse | None:
     hcr = find_segment(loops.patient_event_loop.member_segments, "HCR")
     if hcr is None:
@@ -291,20 +345,29 @@ def _build_claim_response(
     # claim.created was already resolved (and MissingSegmentError-checked)
     # from this same BHT segment in _build_claim - reused directly rather
     # than re-parsing BHT04/05 a second time for the same transaction set.
+    # Note this is the resource's own POST-construction attribute, already
+    # normalized by pydantic into a real datetime object (not the original
+    # FHIR-formatted string _build_claim itself computed) - recorded via
+    # created_display below so the crosswalk shows the identical "Z"/
+    # "+HH:MM"-suffixed shape parse_hl7_datetime itself produces, not
+    # Python's own default `str(datetime)` rendering.
     created = claim.created
+    created_display = created.isoformat().replace("+00:00", "Z") if hasattr(created, "isoformat") else created
 
     # Normalized the same way NM108/EB01 already are elsewhere in this
     # package - a lowercase HCR01 must still resolve to the correct
     # outcome rather than silently falling back to the "unrecognized"
     # default and firing a spurious edi.278-unrecognized-hcr-action-code
     # finding for a code that's actually recognized.
-    action_code = element(hcr, 1).strip().upper()
+    action_code_raw = element(hcr, 1)
+    action_code = action_code_raw.strip().upper()
     outcome = HCR01_TO_OUTCOME.get(action_code, _DEFAULT_OUTCOME)
     auth_number = element(hcr, 2)
     reason_code = element(hcr, 3)
 
+    response_id = str(uuid.uuid4())
     response = ClaimResponse(
-        id=str(uuid.uuid4()),
+        id=response_id,
         status="active",
         type=claim.type,
         use="preauthorization",
@@ -317,15 +380,58 @@ def _build_claim_response(
     if auth_number:
         response.preAuthRef = auth_number
 
+    if recorder:
+        recorder.record_inferred(
+            response_id,
+            "status",
+            "Every ClaimResponse this app builds from a 278 transaction set has status=\"active\" - not read from any X12 field.",
+            "active",
+        )
+        recorder.record_inferred(
+            response_id,
+            "use",
+            'Every ClaimResponse this app builds from a 278 transaction set has use="preauthorization", mirroring the Claim it responds to - not read from any field.',
+            "preauthorization",
+        )
+        recorder.record(
+            response_id, "created", f"{edi_location('BHT', 4)}+{edi_location('BHT', 5)}", created_display
+        )
+        if action_code:
+            recorder.record(response_id, "outcome", edi_location("HCR", 1), outcome, source_value=action_code_raw)
+        else:
+            recorder.record_inferred(
+                response_id,
+                "outcome",
+                'This 278 response\'s HCR segment has no resolvable HCR01 (Action Code) - outcome defaults to "complete", the most common real-world decision.',
+                _DEFAULT_OUTCOME,
+            )
+        if auth_number:
+            recorder.record(response_id, "preAuthRef", edi_location("HCR", 2), auth_number)
+
     adjudications = []
     if action_code:
         adjudications.append(
             ClaimResponseItemAdjudication(category=CodeableConcept(coding=[Coding(system=HCR_ACTION_SYSTEM, code=action_code)]))
         )
+        if recorder:
+            recorder.record(
+                response_id,
+                f"item[0].adjudication[{len(adjudications) - 1}].category.coding[0].code",
+                edi_location("HCR", 1),
+                action_code,
+                source_value=action_code_raw,
+            )
     if reason_code:
         adjudications.append(
             ClaimResponseItemAdjudication(category=CodeableConcept(coding=[Coding(system=HCR_REASON_SYSTEM, code=reason_code)]))
         )
+        if recorder:
+            recorder.record(
+                response_id,
+                f"item[0].adjudication[{len(adjudications) - 1}].category.coding[0].code",
+                edi_location("HCR", 3),
+                reason_code,
+            )
     if adjudications:
         response.item = [ClaimResponseItem(itemSequence=1, adjudication=adjudications)]
 
@@ -339,29 +445,27 @@ class Edi278Builder(EdiTransactionBuilder):
     transaction_set_id = TRANSACTION_SET_ID
 
     def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters, recorder=None) -> Bundle:
-        # recorder is accepted (see app/provenance/) but not yet acted on -
-        # 278 isn't instrumented yet (this phase's scope is 270/271 only) -
-        # Bundle.identifier/.timestamp still get recorded "for free" via
-        # the shared assemble_bundle call below.
         bht = find_segment(transaction_set.segments, "BHT")
         if bht is None:
             raise MissingSegmentError(f"{self.transaction_set_id} transaction set is missing its BHT segment")
 
         loops = resolve_prior_auth_loops(transaction_set.segments, self.transaction_set_id)
 
-        payer = build_organization_from_nm1(loops.payer_nm1)
+        payer = build_organization_from_nm1(loops.payer_nm1, recorder=recorder)
         requester: Resource = (
-            build_practitioner_from_nm1(loops.receiver_nm1)
+            build_practitioner_from_nm1(loops.receiver_nm1, recorder=recorder)
             if is_person_entity(loops.receiver_nm1)
-            else build_organization_from_nm1(loops.receiver_nm1)
+            else build_organization_from_nm1(loops.receiver_nm1, recorder=recorder)
         )
-        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, loops.subscriber_dmg)
+        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, loops.subscriber_dmg, recorder=recorder)
         patient = (
-            build_patient_from_nm1_dmg(loops.patient_nm1, loops.patient_dmg) if loops.patient_is_dependent else subscriber
+            build_patient_from_nm1_dmg(loops.patient_nm1, loops.patient_dmg, recorder=recorder)
+            if loops.patient_is_dependent
+            else subscriber
         )
 
-        coverage = build_coverage(patient, payer, subscriber)
-        claim = _build_claim(loops, bht, patient, payer, requester, coverage, delimiters)
+        coverage = build_coverage(patient, payer, subscriber, recorder=recorder)
+        claim = _build_claim(loops, bht, patient, payer, requester, coverage, delimiters, recorder=recorder)
 
         resources: list[Resource] = [payer, requester, subscriber]
         if patient is not subscriber:
@@ -375,7 +479,7 @@ class Edi278Builder(EdiTransactionBuilder):
         # matching every other X12 pair's own "request" default when the
         # purpose code itself doesn't resolve.
         if element(bht, 2).strip() == BHT02_RESPONSE:
-            response = _build_claim_response(loops, claim, patient, payer, coverage)
+            response = _build_claim_response(loops, claim, patient, payer, coverage, recorder=recorder)
             if response is not None:
                 resources.append(response)
 

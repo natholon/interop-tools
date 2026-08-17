@@ -6,7 +6,8 @@ its own parsing/dispatch layer, the same "own file per format" discipline
 test_provenance_recorder_cda.py already established.
 
 Scope so far: 270 (Eligibility Inquiry), 271 (Eligibility Response), 276
-(Claim Status Request), and 277 (Claim Status Response) - see
+(Claim Status Request), 277 (Claim Status Response), and 278 (Health Care
+Services Review - Request for Review and Response) - see
 app/provenance/dispatch.py's own _INSTRUMENTED_TRANSACTION_SETS for why
 every other EDI family still reports unsupported=True."""
 
@@ -41,9 +42,9 @@ def _build_bundle(fixture_name: str, recorder=None):
     return builder.build_bundle(transaction_set, interchange.delimiters, recorder=recorder)
 
 
-# 270/271/276/277's own real fixtures, plus a handful of already-shipped
-# fixtures from other, still-uninstrumented EDI families - included
-# specifically to prove the no-op `recorder=None` additions to those 4
+# 270/271/276/277/278's own real fixtures, plus a handful of already-
+# shipped fixtures from other, still-uninstrumented EDI families - included
+# specifically to prove the no-op `recorder=None` additions to those 3
 # remaining sibling builder files (and the "free" Bundle.identifier/
 # .timestamp facts every one of them now gets via the shared
 # assemble_bundle) don't alter their own output either.
@@ -57,6 +58,9 @@ _EDI_FIXTURES = [
     "edi_277_basic.x12",
     "edi_277_error_status.x12",
     "edi_278_request_basic.x12",
+    "edi_278_request_with_dependent.x12",
+    "edi_278_response_certified.x12",
+    "edi_278_response_denied.x12",
     "edi_835_basic.x12",
     "edi_837p_basic.x12",
 ]
@@ -238,18 +242,143 @@ def test_edi_270_no_dependent_records_only_subscriber_facts():
     assert family_facts[0].value == "SMITH"
 
 
-def test_edi_278_non_instrumented_family_still_gets_free_bundle_level_facts():
-    # 278 isn't instrumented this slice (see app/edi/prior_auth.py's own
+def test_edi_837p_non_instrumented_family_still_gets_free_bundle_level_facts():
+    # 837P isn't instrumented this slice (see app/edi/claim_837p.py's own
     # recorder docstring), but the shared assemble_bundle() still records
     # Bundle.identifier/.timestamp "for free" via the BHT segment every EDI
     # family shares - the identical "some real facts, still not fully
     # instrumented" shape ORU/MDM's own recorder already exhibited before
     # their own slices shipped.
     recorder = ProvenanceRecorder(source_format="EDI")
-    bundle = _build_bundle("edi_278_request_basic.x12", recorder=recorder)
+    bundle = _build_bundle("edi_837p_basic.x12", recorder=recorder)
     entries = resolve_bundle_paths(bundle, recorder)
     assert len(entries) > 0
     assert all(e.fhir_path.startswith("Bundle.identifier") or e.fhir_path.startswith("Bundle.timestamp") for e in entries)
+
+
+def test_edi_278_request_basic_crosswalk_matches_known_field_values():
+    # edi_278_request_basic.x12's own Claim carries two diagnoses (from one
+    # HI segment's two composites) and no UM segment - proving the
+    # productOrService fallback text is used and disclosed as inferred.
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_278_request_basic.x12", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    claim = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Claim")
+    claim_index = next(i for i, e in enumerate(bundle.entry) if e.resource is claim)
+
+    status_entry = by_path[f"Bundle.entry[{claim_index}].resource.status"]
+    assert status_entry.derivation == "inferred"
+    assert status_entry.value == "active"
+    use_entry = by_path[f"Bundle.entry[{claim_index}].resource.use"]
+    assert use_entry.derivation == "inferred"
+    assert use_entry.value == "preauthorization"
+    type_entry = by_path[f"Bundle.entry[{claim_index}].resource.type.coding[0].code"]
+    assert type_entry.derivation == "inferred"
+    assert type_entry.value == "professional"
+    priority_entry = by_path[f"Bundle.entry[{claim_index}].resource.priority.text"]
+    assert priority_entry.derivation == "inferred"
+
+    product_entry = by_path[f"Bundle.entry[{claim_index}].resource.item[0].productOrService.text"]
+    assert product_entry.derivation == "inferred"
+    assert product_entry.value == "Unspecified service"
+
+    diagnosis0 = by_path[f"Bundle.entry[{claim_index}].resource.diagnosis[0].diagnosisCodeableConcept.coding[0].code"]
+    assert diagnosis0.value == "1831"
+    assert diagnosis0.source_location == edi_location("HI", 1, component=2)
+    diagnosis1 = by_path[f"Bundle.entry[{claim_index}].resource.diagnosis[1].diagnosisCodeableConcept.coding[0].code"]
+    assert diagnosis1.value == "2630"
+    assert diagnosis1.source_location == edi_location("HI", 2, component=2)
+
+    created_entry = by_path[f"Bundle.entry[{claim_index}].resource.created"]
+    assert created_entry.derivation == "direct"
+    assert created_entry.source_location == f"{edi_location('BHT', 4)}+{edi_location('BHT', 5)}"
+
+
+def test_edi_278_response_certified_records_direct_outcome_and_item_category():
+    # edi_278_response_certified.x12's own UM segment IS present (unlike
+    # the basic request fixture), so productOrService must resolve direct
+    # from UM03, and the ClaimResponse's own outcome/preAuthRef/adjudication
+    # must all resolve direct from HCR.
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_278_response_certified.x12", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    claim = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Claim")
+    claim_index = next(i for i, e in enumerate(bundle.entry) if e.resource is claim)
+    product_entry = by_path[f"Bundle.entry[{claim_index}].resource.item[0].productOrService.coding[0].code"]
+    assert product_entry.derivation == "direct"
+    assert product_entry.source_location == edi_location("UM", 3)
+
+    response = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "ClaimResponse")
+    response_index = next(i for i, e in enumerate(bundle.entry) if e.resource is response)
+
+    outcome_entry = by_path[f"Bundle.entry[{response_index}].resource.outcome"]
+    assert outcome_entry.derivation == "direct"
+    assert outcome_entry.value == "complete"
+    assert outcome_entry.source_location == edi_location("HCR", 1)
+    assert outcome_entry.source_value == "A1"
+
+    preauth_entry = by_path[f"Bundle.entry[{response_index}].resource.preAuthRef"]
+    assert preauth_entry.value == "AUTH0001"
+    assert preauth_entry.source_location == edi_location("HCR", 2)
+
+    adjudication_entry = by_path[f"Bundle.entry[{response_index}].resource.item[0].adjudication[0].category.coding[0].code"]
+    assert adjudication_entry.value == "A1"
+    assert adjudication_entry.source_location == edi_location("HCR", 1)
+
+    # ClaimResponse.created mirrors the referenced Claim's own created value
+    # exactly - the "created" fact must be recorded consistently on both
+    # resources (a regression proof for the datetime-vs-string formatting
+    # fix disclosed in prior_auth.py's own _build_claim_response docstring).
+    response_created = by_path[f"Bundle.entry[{response_index}].resource.created"]
+    claim_created = by_path[f"Bundle.entry[{claim_index}].resource.created"]
+    assert response_created.value == claim_created.value
+
+
+def test_edi_278_response_denied_records_two_adjudication_entries():
+    # edi_278_response_denied.x12's own HCR carries both an action code
+    # (A3, Not Certified) and a reason code (HCR03) - both must resolve to
+    # their own, independently-indexed adjudication[] entries.
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_278_response_denied.x12", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    response = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "ClaimResponse")
+    response_index = next(i for i, e in enumerate(bundle.entry) if e.resource is response)
+
+    outcome_entry = by_path[f"Bundle.entry[{response_index}].resource.outcome"]
+    assert outcome_entry.value == "complete"
+    assert outcome_entry.source_value == "A3"
+
+    action_entry = by_path[f"Bundle.entry[{response_index}].resource.item[0].adjudication[0].category.coding[0].code"]
+    assert action_entry.value == "A3"
+    assert action_entry.source_location == edi_location("HCR", 1)
+    reason_entry = by_path[f"Bundle.entry[{response_index}].resource.item[0].adjudication[1].category.coding[0].code"]
+    assert reason_entry.source_location == edi_location("HCR", 3)
+
+    assert f"Bundle.entry[{response_index}].resource.preAuthRef" not in by_path
+
+
+def test_edi_278_request_with_dependent_records_both_patients():
+    # edi_278_request_with_dependent.x12's own dependent must resolve as
+    # its own Patient's worth of facts, distinct from the subscriber - the
+    # "dependent, when present, is unconditionally also the patient"
+    # resolution 278 shares with 270/271's own dependent-precedence rule.
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_278_request_with_dependent.x12", recorder=recorder)
+    patients = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Patient"]
+    assert len(patients) == 2
+
+    entries = resolve_bundle_paths(bundle, recorder)
+    assert len(entries) == len(recorder.facts)
+    family_facts = {e.value for e in entries if e.fhir_path.endswith("resource.name[0].family")}
+    assert family_facts == {"DOE"}
+    given_facts = {e.value for e in entries if e.fhir_path.endswith("resource.name[0].given[0]")}
+    assert given_facts == {"JANE", "JIMMY"}
 
 
 def test_edi_276_basic_crosswalk_matches_known_field_values():
