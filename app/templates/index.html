@@ -1,6 +1,7 @@
 {% extends "base.html" %}
-{% block title %}HL7v2 / C-CDA / X12 &rarr; FHIR | interop-tools{% endblock %}
+{% block title %}HL7v2 / C-CDA / X12 &harr; FHIR | interop-tools{% endblock %}
 {% block content %}
+<h2 class="section-heading">Message &rarr; FHIR</h2>
 <form id="convert-form" method="post" action="/convert" enctype="multipart/form-data">
     <div class="field">
         <div class="field-label-row">
@@ -75,6 +76,45 @@
         {% endif %}
     </div>
     <pre><code id="output-code">{{ result or "" }}</code></pre>
+</section>
+
+<h2 class="section-heading">FHIR &rarr; Message</h2>
+<form id="transform-form" method="post" action="/transform">
+    <div class="field">
+        <div class="field-label-row">
+            <label for="transform_bundle_json">FHIR Bundle JSON</label>
+            <button type="button" id="use-bundle-for-transform" class="btn-link" {% if not result %}hidden{% endif %}>Use Bundle above</button>
+        </div>
+        <textarea id="transform_bundle_json" name="bundle_json" rows="10" spellcheck="false" placeholder='{"resourceType": "Bundle", "entry": [...]}'>{{ transform_bundle_json or "" }}</textarea>
+    </div>
+    <div class="field">
+        <label for="transform-target-select">Target format</label>
+        <select id="transform-target-select" name="target">
+            {% for target_format, target_type, target_trigger, label in transform_target_options %}
+            <option value="{{ label }}" {% if label == transform_target %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="actions">
+        <button type="submit" class="btn-primary" data-busy-text="Transforming&hellip;">
+            <span class="btn-label">Transform to message</span>
+        </button>
+    </div>
+</form>
+
+<section id="transform-error-pane" class="panel error-panel" role="alert" {% if not transform_error %}hidden{% endif %}>
+    {% if transform_error %}
+    <strong>{{ transform_error.category }}</strong>
+    <pre>{{ transform_error.message }}</pre>
+    {% endif %}
+</section>
+
+<section id="transform-output-pane" class="panel output-panel" aria-live="polite" {% if not transform_result %}hidden{% endif %}>
+    <div class="panel-head">
+        <h2>Generated Message</h2>
+        <button type="button" class="btn-copy" id="copy-transform-output" data-target="transform-output-code">Copy text</button>
+    </div>
+    <pre><code id="transform-output-code">{{ transform_result or "" }}</code></pre>
 </section>
 
 <div id="toast" class="toast" role="status" hidden></div>

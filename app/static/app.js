@@ -50,6 +50,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const resourceChipRow = document.getElementById("resource-chip-row");
     const dedupSummaryEl = document.getElementById("dedup-summary");
     const deduplicateCheckbox = document.getElementById("deduplicate");
+    const transformForm = document.getElementById("transform-form");
+    const transformBundleTextarea = document.getElementById("transform_bundle_json");
+    const transformTargetSelect = document.getElementById("transform-target-select");
+    const transformErrorPane = document.getElementById("transform-error-pane");
+    const transformOutputPane = document.getElementById("transform-output-pane");
+    const transformOutputCode = document.getElementById("transform-output-code");
+    const copyTransformOutputBtn = document.getElementById("copy-transform-output");
+    const useBundleBtn = document.getElementById("use-bundle-for-transform");
     const errorPane = document.getElementById("error-pane");
     const validationPane = document.getElementById("validation-pane");
     const formatBadge = document.getElementById("format-badge");
@@ -109,6 +117,7 @@ document.addEventListener("DOMContentLoaded", () => {
         errorPane.hidden = false;
         outputPane.hidden = true;
         validationPane.hidden = true;
+        if (useBundleBtn) useBundleBtn.hidden = true;
     }
 
     if (generateBtn && messageTypeSelect) {
@@ -194,6 +203,7 @@ document.addEventListener("DOMContentLoaded", () => {
         outputPane.hidden = false;
         errorPane.hidden = true;
         validationPane.hidden = true;
+        if (useBundleBtn) useBundleBtn.hidden = false;
     }
 
     if (copyOutputBtn) {
@@ -304,6 +314,82 @@ document.addEventListener("DOMContentLoaded", () => {
         validationPane.hidden = false;
         outputPane.hidden = true;
         errorPane.hidden = true;
+        if (useBundleBtn) useBundleBtn.hidden = true;
+    }
+
+    function showTransformError(category, message) {
+        if (!transformErrorPane) return;
+        transformErrorPane.innerHTML = "";
+        const strong = document.createElement("strong");
+        strong.textContent = category;
+        const pre = document.createElement("pre");
+        pre.textContent = message;
+        transformErrorPane.append(strong, pre);
+        transformErrorPane.hidden = false;
+        if (transformOutputPane) transformOutputPane.hidden = true;
+    }
+
+    function showTransformResult(messageText) {
+        if (!transformOutputCode || !transformOutputPane) return;
+        // HL7v2's bare \r segment terminator doesn't reliably render as a
+        // line break inside <pre>/<code> the way it does in a <textarea> -
+        // display-only substitution (the copy button below copies this
+        // same \n-terminated text, which app/hl7/parser.py::parse_message
+        // already normalizes back to \r on the way in, so round-tripping
+        // through this app's own Convert/Transform forms is unaffected).
+        transformOutputCode.textContent = messageText.replace(/\r\n?/g, "\n");
+        transformOutputPane.hidden = false;
+        if (transformErrorPane) transformErrorPane.hidden = true;
+    }
+
+    if (useBundleBtn && outputCode && transformBundleTextarea) {
+        useBundleBtn.addEventListener("click", () => {
+            transformBundleTextarea.value = outputCode.dataset.raw || outputCode.textContent;
+            transformBundleTextarea.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+    }
+
+    if (copyTransformOutputBtn && transformOutputCode) {
+        copyTransformOutputBtn.addEventListener("click", async () => {
+            try {
+                await navigator.clipboard.writeText(transformOutputCode.textContent);
+                showToast("Copied generated message to clipboard");
+            } catch (err) {
+                showToast("Copy failed - select and copy manually");
+            }
+        });
+    }
+
+    if (transformForm && transformBundleTextarea && transformTargetSelect) {
+        transformForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const submitter = event.submitter;
+            const [targetFormat, rest] = transformTargetSelect.value.split(" ");
+            const [targetType, targetTrigger] = (rest || "").split("^");
+            setBusy(submitter, true);
+            try {
+                const response = await fetch("/api/transform", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        bundle_json: transformBundleTextarea.value,
+                        target_format: targetFormat || "",
+                        target_type: targetType || "",
+                        target_trigger: targetTrigger || "",
+                    }),
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    showTransformError(data.error.category, data.error.message);
+                    return;
+                }
+                showTransformResult(data.message_text);
+            } catch (err) {
+                showTransformError("Network error", String(err));
+            } finally {
+                setBusy(submitter, false);
+            }
+        });
     }
 
     if (!form) return;

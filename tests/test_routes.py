@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -296,6 +297,97 @@ def test_index_message_type_dropdown_includes_cda():
     assert "CDA^CCD - Continuity of Care Document" in response.text
     assert "CDA^DischargeSummary - Discharge Summary" in response.text
     assert "CDA^HistoryAndPhysical - History and Physical Note" in response.text
+
+
+def test_index_transform_target_dropdown_includes_adt_a01():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "HL7 ADT^A01" in response.text
+
+
+def test_api_transform_builds_adt_a01_message():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": bundle_json, "target_format": "HL7", "target_type": "ADT", "target_trigger": "A01"},
+    )
+    assert response.status_code == 200
+    message_text = response.json()["message_text"]
+    assert message_text.startswith("MSH|^~\\&|")
+    assert "ADT^A01" in message_text
+
+
+def test_api_transform_invalid_json_returns_400():
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": "not json", "target_format": "HL7", "target_type": "ADT", "target_trigger": "A01"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["category"] == "Invalid JSON"
+
+
+def test_api_transform_invalid_bundle_returns_422():
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": "{}", "target_format": "HL7", "target_type": "ADT", "target_trigger": "A01"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["category"] == "Invalid FHIR Bundle"
+
+
+def test_api_transform_missing_patient_returns_422():
+    empty_bundle = json.dumps({"resourceType": "Bundle", "type": "collection", "entry": []})
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": empty_bundle, "target_format": "HL7", "target_type": "ADT", "target_trigger": "A01"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["category"] == "Mapping error"
+
+
+def test_api_transform_unregistered_target_returns_422():
+    empty_bundle = json.dumps({"resourceType": "Bundle", "type": "collection", "entry": []})
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": empty_bundle, "target_format": "HL7", "target_type": "ADT", "target_trigger": "A99"},
+    )
+    assert response.status_code == 422
+
+
+def test_form_transform_renders_generated_message_in_page():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post("/transform", data={"bundle_json": bundle_json, "target": "HL7 ADT^A01"})
+    assert response.status_code == 200
+    assert "Generated Message" in response.text
+    assert "ADT" in response.text
+
+
+def test_form_transform_renders_error_in_page():
+    response = client.post("/transform", data={"bundle_json": "not json", "target": "HL7 ADT^A01"})
+    assert response.status_code == 200
+    assert "Invalid JSON" in response.text
+
+
+def test_convert_then_transform_round_trips_end_to_end():
+    # The full realistic user flow: convert a real message to a Bundle,
+    # then transform that exact Bundle back out, and confirm the result
+    # converts successfully a second time.
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    transform_response = client.post(
+        "/api/transform",
+        json={"bundle_json": bundle_json, "target_format": "HL7", "target_type": "ADT", "target_trigger": "A01"},
+    )
+    message_text = transform_response.json()["message_text"]
+
+    round_trip_response = client.post("/api/convert", json={"hl7_text": message_text})
+    assert round_trip_response.status_code == 200
+    assert round_trip_response.json()["bundle"]["resourceType"] == "Bundle"
 
 
 def test_api_validate_resolves_discharge_summary_end_to_end():
