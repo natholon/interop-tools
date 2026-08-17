@@ -1082,6 +1082,79 @@ def test_edi_837p_missing_claim_raises_mapping_error():
         build_message_from_bundle(empty_bundle, "EDI", "837P", "")
 
 
+def test_list_supported_targets_includes_837i():
+    assert ("EDI", "837I", "") in list_supported_targets()
+
+
+def test_edi_837i_round_trip_preserves_claim_items_and_discharge_status():
+    forward_x12 = (FIXTURES / "edi_837i_basic.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_claim = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert len(original_claim.item) == 2
+    assert len(original_claim.diagnosis) == 3
+    assert original_claim.supportingInfo[0].code.coding[0].code == "01"
+
+    message_text = build_message_from_bundle(bundle, "EDI", "837I", "")
+    assert "ST*837*" in message_text
+    assert "005010X223A2" in message_text
+
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    claim = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert len(claim.item) == 2
+    assert len(claim.diagnosis) == 3
+    assert claim.total.value == original_claim.total.value
+    assert claim.supportingInfo[0].code.coding[0].code == "01"
+
+    for original_item, item in zip(original_claim.item, claim.item):
+        assert item.revenue.coding[0].code == original_item.revenue.coding[0].code
+        if original_item.productOrService.coding:
+            assert item.productOrService.coding[0].code == original_item.productOrService.coding[0].code
+        assert item.unitPrice.value == original_item.unitPrice.value
+        assert item.careTeamSequence == original_item.careTeamSequence
+        assert item.servicedDate == original_item.servicedDate
+        # 837I's own SV2 has no diagnosis-pointer composite at all, unlike
+        # 837P's SV1-07 - confirm this reverse builder never fabricates one.
+        assert item.diagnosisSequence is None
+
+    original_dx_codes = sorted(d.diagnosisCodeableConcept.coding[0].code for d in original_claim.diagnosis)
+    dx_codes = sorted(d.diagnosisCodeableConcept.coding[0].code for d in claim.diagnosis)
+    assert dx_codes == original_dx_codes
+
+
+def test_edi_837i_with_dependent_round_trip_preserves_revenue_code_only_item():
+    # This fixture's own item has no procedure composite at all (a bare
+    # room-and-board revenue-code line) - the "Revenue code X" text-only
+    # fallback must survive the round trip, not just the coded case.
+    forward_x12 = (FIXTURES / "edi_837i_with_dependent.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_claim = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert original_claim.item[0].productOrService.coding is None
+    assert original_claim.item[0].productOrService.text == "Revenue code 0120"
+
+    message_text = build_message_from_bundle(bundle, "EDI", "837I", "")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    claim = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert claim.item[0].productOrService.coding is None
+    assert claim.item[0].productOrService.text == "Revenue code 0120"
+    assert claim.item[0].revenue.coding[0].code == original_claim.item[0].revenue.coding[0].code
+
+    original_patient_names = sorted(
+        f"{p.name[0].family} {p.name[0].given[0]}"
+        for p in (e.resource for e in bundle.entry if e.resource.get_resource_type() == "Patient")
+    )
+    patient_names = sorted(
+        f"{p.name[0].family} {p.name[0].given[0]}"
+        for p in (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Patient")
+    )
+    assert patient_names == original_patient_names
+
+
+def test_edi_837i_missing_claim_raises_mapping_error():
+    empty_bundle = Bundle(id="test", type="collection")
+    with pytest.raises(MappingError):
+        build_message_from_bundle(empty_bundle, "EDI", "837I", "")
+
+
 def test_siu_s12_round_trip_preserves_appointment_fields():
     forward_text = (FIXTURES / "siu_s12_basic.hl7").read_text()
     bundle = convert_hl7_to_bundle(forward_text)

@@ -17,6 +17,7 @@ from app.transform.claim_status import Edi276Builder, Edi277Builder
 from app.transform.prior_auth import Edi278RequestBuilder, Edi278ResponseBuilder
 from app.transform.remittance_835 import Edi835Builder
 from app.transform.claim_837p import Edi837pBuilder
+from app.transform.claim_837i import Edi837iBuilder
 from app.transform.hl7_adt import (
     AdtA01Builder,
     AdtA02Builder,
@@ -84,6 +85,7 @@ _BUILDERS: dict[tuple[str, str, str], MessageBuilder] = {
     ("EDI", "278RESPONSE", ""): Edi278ResponseBuilder(),
     ("EDI", "835", ""): Edi835Builder(),
     ("EDI", "837P", ""): Edi837pBuilder(),
+    ("EDI", "837I", ""): Edi837iBuilder(),
 }
 
 
