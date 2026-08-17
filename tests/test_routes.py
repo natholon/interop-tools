@@ -553,6 +553,27 @@ def test_api_transform_builds_271_interchange():
     assert "ST*271*" in message_text
 
 
+def test_index_transform_target_dropdown_includes_276_and_277():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "EDI 276" in response.text
+    assert "EDI 277" in response.text
+
+
+def test_api_transform_builds_277_interchange():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("edi_277_basic.x12")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": bundle_json, "target_format": "EDI", "target_type": "277", "target_trigger": ""},
+    )
+    assert response.status_code == 200
+    message_text = response.json()["message_text"]
+    assert message_text.startswith("ISA*")
+    assert "ST*277*" in message_text
+
+
 def test_api_transform_builds_adt_a01_message():
     convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
     bundle_json = json.dumps(convert_response.json()["bundle"])

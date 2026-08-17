@@ -784,6 +784,85 @@ def test_edi_271_missing_payer_raises_mapping_error():
         build_message_from_bundle(empty_bundle, "EDI", "271", "")
 
 
+def test_list_supported_targets_includes_276_and_277():
+    targets = list_supported_targets()
+    assert ("EDI", "276", "") in targets
+    assert ("EDI", "277", "") in targets
+
+
+def test_edi_276_round_trip_preserves_tasks_for_subscriber_and_dependent():
+    forward_x12 = (FIXTURES / "edi_276_basic.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_tasks = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Task"]
+    assert len(original_tasks) == 2
+
+    message_text = build_message_from_bundle(bundle, "EDI", "276", "")
+    assert "ST*276*" in message_text
+
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    tasks = [e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Task"]
+    assert len(tasks) == 2
+    assert {t.status for t in tasks} == {"requested"}
+
+    # Both patient loops (subscriber and dependent) must still resolve -
+    # the one assertion specific to this builder's own new cross-cutting
+    # logic (payer/provider via Task.owner/.requester, receiver via
+    # exclusion, subscriber/dependent via Bundle order).
+    patients = [e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Patient"]
+    assert len(patients) == 2
+    task_patient_ids = {t.for_fhir.reference.removeprefix("urn:uuid:") for t in tasks}
+    assert task_patient_ids == {p.id for p in patients}
+
+
+def test_edi_277_round_trip_preserves_business_status():
+    forward_x12 = (FIXTURES / "edi_277_basic.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_tasks = sorted(
+        (e.resource for e in bundle.entry if e.resource.get_resource_type() == "Task"),
+        key=lambda t: t.identifier[0].value,
+    )
+    assert [t.status for t in original_tasks] == ["completed", "in-progress"]
+
+    message_text = build_message_from_bundle(bundle, "EDI", "277", "")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    tasks = sorted(
+        (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Task"),
+        key=lambda t: t.identifier[0].value,
+    )
+    assert [t.status for t in tasks] == [t.status for t in original_tasks]
+    for original, task in zip(original_tasks, tasks):
+        assert task.businessStatus.coding[0].code == original.businessStatus.coding[0].code
+        assert task.businessStatus.coding[1].code == original.businessStatus.coding[1].code
+
+
+def test_edi_277_error_status_round_trips_failed_status():
+    forward_x12 = (FIXTURES / "edi_277_error_status.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_task = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Task")
+    assert original_task.status == "failed"
+
+    message_text = build_message_from_bundle(bundle, "EDI", "277", "")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    task = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Task")
+    assert task.status == "failed"
+
+
+def test_edi_276_missing_task_raises_mapping_error():
+    payer = Organization(id="payer1", name="Payer")
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:payer1", resource=payer)]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "EDI", "276", "")
+
+
+def test_edi_277_missing_task_raises_mapping_error():
+    payer = Organization(id="payer1", name="Payer")
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:payer1", resource=payer)]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "EDI", "277", "")
+
+
 def test_siu_s12_round_trip_preserves_appointment_fields():
     forward_text = (FIXTURES / "siu_s12_basic.hl7").read_text()
     bundle = convert_hl7_to_bundle(forward_text)

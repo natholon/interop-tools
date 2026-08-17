@@ -95,9 +95,12 @@ _HL_DEPENDENT = "23"
 # X12's own Claim Status Category Code and Claim Status Code external code
 # lists (STC01-1/STC01-2) have no FHIR-canonical system URI - disclosed
 # local systems, same category as 270/271's SERVICE_TYPE_CODE_SYSTEM.
-_STC_CATEGORY_SYSTEM = "urn:interop-tools:x12-claim-status-category-code"
-_STC_STATUS_SYSTEM = "urn:interop-tools:x12-claim-status-code"
-_TRACE_NUMBER_SYSTEM = "urn:interop-tools:x12-claim-status-trace-number"
+# Public (not module-private) - app/transform/claim_status.py became a
+# real reverse-direction consumer, reading Task.businessStatus's own
+# coding systems back apart into STC01-1/STC01-2 rather than guessing.
+STC_CATEGORY_SYSTEM = "urn:interop-tools:x12-claim-status-category-code"
+STC_STATUS_SYSTEM = "urn:interop-tools:x12-claim-status-code"
+TRACE_NUMBER_SYSTEM = "urn:interop-tools:x12-claim-status-trace-number"
 
 # Claim Status Category Code (STC01-1) -> Task.status, keyed by the
 # category code's own leading letter (A=Acknowledgement, P=Pending,
@@ -218,9 +221,9 @@ def _build_status_concept(stc: Segment, delimiters: Delimiters) -> CodeableConce
     status_code = component(stc01, delimiters, 2)
     codings = []
     if category_code:
-        codings.append(Coding(system=_STC_CATEGORY_SYSTEM, code=category_code))
+        codings.append(Coding(system=STC_CATEGORY_SYSTEM, code=category_code))
     if status_code:
-        codings.append(Coding(system=_STC_STATUS_SYSTEM, code=status_code))
+        codings.append(Coding(system=STC_STATUS_SYSTEM, code=status_code))
     if not codings:
         return None
     return CodeableConcept(coding=codings)
@@ -263,7 +266,7 @@ def _build_tasks_for_patient_loop(
 
         trace_number = element(trn, 2)
         if trace_number:
-            task.identifier = [Identifier(system=_TRACE_NUMBER_SYSTEM, value=trace_number)]
+            task.identifier = [Identifier(system=TRACE_NUMBER_SYSTEM, value=trace_number)]
 
         if include_status:
             stc = find_segment(members, "STC")
