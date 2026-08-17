@@ -79,23 +79,6 @@ def test_api_data_specification_cda_input_converts_but_is_unsupported():
     assert report["entries"] == []
 
 
-def test_api_data_specification_non_instrumented_hl7_type_converts_but_is_unsupported():
-    # MDM's own to_bundle() already threads a recorder into build_patient/
-    # assemble_bundle/build_minimal_encounter (shared with ADT/SIU/ORU), so
-    # it produces a few real PID/PV1/MSH facts despite its own
-    # DocumentReference fields having no instrumentation at all -
-    # unsupported must still be True (see app/provenance/dispatch.py's own
-    # _INSTRUMENTED_MESSAGE_TYPES), and those partial facts should still be
-    # visible, not silently dropped.
-    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("mdm_t02_basic.hl7")})
-    assert response.status_code == 200
-    report = response.json()["report"]
-    assert report["unsupported"] is True
-    assert report["source_format"] == "HL7v2"
-    assert len(report["entries"]) > 0
-    assert "MDM^T02" in report["unsupported_reason"]
-
-
 def test_api_data_specification_siu_type_is_now_instrumented():
     # SIU is instrumented as of this slice - a regression test proving it
     # stays that way (mirrors the ADT^A01 assertions in the sibling test
@@ -119,6 +102,23 @@ def test_api_data_specification_oru_type_is_now_instrumented():
     assert report["unsupported"] is False
     assert report["message_type"] == "ORU"
     assert report["trigger_event"] == "R01"
+    assert len(report["entries"]) > 0
+
+
+def test_api_data_specification_mdm_type_is_now_instrumented():
+    # MDM is instrumented as of this slice - the fourth and last HL7v2
+    # message type this app converts, completing full HL7v2 breadth for the
+    # Data Specification pillar (see app/provenance/dispatch.py's own
+    # _INSTRUMENTED_MESSAGE_TYPES - every registered HL7v2 message_type is
+    # now a member, so there is no longer a "converts but unsupported"
+    # HL7v2 example left to test against; only EDI/C-CDA input still
+    # exercises that path, see the two tests above).
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("mdm_t02_basic.hl7")})
+    assert response.status_code == 200
+    report = response.json()["report"]
+    assert report["unsupported"] is False
+    assert report["message_type"] == "MDM"
+    assert report["trigger_event"] == "T02"
     assert len(report["entries"]) > 0
 
 

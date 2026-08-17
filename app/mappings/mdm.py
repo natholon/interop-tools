@@ -82,6 +82,7 @@ from app.mappings.common import (
     build_reference_with_optional_display,
     person_display,
 )
+from app.provenance.location import hl7_location
 
 _CONFIDENTIALITY_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-Confidentiality"
 
@@ -119,7 +120,7 @@ def _resolve_status(txa) -> str:
     return "current"
 
 
-def _build_binary_from_obx(obx_segments, txa) -> Binary | None:
+def _build_binary_from_obx(obx_segments, txa, recorder=None) -> Binary | None:
     # TX/FT is unstructured free text, not HL7-composite - raw_field_str
     # (whole field) is used rather than field_str (component 1 only), which
     # would otherwise silently truncate any line containing a literal '^'.
@@ -130,21 +131,33 @@ def _build_binary_from_obx(obx_segments, txa) -> Binary | None:
     if not text_lines:
         return None
     body = "\n".join(text_lines)
-    return Binary(
-        id=str(uuid.uuid4()),
+    binary_id = str(uuid.uuid4())
+    binary = Binary(
+        id=binary_id,
         contentType=_resolve_content_type(txa),
         data=base64.b64encode(body.encode("utf-8")).decode("ascii"),
     )
+    if recorder:
+        # Mirrors SIU's own NTE-join precedent (Appointment.comment) for a
+        # field built by concatenating an unknown number of repeating
+        # segments into one FHIR value with no per-segment boundary left in
+        # the output - the location string discloses the segment count
+        # rather than fabricating a fake per-segment breakdown.
+        location = hl7_location("OBX", 5) if len(text_lines) == 1 else f"OBX-5 (×{len(text_lines)} segments)"
+        recorder.record(binary_id, "data", location, body)
+    return binary
 
 
-def _build_xcn_practitioner_reference(segment, field_num: int) -> tuple[Practitioner | None, Reference | None]:
+def _build_xcn_practitioner_reference(
+    segment, field_num: int, recorder=None
+) -> tuple[Practitioner | None, Reference | None]:
     """Build a materialized Practitioner + matching Reference for an XCN
     field (TXA-9 originator, TXA-10 authenticator), same pattern as SIU's
     AIP participants: a real resource (build_practitioner_from_xcn) paired
     with a human-readable display (person_display, falling back to the XCN
     id when there's no name) via the shared
     build_reference_with_optional_display."""
-    practitioner = build_practitioner_from_xcn(segment, field_num)
+    practitioner = build_practitioner_from_xcn(segment, field_num, recorder=recorder)
     if practitioner is None:
         return None, None
     reference = build_reference_with_optional_display(practitioner.id, person_display(segment, field_num))
@@ -152,46 +165,86 @@ def _build_xcn_practitioner_reference(segment, field_num: int) -> tuple[Practiti
 
 
 def build_document_reference(
-    txa, patient_id: str, encounter_id: str | None, binary_id: str | None
+    txa, patient_id: str, encounter_id: str | None, binary_id: str | None, recorder=None
 ) -> tuple[DocumentReference, list[Resource]]:
     """TXA -> DocumentReference. Returns the DocumentReference plus any extra
     resources materialized for it (originator/authenticator Practitioners)."""
-    attachment = Attachment(contentType=_resolve_content_type(txa))
+    document_reference_id = str(uuid.uuid4())
+    status = _resolve_status(txa)
+    content_type = _resolve_content_type(txa)
+    attachment = Attachment(contentType=content_type)
     if binary_id:
         attachment.url = f"urn:uuid:{binary_id}"
 
     document_reference = DocumentReference(
-        id=str(uuid.uuid4()),
-        status=_resolve_status(txa),
+        id=document_reference_id,
+        status=status,
         content=[DocumentReferenceContent(attachment=attachment)],
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
     )
+    if recorder:
+        # _resolve_status never actually reads TXA-19's own value (see its
+        # docstring) - it always returns "current" regardless of what's
+        # there, so this is inferred, not a direct read, even in the one
+        # case ("AV") where the result happens to match a verified mapping.
+        recorder.record_inferred(
+            document_reference_id,
+            "status",
+            'TXA-19 (Document Availability Status) has no fuller verified crosswalk beyond "AV"->"current" - every value, including absent, defaults to "current" (the IG\'s own stated default), not read from the field\'s actual value.',
+            status,
+        )
+        recorder.record(
+            document_reference_id,
+            "content[0].attachment.contentType",
+            hl7_location("TXA", 3),
+            content_type,
+            source_value=field_str(txa, 3),
+        )
 
-    doc_type = build_codeable_concept_from_cwe(txa, 2)
+    doc_type = build_codeable_concept_from_cwe(
+        txa, 2, resource_id=document_reference_id, relative_path="type", recorder=recorder
+    )
     if doc_type:
         document_reference.type = doc_type
 
     master_id = field_str(txa, 12)
     if master_id:
         document_reference.masterIdentifier = Identifier(system="urn:interop-tools:document-number", value=master_id)
+        if recorder:
+            recorder.record(document_reference_id, "masterIdentifier.value", hl7_location("TXA", 12), master_id)
 
     file_name = field_str(txa, 16)
     if file_name:
         document_reference.identifier = [Identifier(system="urn:interop-tools:document-file-name", value=file_name)]
+        if recorder:
+            recorder.record(document_reference_id, "identifier[0].value", hl7_location("TXA", 16), file_name)
 
     origination_dt = parse_hl7_datetime(field_str(txa, 6))
     if origination_dt:
         document_reference.date = origination_dt
+        if recorder:
+            recorder.record(
+                document_reference_id, "date", hl7_location("TXA", 6), origination_dt, source_value=field_str(txa, 6)
+            )
 
     confidentiality_code = field_str(txa, 18)
     if confidentiality_code:
         document_reference.securityLabel = [
             CodeableConcept(coding=[Coding(system=_CONFIDENTIALITY_SYSTEM, code=confidentiality_code)])
         ]
+        if recorder:
+            recorder.record(
+                document_reference_id,
+                "securityLabel[0].coding[0].code",
+                hl7_location("TXA", 18),
+                confidentiality_code,
+            )
 
     title = raw_field_str(txa, 25)
     if title:
         document_reference.description = title
+        if recorder:
+            recorder.record(document_reference_id, "description", hl7_location("TXA", 25), title)
 
     if encounter_id:
         document_reference.context = DocumentReferenceContext(
@@ -199,10 +252,17 @@ def build_document_reference(
         )
 
     extra_resources: list[Resource] = []
-    originator, author_ref = _build_xcn_practitioner_reference(txa, 9)
+    originator, author_ref = _build_xcn_practitioner_reference(txa, 9, recorder=recorder)
     if originator is not None:
         document_reference.author = [author_ref]
         extra_resources.append(originator)
+        if recorder and author_ref.display:
+            # TXA-9 produces two independent facts, same "one source field,
+            # two FHIR destinations" case SIU's own AIP-3 already
+            # established: the materialized Practitioner's own name (already
+            # recorded inside build_practitioner_from_xcn above) and this
+            # DocumentReference's own author[0].display string.
+            recorder.record(document_reference_id, "author[0].display", hl7_location("TXA", 9), author_ref.display)
 
     # If TXA-10 identifies the same real person as TXA-9 (e.g. a physician
     # who both dictates and co-signs a note), reuse the same materialized
@@ -211,14 +271,21 @@ def build_document_reference(
     originator_id = field_str(txa, 9, component=1)
     authenticator_id = field_str(txa, 10, component=1)
     if originator is not None and authenticator_id and authenticator_id == originator_id:
-        document_reference.authenticator = build_reference_with_optional_display(
-            originator.id, person_display(txa, 10)
-        )
+        authenticator_display = person_display(txa, 10)
+        document_reference.authenticator = build_reference_with_optional_display(originator.id, authenticator_display)
+        if recorder and authenticator_display:
+            recorder.record(
+                document_reference_id, "authenticator.display", hl7_location("TXA", 10), authenticator_display
+            )
     else:
-        authenticator, authenticator_ref = _build_xcn_practitioner_reference(txa, 10)
+        authenticator, authenticator_ref = _build_xcn_practitioner_reference(txa, 10, recorder=recorder)
         if authenticator is not None:
             document_reference.authenticator = authenticator_ref
             extra_resources.append(authenticator)
+            if recorder and authenticator_ref.display:
+                recorder.record(
+                    document_reference_id, "authenticator.display", hl7_location("TXA", 10), authenticator_ref.display
+                )
 
     return document_reference, extra_resources
 
@@ -231,11 +298,6 @@ class BaseMdmMapper(MessageMapper):
     message_type = "MDM"
 
     def to_bundle(self, message, recorder=None) -> Bundle:
-        # `recorder` (see app/provenance/) is accepted but not yet acted on -
-        # MDM's own resource-specific fields (DocumentReference/Binary) aren't
-        # instrumented yet (Phase 0 scope is ADT only), but build_patient's/
-        # assemble_bundle's own PID/MSH fields are instrumented "for free"
-        # since this type shares those functions with every other type.
         msh = require_segment(message, "MSH")
         pid = require_segment(message, "PID")
         txa = require_segment(message, "TXA")
@@ -247,12 +309,12 @@ class BaseMdmMapper(MessageMapper):
             pv1 = None
 
         patient = build_patient(pid, recorder=recorder)
-        encounter = build_minimal_encounter(pv1, patient.id) if pv1 is not None else None
+        encounter = build_minimal_encounter(pv1, patient.id, recorder=recorder) if pv1 is not None else None
         encounter_id = encounter.id if encounter is not None else None
 
-        binary = _build_binary_from_obx(obx_segments, txa)
+        binary = _build_binary_from_obx(obx_segments, txa, recorder=recorder)
         document_reference, extra_resources = build_document_reference(
-            txa, patient.id, encounter_id, binary.id if binary is not None else None
+            txa, patient.id, encounter_id, binary.id if binary is not None else None, recorder=recorder
         )
 
         resources_in_order = (

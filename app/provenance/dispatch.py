@@ -27,16 +27,9 @@ from app.provenance.resolver import resolve_bundle_paths
 _EDI_UNSUPPORTED_REASON = "Field-level provenance for X12 EDI is not implemented yet."
 _CDA_UNSUPPORTED_REASON = "Field-level provenance for C-CDA is not implemented yet."
 
-# Message types with real, complete field-level instrumentation - not "any
-# type whose recorder produced at least one fact," since MDM's own
-# to_bundle() already accepts a recorder and passes it into build_patient/
-# assemble_bundle/build_minimal_encounter "for free" (see its own to_bundle
-# docstring), so an MDM message DOES produce a few real Patient/Encounter/
-# Bundle-level facts despite its own DocumentReference fields having no
-# instrumentation at all - "entries is non-empty" alone would incorrectly
-# report that type as fully supported. Extended as each message type's own
-# provenance slice actually ships.
-_INSTRUMENTED_MESSAGE_TYPES = {"ADT", "SIU", "ORU"}
+# Message types with real, complete field-level instrumentation. Extended
+# as each message type's own provenance slice actually ships.
+_INSTRUMENTED_MESSAGE_TYPES = {"ADT", "SIU", "ORU", "MDM"}
 
 
 def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:
@@ -46,17 +39,17 @@ def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:
     is never altered by requesting provenance) and a CrosswalkReport.
 
     EDI/CDA input converts normally but always reports `unsupported=True` -
-    neither format has any field-level instrumentation yet (Phase 0's own
-    disclosed scope). An HL7v2 message whose message_type isn't in
-    `_INSTRUMENTED_MESSAGE_TYPES` (every type this phase except ADT)
-    converts normally too and reports `unsupported=True` for the identical
-    reason - checked explicitly against that set, not inferred from
-    "the recorder produced zero facts": SIU/ORU/MDM's own to_bundle()
-    already accepts a recorder and threads it into the PID/MSH fields they
-    share with ADT via build_patient/assemble_bundle, so their own recorder
-    actually does accumulate a few real facts despite having no
-    instrumentation for their own type-specific resource at all - an
-    empty-entries heuristic would have misreported them as fully supported.
+    neither format has any field-level instrumentation yet. An HL7v2 message
+    whose message_type isn't in `_INSTRUMENTED_MESSAGE_TYPES` converts
+    normally too and reports `unsupported=True` for the identical reason -
+    checked explicitly against that set, not inferred from "the recorder
+    produced zero facts": every message type's own to_bundle() accepts a
+    recorder and threads it into the PID/MSH fields it shares with every
+    other type via build_patient/assemble_bundle, so a not-yet-instrumented
+    type's own recorder can still accumulate a few real facts despite having
+    no instrumentation for its own type-specific resource at all - an
+    empty-entries heuristic would have misreported such a type as fully
+    supported.
 
     Raises the same exception shapes convert_to_bundle does
     (Hl7ParseError/CdaParseError/EdiParseError, MissingSegmentError,

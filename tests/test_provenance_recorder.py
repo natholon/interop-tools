@@ -19,6 +19,14 @@ from app.mappings.adt import (
     AdtA13Mapper,
     AdtA38Mapper,
 )
+from app.mappings.mdm import (
+    MdmT02Mapper,
+    MdmT04Mapper,
+    MdmT06Mapper,
+    MdmT08Mapper,
+    MdmT10Mapper,
+    MdmT11Mapper,
+)
 from app.mappings.oru import OruR01Mapper, OruR30Mapper, OruR31Mapper, OruR32Mapper, OruR40Mapper
 from app.mappings.siu import SiuS12Mapper, SiuS13Mapper, SiuS14Mapper, SiuS15Mapper, SiuS17Mapper, SiuS26Mapper
 from app.provenance.location import hl7_location
@@ -517,6 +525,176 @@ def test_oru_minimal_fixture_without_pv1_records_no_encounter_facts():
     message = parse_message(read_fixture("oru_r01_minimal.hl7"))
     recorder = ProvenanceRecorder(source_format="HL7v2")
     bundle = OruR01Mapper().to_bundle(message, recorder=recorder)
+    assert not any(e.resource.get_resource_type() == "Encounter" for e in bundle.entry)
+    entries = resolve_bundle_paths(bundle, recorder)
+    assert len(entries) == len(recorder.facts)
+
+
+# ---------------------------------------------------------------------------
+# MDM
+# ---------------------------------------------------------------------------
+
+_MDM_FIXTURES = [
+    (MdmT02Mapper, "mdm_t02_basic.hl7"),
+    (MdmT02Mapper, "mdm_t02_minimal.hl7"),
+    (MdmT02Mapper, "mdm_t02_obx_with_caret.hl7"),
+    (MdmT02Mapper, "mdm_t02_same_author_authenticator.hl7"),
+    (MdmT04Mapper, "mdm_t02_basic.hl7"),
+    (MdmT06Mapper, "mdm_t02_basic.hl7"),
+    (MdmT08Mapper, "mdm_t02_basic.hl7"),
+    (MdmT10Mapper, "mdm_t02_basic.hl7"),
+    (MdmT11Mapper, "mdm_t02_basic.hl7"),
+]
+
+
+@pytest.mark.parametrize("mapper_cls,fixture", _MDM_FIXTURES)
+def test_mdm_provenance_recording_does_not_change_bundle_output(mapper_cls, fixture):
+    message = parse_message(read_fixture(fixture))
+
+    with patch("uuid.uuid4", side_effect=_deterministic_uuids()):
+        untraced = mapper_cls().to_bundle(message)
+
+    with patch("uuid.uuid4", side_effect=_deterministic_uuids()):
+        recorder = ProvenanceRecorder(source_format="HL7v2")
+        traced = mapper_cls().to_bundle(message, recorder=recorder)
+
+    assert untraced.model_dump(exclude_none=True) == traced.model_dump(exclude_none=True)
+    assert len(recorder.facts) > 0
+
+    entries = resolve_bundle_paths(traced, recorder)
+    assert len(entries) == len(recorder.facts)
+
+
+def test_mdm_t02_basic_crosswalk_matches_known_field_values():
+    # mdm_t02_basic.hl7 carries a full TXA (type/content-presentation/
+    # origination-date/originator/authenticator/master-id/confidentiality/
+    # title) plus two TX-typed OBX lines making up the document body - see
+    # test_mdm_mapping.py::test_basic_fixture_maps_every_field for the same
+    # fixture's own Bundle-shape assertions this mirrors.
+    message = parse_message(read_fixture("mdm_t02_basic.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = MdmT02Mapper().to_bundle(message, recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    doc_ref = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference")
+    doc_index = next(i for i, e in enumerate(bundle.entry) if e.resource is doc_ref)
+
+    status_entry = by_path[f"Bundle.entry[{doc_index}].resource.status"]
+    assert status_entry.derivation == "inferred"
+    assert status_entry.value == "current"
+    assert status_entry.reason
+
+    content_type_entry = by_path[f"Bundle.entry[{doc_index}].resource.content[0].attachment.contentType"]
+    assert content_type_entry.value == "text/plain"
+    assert content_type_entry.source_location == hl7_location("TXA", 3)
+    assert content_type_entry.source_value == "TEXT"
+
+    type_entry = by_path[f"Bundle.entry[{doc_index}].resource.type.coding[0].code"]
+    assert type_entry.value == "CN"
+    assert type_entry.source_location == hl7_location("TXA", 2, component=1)
+    type_display_entry = by_path[f"Bundle.entry[{doc_index}].resource.type.coding[0].display"]
+    assert type_display_entry.value == "Consultation Note"
+
+    master_id_entry = by_path[f"Bundle.entry[{doc_index}].resource.masterIdentifier.value"]
+    assert master_id_entry.value == "DOC-000123"
+    assert master_id_entry.source_location == hl7_location("TXA", 12)
+
+    date_entry = by_path[f"Bundle.entry[{doc_index}].resource.date"]
+    assert date_entry.source_location == hl7_location("TXA", 6)
+    assert date_entry.source_value == "20260812105000"
+
+    security_entry = by_path[f"Bundle.entry[{doc_index}].resource.securityLabel[0].coding[0].code"]
+    assert security_entry.value == "R"
+    assert security_entry.source_location == hl7_location("TXA", 18)
+
+    description_entry = by_path[f"Bundle.entry[{doc_index}].resource.description"]
+    assert description_entry.value == "Cardiology Consult Note"
+    assert description_entry.source_location == hl7_location("TXA", 25)
+
+    # TXA-9 produces two independent facts on two different resources: the
+    # materialized originator Practitioner's own name, and (via
+    # person_display) this DocumentReference's own author[0].display - the
+    # same "one source field, two FHIR destinations" case SIU's AIP-3
+    # already established.
+    author_display_entry = by_path[f"Bundle.entry[{doc_index}].resource.author[0].display"]
+    assert author_display_entry.value == "Chen, Wei"
+    assert author_display_entry.source_location == hl7_location("TXA", 9)
+
+    originator = next(
+        e.resource
+        for e in bundle.entry
+        if e.resource.get_resource_type() == "Practitioner" and e.resource.name[0].family == "Chen"
+    )
+    originator_index = next(i for i, e in enumerate(bundle.entry) if e.resource is originator)
+    originator_family_entry = by_path[f"Bundle.entry[{originator_index}].resource.name[0].family"]
+    assert originator_family_entry.source_location == hl7_location("TXA", 9, component=2)
+
+    authenticator_display_entry = by_path[f"Bundle.entry[{doc_index}].resource.authenticator.display"]
+    assert authenticator_display_entry.value == "Alvarez, Rosa"
+    assert authenticator_display_entry.source_location == hl7_location("TXA", 10)
+
+    # Document body: two TX-typed OBX lines joined into one Binary.data fact,
+    # disclosed via a "(×2 segments)" location the same way SIU's own NTE
+    # join discloses its own multi-segment source.
+    binary = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Binary")
+    binary_index = next(i for i, e in enumerate(bundle.entry) if e.resource is binary)
+    data_entry = by_path[f"Bundle.entry[{binary_index}].resource.data"]
+    assert data_entry.value == (
+        "Patient seen for cardiology consult.\nNo acute distress; recommend follow-up in 2 weeks."
+    )
+    assert data_entry.source_location == "OBX-5 (×2 segments)"
+
+
+def test_mdm_t02_same_author_authenticator_records_authenticator_display_from_txa10():
+    # mdm_t02_same_author_authenticator.hl7's TXA-9/TXA-10 identify the same
+    # real person - only one Practitioner is materialized (see
+    # test_mdm_mapping.py::test_same_originator_and_authenticator_deduplicates_to_one_practitioner),
+    # but authenticator.display must still be recorded against TXA-10 (not
+    # TXA-9), since person_display(txa, 10) - not 9 - built the string, even
+    # though both point at the identical underlying Practitioner resource.
+    message = parse_message(read_fixture("mdm_t02_same_author_authenticator.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = MdmT02Mapper().to_bundle(message, recorder=recorder)
+    practitioners = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Practitioner"]
+    assert len(practitioners) == 1
+
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+    doc_ref = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference")
+    doc_index = next(i for i, e in enumerate(bundle.entry) if e.resource is doc_ref)
+
+    authenticator_entry = by_path[f"Bundle.entry[{doc_index}].resource.authenticator.display"]
+    assert authenticator_entry.source_location == hl7_location("TXA", 10)
+    author_entry = by_path[f"Bundle.entry[{doc_index}].resource.author[0].display"]
+    assert author_entry.source_location == hl7_location("TXA", 9)
+
+
+def test_mdm_t02_obx_with_caret_binary_data_is_not_truncated_in_crosswalk():
+    # mdm_t02_obx_with_caret.hl7's own single OBX-5 contains a literal caret
+    # - _build_binary_from_obx reads it via raw_field_str, and the crosswalk
+    # must record the same untruncated text the Bundle's own Binary.data
+    # actually carries.
+    message = parse_message(read_fixture("mdm_t02_obx_with_caret.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = MdmT02Mapper().to_bundle(message, recorder=recorder)
+    binary = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Binary")
+    # Binary.data is stored as already-decoded raw bytes (pydantic's
+    # Base64Binary type decodes it at construction time) - see CLAUDE.md's
+    # own fhir.resources notes for this exact gotcha.
+    assert binary.data.decode("utf-8") == "Grade II^ tear noted on exam; recommend follow-up"
+
+    entries = resolve_bundle_paths(bundle, recorder)
+    binary_index = next(i for i, e in enumerate(bundle.entry) if e.resource is binary)
+    data_entry = next(e for e in entries if e.fhir_path == f"Bundle.entry[{binary_index}].resource.data")
+    assert data_entry.value == "Grade II^ tear noted on exam; recommend follow-up"
+    assert data_entry.source_location == hl7_location("OBX", 5)
+
+
+def test_mdm_t02_minimal_fixture_without_pv1_records_no_encounter_facts():
+    message = parse_message(read_fixture("mdm_t02_minimal.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = MdmT02Mapper().to_bundle(message, recorder=recorder)
     assert not any(e.resource.get_resource_type() == "Encounter" for e in bundle.entry)
     entries = resolve_bundle_paths(bundle, recorder)
     assert len(entries) == len(recorder.facts)
