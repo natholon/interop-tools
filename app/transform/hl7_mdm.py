@@ -3,15 +3,14 @@ third proof (after SIU's `Appointment`, ORU's `DiagnosticReport`+
 `Observation`) that this architecture handles a genuinely different FHIR
 shape - `DocumentReference` + a separately-referenced `Binary` carrying the
 document's own text body, neither of which any earlier reverse slice
-needed to reconstruct. Scoped to T02 alone, the same "one thing per slice"
-discipline every earlier reverse slice already established - T04/T06/T08/
-T10/T11 are, per `app/mappings/mdm.py`'s own module docstring, handled by
-`BaseMdmMapper` with byte-for-byte identical forward logic (the official
-v2-to-FHIR IG ships exactly one MDM ConceptMap, trigger-agnostic), so a
-real T04/T06/T08/T10/T11 reverse breadth pass is the identical one-line
-`trigger_event`-subclass shape `hl7_oru.py`'s own R30/R31/R32/R40 breadth
-pass already proved trivial, disclosed as a natural next step rather than
-spec­ulatively built ahead of need.
+needed to reconstruct. Originally T02 alone; **T04/T06/T08/T10/T11 shipped
+as an immediate follow-up breadth pass**, confirmed genuinely trivial
+rather than just assumed: `app/mappings/mdm.py::BaseMdmMapper` handles all
+six triggers with byte-for-byte identical forward logic (the official
+v2-to-FHIR IG ships exactly one MDM ConceptMap, trigger-agnostic), so
+`_BaseMdmBuilder` + six one-line `trigger_event` subclasses (the identical
+shape `hl7_oru.py`'s own R30/R31/R32/R40 breadth pass already proved
+trivial) was the whole change - no new field-mapping logic needed.
 
 Reverses `app/mappings/mdm.py::build_document_reference`/
 `_build_binary_from_obx` field-for-field: TXA-2/-3/-6/-9/-10/-12/-16/-18
@@ -182,3 +181,23 @@ class _BaseMdmBuilder(MessageBuilder):
 
 class MdmT02Builder(_BaseMdmBuilder):
     trigger_event = "T02"
+
+
+class MdmT04Builder(_BaseMdmBuilder):
+    trigger_event = "T04"
+
+
+class MdmT06Builder(_BaseMdmBuilder):
+    trigger_event = "T06"
+
+
+class MdmT08Builder(_BaseMdmBuilder):
+    trigger_event = "T08"
+
+
+class MdmT10Builder(_BaseMdmBuilder):
+    trigger_event = "T10"
+
+
+class MdmT11Builder(_BaseMdmBuilder):
+    trigger_event = "T11"

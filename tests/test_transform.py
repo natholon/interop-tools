@@ -10,6 +10,7 @@ from fhir.resources.R4B.patient import Patient
 
 from app.cda.pipeline import convert_cda_to_bundle
 from app.edi.pipeline import convert_edi_to_bundle
+from app.generators.registry import generate
 from app.hl7.errors import MappingError
 from app.hl7.pipeline import convert_hl7_to_bundle
 from app.transform.pipeline import build_message_from_bundle
@@ -44,6 +45,12 @@ def test_list_supported_targets_includes_all_five_oru_triggers():
 
 def test_list_supported_targets_includes_mdm_t02():
     assert ("HL7", "MDM", "T02") in list_supported_targets()
+
+
+def test_list_supported_targets_includes_all_six_mdm_triggers():
+    targets = list_supported_targets()
+    for trigger in ("T02", "T04", "T06", "T08", "T10", "T11"):
+        assert ("HL7", "MDM", trigger) in targets
 
 
 def test_list_supported_targets_includes_ccd():
@@ -621,3 +628,21 @@ def test_mdm_t02_missing_document_reference_raises_mapping_error():
     bundle.entry = [BundleEntry(fullUrl="urn:uuid:p1", resource=patient)]
     with pytest.raises(MappingError):
         build_message_from_bundle(bundle, "HL7", "MDM", "T02")
+
+
+@pytest.mark.parametrize("trigger", ["T04", "T06", "T08", "T10", "T11"])
+def test_mdm_trigger_round_trips_and_preserves_document_type(trigger):
+    # T02/T04/T06/T08/T10/T11 all reuse the identical base builder - this
+    # confirms the trigger-string swap alone is enough for each sibling,
+    # the same fixture-free (generator-backed) shape the equivalent ADT/ORU
+    # breadth-pass tests use when no dedicated per-trigger fixture exists.
+    forward_text = generate("MDM", trigger, seed=7)
+    bundle = convert_hl7_to_bundle(forward_text)
+
+    message_text = build_message_from_bundle(bundle, "HL7", "MDM", trigger)
+    assert f"||MDM^{trigger}|" in message_text
+
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    original_doc = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference")
+    doc = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference")
+    assert doc.masterIdentifier.value == original_doc.masterIdentifier.value

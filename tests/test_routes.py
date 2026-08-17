@@ -392,6 +392,13 @@ def test_index_transform_target_dropdown_includes_mdm_t02():
     assert "HL7 MDM^T02" in response.text
 
 
+def test_index_transform_target_dropdown_includes_all_six_mdm_triggers():
+    response = client.get("/")
+    assert response.status_code == 200
+    for trigger in ("T02", "T04", "T06", "T08", "T10", "T11"):
+        assert f"HL7 MDM^{trigger}" in response.text
+
+
 def test_api_transform_builds_mdm_t02_message():
     convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("mdm_t02_basic.hl7")})
     bundle_json = json.dumps(convert_response.json()["bundle"])
