@@ -15,7 +15,7 @@ import datetime
 
 from fhir.resources.R4B.bundle import Bundle
 
-from app.edi.common import NM1_ID_QUALIFIER_SYSTEM
+from app.edi.common import HI_QUALIFIER_SYSTEM, NM1_ID_QUALIFIER_SYSTEM
 from app.edi.generator import build_isa, format_x12_date, format_x12_time
 from app.transform.common import find_resource, find_resources, format_hl7_date
 
@@ -148,3 +148,41 @@ def build_trailer_segments(st_to_hl_segments: list[str], body_segments: list[str
         f"GE*1*{DEFAULT_GS_CONTROL}~",
         f"IEA*1*{DEFAULT_ISA_CONTROL}~",
     ]
+
+
+# Reverse of app.edi.common.HI_QUALIFIER_SYSTEM - both qualifiers in a
+# principal/other pair (ABK/ABF for ICD-10-CM, BK/BF for ICD-9-CM) map to
+# the identical FHIR system, so the position within Claim.diagnosis[]
+# (1 = principal, every other = "other") is what actually decides which
+# one gets regenerated, the real-world convention every sender of a
+# single-HI-segment family (278, 837P) follows, not a guess. Promoted here
+# from app/transform/prior_auth.py once app/transform/claim_837p.py became
+# a second real consumer of the identical single-HI-segment reversal - 837I
+# needs a genuinely different, multi-HI-segment version of this (see that
+# module's own bullet once it exists), so this stays scoped to the
+# single-segment shape both 278 and 837P actually share.
+_HI_ICD10_PRINCIPAL, _HI_ICD10_OTHER = "ABK", "ABF"
+_HI_ICD9_PRINCIPAL, _HI_ICD9_OTHER = "BK", "BF"
+_HI_QUALIFIER_FALLBACK_PREFIX = "urn:interop-tools:x12-hi-qualifier:"
+
+
+def reverse_hi_qualifier(system: str | None, position: int) -> str:
+    if system == HI_QUALIFIER_SYSTEM.get(_HI_ICD10_PRINCIPAL):
+        return _HI_ICD10_PRINCIPAL if position == 1 else _HI_ICD10_OTHER
+    if system == HI_QUALIFIER_SYSTEM.get(_HI_ICD9_PRINCIPAL):
+        return _HI_ICD9_PRINCIPAL if position == 1 else _HI_ICD9_OTHER
+    if system and system.startswith(_HI_QUALIFIER_FALLBACK_PREFIX):
+        return system[len(_HI_QUALIFIER_FALLBACK_PREFIX) :]
+    return _HI_ICD10_PRINCIPAL if position == 1 else _HI_ICD10_OTHER
+
+
+def build_hi_segment(diagnoses) -> str:
+    composites = []
+    for position, diagnosis in enumerate(diagnoses or [], start=1):
+        concept = diagnosis.diagnosisCodeableConcept
+        coding = concept.coding[0] if concept and concept.coding else None
+        if coding is None or not coding.code:
+            continue
+        qualifier = reverse_hi_qualifier(coding.system, position)
+        composites.append(f"{qualifier}:{coding.code}")
+    return f"HI*{'*'.join(composites)}~" if composites else ""

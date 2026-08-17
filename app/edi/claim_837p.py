@@ -142,8 +142,10 @@ _NM1_RENDERING_PROVIDER = "82"
 # SV1-01's procedure-code qualifier (X12 code list 235) - "HC" is a
 # genuinely unresolvable CPT-vs-HCPCS-Level-II ambiguity at the X12 level
 # (see module docstring), so it stays on a disclosed local placeholder
-# rather than being forced into either real canonical system.
-_PROCEDURE_QUALIFIER_FALLBACK_SYSTEM = "urn:interop-tools:x12-procedure-qualifier"
+# rather than being forced into either real canonical system. Public (not
+# module-private) - app/transform/claim_837p.py became a real reverse-
+# direction consumer, reversing this same fallback marker.
+PROCEDURE_QUALIFIER_FALLBACK_SYSTEM = "urn:interop-tools:x12-procedure-qualifier"
 
 _CLAIM_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/claim-type"
 DEFAULT_CLAIM_TYPE = "professional"
@@ -171,7 +173,7 @@ def _build_procedure_concept(sv1_01: str, delimiters: Delimiters) -> CodeableCon
     code = component(sv1_01, delimiters, 2)
     if not code:
         return None
-    system = f"{_PROCEDURE_QUALIFIER_FALLBACK_SYSTEM}:{qualifier}" if qualifier else _PROCEDURE_QUALIFIER_FALLBACK_SYSTEM
+    system = f"{PROCEDURE_QUALIFIER_FALLBACK_SYSTEM}:{qualifier}" if qualifier else PROCEDURE_QUALIFIER_FALLBACK_SYSTEM
     return CodeableConcept(coding=[Coding(system=system, code=code)])
 
 

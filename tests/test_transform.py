@@ -1018,6 +1018,70 @@ def test_edi_835_missing_payment_reconciliation_raises_mapping_error():
         build_message_from_bundle(empty_bundle, "EDI", "835", "")
 
 
+def test_list_supported_targets_includes_837p():
+    assert ("EDI", "837P", "") in list_supported_targets()
+
+
+def test_edi_837p_round_trip_preserves_claim_items_and_diagnoses():
+    forward_x12 = (FIXTURES / "edi_837p_basic.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_claim = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert len(original_claim.item) == 2
+    assert len(original_claim.diagnosis) == 2
+
+    message_text = build_message_from_bundle(bundle, "EDI", "837P", "")
+    assert "ST*837*" in message_text
+    assert "005010X222A2" in message_text
+
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    claim = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert len(claim.item) == 2
+    assert len(claim.diagnosis) == 2
+    assert claim.total.value == original_claim.total.value
+
+    for original_item, item in zip(original_claim.item, claim.item):
+        assert item.productOrService.coding[0].code == original_item.productOrService.coding[0].code
+        assert item.unitPrice.value == original_item.unitPrice.value
+        assert item.diagnosisSequence == original_item.diagnosisSequence
+        assert item.careTeamSequence == original_item.careTeamSequence
+        assert item.servicedDate == original_item.servicedDate
+
+    original_dx_codes = sorted(d.diagnosisCodeableConcept.coding[0].code for d in original_claim.diagnosis)
+    dx_codes = sorted(d.diagnosisCodeableConcept.coding[0].code for d in claim.diagnosis)
+    assert dx_codes == original_dx_codes
+
+    # careTeam (rendering provider) must survive too, not just the item's
+    # own careTeamSequence pointer to it.
+    assert len(claim.careTeam) == len(original_claim.careTeam)
+
+
+def test_edi_837p_with_dependent_round_trip_preserves_both_patients():
+    # This fixture's dependent carries no member-specific id of its own
+    # (unlike 278's own dependent, see prior_auth.py's own regression
+    # test) - names, not identifiers, are the reliable comparison here.
+    forward_x12 = (FIXTURES / "edi_837p_with_dependent.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_patient_names = sorted(
+        f"{p.name[0].family} {p.name[0].given[0]}"
+        for p in (e.resource for e in bundle.entry if e.resource.get_resource_type() == "Patient")
+    )
+    assert len(original_patient_names) == 2
+
+    message_text = build_message_from_bundle(bundle, "EDI", "837P", "")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    patient_names = sorted(
+        f"{p.name[0].family} {p.name[0].given[0]}"
+        for p in (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Patient")
+    )
+    assert patient_names == original_patient_names
+
+
+def test_edi_837p_missing_claim_raises_mapping_error():
+    empty_bundle = Bundle(id="test", type="collection")
+    with pytest.raises(MappingError):
+        build_message_from_bundle(empty_bundle, "EDI", "837P", "")
+
+
 def test_siu_s12_round_trip_preserves_appointment_fields():
     forward_text = (FIXTURES / "siu_s12_basic.hl7").read_text()
     bundle = convert_hl7_to_bundle(forward_text)

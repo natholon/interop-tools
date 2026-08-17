@@ -13,8 +13,11 @@ second registry entry off of the way every other EDI pair does.
 
 Reverses `app/edi/prior_auth.py::_build_claim`/`_build_claim_response`
 field-for-field: `UM03` (service type, reusing `SERVICE_TYPE_CODE_SYSTEM`
-the same way 270/271 already do), `HI` (diagnosis composites - the first
-reverse consumer of this shape; `HCR01`/`HCR02`/`HCR03` for the response.
+the same way 270/271 already do), `HI` (diagnosis composites, via
+`app.transform.edi_common.build_hi_segment` - promoted there once
+`app/transform/claim_837p.py` became a second real consumer of the
+identical single-HI-segment reversal), and `HCR01`/`HCR02`/`HCR03` for
+the response.
 
 **Payer/requester/subscriber/dependent resolution reuses 270/271's own
 shared resolvers directly, unlike claim_status.py's own new ones**: 278
@@ -55,7 +58,7 @@ slice already established."""
 
 from fhir.resources.R4B.bundle import Bundle
 
-from app.edi.common import SERVICE_TYPE_CODE_SYSTEM, HI_QUALIFIER_SYSTEM
+from app.edi.common import SERVICE_TYPE_CODE_SYSTEM
 from app.edi.generator import format_x12_date, format_x12_time
 from app.edi.prior_auth import BHT02_REQUEST, BHT02_RESPONSE, HCR_ACTION_SYSTEM, HCR_REASON_SYSTEM
 from app.hl7.errors import MappingError
@@ -65,6 +68,7 @@ from app.transform.edi_common import (
     DEFAULT_ST_CONTROL,
     build_dmg,
     build_envelope_segments,
+    build_hi_segment,
     build_org_nm1,
     build_person_nm1,
     build_trailer_segments,
@@ -73,15 +77,6 @@ from app.transform.edi_common import (
     resolve_subscriber_and_dependent,
 )
 
-# Reverse of app.edi.common.HI_QUALIFIER_SYSTEM - both qualifiers in a
-# pair (ABK/ABF, BK/BF) map to the identical FHIR system, so the position
-# within Claim.diagnosis[] (1 = principal, every other = "other") is what
-# actually decides which one this builder regenerates, the real-world
-# convention every 278 sender follows, not a guess.
-_ICD10_PRINCIPAL, _ICD10_OTHER = "ABK", "ABF"
-_ICD9_PRINCIPAL, _ICD9_OTHER = "BK", "BF"
-_HI_QUALIFIER_FALLBACK_PREFIX = "urn:interop-tools:x12-hi-qualifier:"
-
 # Reverse of app.edi.prior_auth.HCR01_TO_OUTCOME - "complete" is genuinely
 # many-to-one (A1/A3 both map to it); "A1" (Certified in Total) is the
 # disclosed representative, preferred over "A3" (Not Certified) as the
@@ -89,28 +84,6 @@ _HI_QUALIFIER_FALLBACK_PREFIX = "urn:interop-tools:x12-hi-qualifier:"
 # most common real value" precedent used throughout.
 _OUTCOME_TO_HCR01 = {"complete": "A1", "partial": "A2", "queued": "A4"}
 _DEFAULT_HCR01 = "A1"
-
-
-def _reverse_hi_qualifier(system: str | None, position: int) -> str:
-    if system == HI_QUALIFIER_SYSTEM.get(_ICD10_PRINCIPAL):
-        return _ICD10_PRINCIPAL if position == 1 else _ICD10_OTHER
-    if system == HI_QUALIFIER_SYSTEM.get(_ICD9_PRINCIPAL):
-        return _ICD9_PRINCIPAL if position == 1 else _ICD9_OTHER
-    if system and system.startswith(_HI_QUALIFIER_FALLBACK_PREFIX):
-        return system[len(_HI_QUALIFIER_FALLBACK_PREFIX) :]
-    return _ICD10_PRINCIPAL if position == 1 else _ICD10_OTHER
-
-
-def _build_hi_segment(diagnoses) -> str:
-    composites = []
-    for position, diagnosis in enumerate(diagnoses or [], start=1):
-        concept = diagnosis.diagnosisCodeableConcept
-        coding = concept.coding[0] if concept and concept.coding else None
-        if coding is None or not coding.code:
-            continue
-        qualifier = _reverse_hi_qualifier(coding.system, position)
-        composites.append(f"{qualifier}:{coding.code}")
-    return f"HI*{'*'.join(composites)}~" if composites else ""
 
 
 def _build_um_segment(claim) -> str:
@@ -212,7 +185,7 @@ class _BasePriorAuthBuilder(MessageBuilder):
 
         st_to_hl_segments.append(f"HL*{next_hl}*{patient_loop_hl_id}*EV*0~")
         st_to_hl_segments.append(_build_um_segment(claim))
-        hi_segment = _build_hi_segment(claim.diagnosis)
+        hi_segment = build_hi_segment(claim.diagnosis)
         if hi_segment:
             st_to_hl_segments.append(hi_segment)
 
