@@ -11,10 +11,22 @@ from app.transform.base import MessageBuilder
 from app.transform.cda_ccd import CcdReverseBuilder
 from app.transform.edi_270 import Edi270Builder
 from app.transform.edi_271 import Edi271Builder
-from app.transform.hl7_adt_a01 import AdtA01Builder
+from app.transform.hl7_adt import (
+    AdtA01Builder,
+    AdtA02Builder,
+    AdtA03Builder,
+    AdtA04Builder,
+    AdtA05Builder,
+    AdtA08Builder,
+)
 
 _BUILDERS: dict[tuple[str, str, str], MessageBuilder] = {
     ("HL7", "ADT", "A01"): AdtA01Builder(),
+    ("HL7", "ADT", "A02"): AdtA02Builder(),
+    ("HL7", "ADT", "A03"): AdtA03Builder(),
+    ("HL7", "ADT", "A04"): AdtA04Builder(),
+    ("HL7", "ADT", "A05"): AdtA05Builder(),
+    ("HL7", "ADT", "A08"): AdtA08Builder(),
     ("CDA", "CCD", ""): CcdReverseBuilder(),
     ("EDI", "270", ""): Edi270Builder(),
     ("EDI", "271", ""): Edi271Builder(),

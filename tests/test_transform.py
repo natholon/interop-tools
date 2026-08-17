@@ -19,6 +19,12 @@ def test_list_supported_targets_includes_adt_a01():
     assert ("HL7", "ADT", "A01") in list_supported_targets()
 
 
+def test_list_supported_targets_includes_all_six_adt_triggers():
+    targets = list_supported_targets()
+    for trigger in ("A01", "A02", "A03", "A04", "A05", "A08"):
+        assert ("HL7", "ADT", trigger) in targets
+
+
 def test_list_supported_targets_includes_ccd():
     assert ("CDA", "CCD", "") in list_supported_targets()
 
@@ -128,6 +134,87 @@ def test_multiple_given_names_map_to_separate_xpn_components():
     message_text = build_message_from_bundle(bundle, "HL7", "ADT", "A01")
     pid = next(s for s in message_text.split("\r") if s.startswith("PID|"))
     assert pid.split("|")[5] == "Multi^Ann^Beth"
+
+
+@pytest.mark.parametrize("trigger,fixture", [("A02", "adt_a02_basic.hl7"), ("A04", "adt_a04_basic.hl7"), ("A05", "adt_a05_basic.hl7")])
+def test_adt_trigger_round_trips_and_preserves_class_and_status(trigger, fixture):
+    # A01/A02/A04/A05/A08 all reuse the identical base builder - this
+    # parametrized test proves each one produces the correct EVN-1/MSH-9
+    # trigger code and a Bundle-consistent round trip, not just that some
+    # text was produced.
+    forward_text = (FIXTURES / fixture).read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+    original_encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
+
+    message_text = build_message_from_bundle(bundle, "HL7", "ADT", trigger)
+    assert f"||ADT^{trigger}|" in message_text
+    segments = message_text.strip("\r").split("\r")
+    evn = next(s for s in segments if s.startswith("EVN|"))
+    assert evn.split("|")[1] == trigger
+
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    round_tripped_encounter = next(
+        e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Encounter"
+    )
+    assert round_tripped_encounter.class_fhir.code == original_encounter.class_fhir.code
+    assert round_tripped_encounter.status == original_encounter.status
+
+
+def test_adt_a02_round_trips_prior_and_current_location():
+    forward_text = (FIXTURES / "adt_a02_basic.hl7").read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+
+    message_text = build_message_from_bundle(bundle, "HL7", "ADT", "A02")
+    pv1 = next(s for s in message_text.split("\r") if s.startswith("PV1|"))
+    fields = pv1.split("|")
+    assert fields[3]  # current location (PV1-3)
+    assert fields[6]  # prior location (PV1-6)
+    assert fields[3] != fields[6]
+
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    encounter = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Encounter")
+    statuses = {loc.status for loc in encounter.location}
+    assert statuses == {"active", "completed"}
+
+
+def test_adt_a03_round_trips_discharge_disposition_and_status():
+    forward_text = (FIXTURES / "adt_a03_basic.hl7").read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+    original_encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
+
+    message_text = build_message_from_bundle(bundle, "HL7", "ADT", "A03")
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    encounter = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Encounter")
+
+    assert encounter.status == "finished"
+    assert encounter.period.end is not None
+    assert (
+        encounter.hospitalization.dischargeDisposition.coding[0].code
+        == original_encounter.hospitalization.dischargeDisposition.coding[0].code
+    )
+
+
+def test_adt_a03_missing_discharge_time_raises_mapping_error():
+    patient = Patient(id="p1", name=[{"family": "NoDischarge"}])
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:p1", resource=patient)]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "HL7", "ADT", "A03")
+
+
+@pytest.mark.parametrize("fixture,expected_status", [("adt_a08_finished.hl7", "finished"), ("adt_a08_in_progress.hl7", "in-progress")])
+def test_adt_a08_round_trips_inferred_status(fixture, expected_status):
+    # A08's own status is inferred purely from whether PV1-45 is present -
+    # the reverse builder needs no A08-specific logic at all, since
+    # whatever discharge time the source Encounter carries (or doesn't)
+    # gets faithfully re-emitted, and re-parsing re-infers the same status.
+    forward_text = (FIXTURES / fixture).read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+
+    message_text = build_message_from_bundle(bundle, "HL7", "ADT", "A08")
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    encounter = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Encounter")
+    assert encounter.status == expected_status
 
 
 def test_ccd_round_trip_produces_a_convertible_document_again():

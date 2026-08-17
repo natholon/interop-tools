@@ -22,7 +22,7 @@ there once app/transform/edi_271.py became a second real consumer).
 fields the forward mapper reads have no FHIR-side home at all (ISA/GS
 envelope-level sender/receiver ids, control numbers) and get a fixed,
 disclosed placeholder value on the way back out, the same "no source
-field, use a disclosed placeholder" precedent app/transform/hl7_adt_a01.py
+field, use a disclosed placeholder" precedent app/transform/hl7_adt.py
 already established for MSH-3/4/5/6."""
 
 from fhir.resources.R4B.bundle import Bundle
