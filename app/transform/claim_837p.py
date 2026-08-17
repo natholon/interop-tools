@@ -63,40 +63,16 @@ from app.transform.edi_common import (
     build_dmg,
     build_envelope_segments,
     build_hi_segment,
-    build_org_nm1,
-    build_person_nm1,
     build_trailer_segments,
     envelope_datetime,
+    org_or_person_nm1,
+    resolve_by_reference,
     resolve_subscriber_and_dependent,
 )
 
 VERSION = "005010X222A2"
 
 _MAX_DIAGNOSIS_POINTERS = 4
-
-
-def _resolve_by_reference(bundle: Bundle, reference):
-    """Direct-reference resolution - 837P's own `Claim.provider`/
-    `.insurer`/`.careTeam[].provider` are all real, direct references to
-    their own resource (unlike 276/277's own `Task`-based indirection or
-    835's more standalone shape), so no fallback/exclusion logic is needed
-    here at all - see this module's own docstring for why reusing
-    `resolve_payer_and_provider` would risk resolving the wrong one."""
-    if reference is None or not reference.reference:
-        return None
-    resource_id = reference.reference.removeprefix("urn:uuid:")
-    for entry in bundle.entry or []:
-        if entry.resource.id == resource_id:
-            return entry.resource
-    return None
-
-
-def _org_or_person_nm1(entity_code: str, resource, include_id: bool = True) -> str:
-    return (
-        build_org_nm1(entity_code, resource)
-        if resource.get_resource_type() == "Organization"
-        else build_person_nm1(entity_code, resource, include_id=include_id)
-    )
 
 
 def _reverse_procedure_composite(item) -> str:
@@ -153,10 +129,10 @@ class Edi837pBuilder(MessageBuilder):
         if claim is None:
             raise MappingError("Bundle has no Claim resource - cannot build an 837P message")
 
-        billing_provider = _resolve_by_reference(bundle, claim.provider)
+        billing_provider = resolve_by_reference(bundle, claim.provider)
         if billing_provider is None:
             raise MappingError("Bundle has no resolvable billing provider - cannot build an 837P message")
-        payer = _resolve_by_reference(bundle, claim.insurer)
+        payer = resolve_by_reference(bundle, claim.insurer)
         if payer is None:
             raise MappingError("Bundle has no resolvable payer - cannot build an 837P message")
 
@@ -168,7 +144,7 @@ class Edi837pBuilder(MessageBuilder):
 
         rendering_provider = None
         if claim.careTeam:
-            rendering_provider = _resolve_by_reference(bundle, claim.careTeam[0].provider)
+            rendering_provider = resolve_by_reference(bundle, claim.careTeam[0].provider)
 
         now = envelope_datetime(bundle.timestamp)
         bht_reference = bundle.identifier.value if bundle.identifier else "REF00000001"
@@ -178,18 +154,18 @@ class Edi837pBuilder(MessageBuilder):
             f"ST*837*{DEFAULT_ST_CONTROL}*{VERSION}~",
             f"BHT*0019*00*{bht_reference}*{format_x12_date(now)}*{format_x12_time(now)}*CH~",
             "HL*1**20*1~",
-            _org_or_person_nm1("85", billing_provider),
+            org_or_person_nm1("85", billing_provider),
             f"HL*2*1*22*{0 if patient_loop_is_dependent else 1}~",
-            _org_or_person_nm1("IL", subscriber),
+            org_or_person_nm1("IL", subscriber),
         ]
         subscriber_dmg = build_dmg(subscriber)
         if subscriber_dmg:
             st_to_hl_segments.append(subscriber_dmg)
-        st_to_hl_segments.append(_org_or_person_nm1("PR", payer))
+        st_to_hl_segments.append(org_or_person_nm1("PR", payer))
 
         if patient_loop_is_dependent:
             st_to_hl_segments.append("HL*3*2*23*0~")
-            st_to_hl_segments.append(_org_or_person_nm1("QC", dependent, include_id=False))
+            st_to_hl_segments.append(org_or_person_nm1("QC", dependent, include_id=False))
             dependent_dmg = build_dmg(dependent)
             if dependent_dmg:
                 st_to_hl_segments.append(dependent_dmg)
@@ -199,7 +175,7 @@ class Edi837pBuilder(MessageBuilder):
         if hi_segment:
             st_to_hl_segments.append(hi_segment)
         if rendering_provider is not None:
-            st_to_hl_segments.append(_org_or_person_nm1("82", rendering_provider))
+            st_to_hl_segments.append(org_or_person_nm1("82", rendering_provider))
 
         for sequence, item in enumerate(claim.item or [], start=1):
             st_to_hl_segments.extend(_build_service_line_segments(sequence, item))

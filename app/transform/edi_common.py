@@ -79,6 +79,41 @@ def _strip_uuid_prefix(reference: str | None) -> str | None:
     return reference.removeprefix("urn:uuid:") if reference else None
 
 
+def resolve_by_reference(bundle: Bundle, reference):
+    """Direct by-id resolution of a FHIR `Reference` against every entry in
+    the Bundle - promoted here once app/transform/claim_837d.py became a
+    third real consumer of the identical helper app/transform/claim_837p.py/
+    claim_837i.py had each independently carried as a private
+    `_resolve_by_reference`, mirroring app/edi/common.py's own
+    `resolve_837_loops` extraction precedent (which itself waited for 837D
+    to be the third forward-direction consumer before promoting). Used by
+    every 837 variant's reverse builder for `Claim.provider`/`.insurer`/
+    `.careTeam[].provider` - all real, direct references with no
+    Bundle-order ambiguity to resolve, unlike `resolve_payer_and_provider`
+    below (see claim_837p.py's own docstring for why that function isn't
+    reused here instead)."""
+    if reference is None or not reference.reference:
+        return None
+    resource_id = reference.reference.removeprefix("urn:uuid:")
+    for entry in bundle.entry or []:
+        if entry.resource.id == resource_id:
+            return entry.resource
+    return None
+
+
+def org_or_person_nm1(entity_code: str, resource, include_id: bool = True) -> str:
+    """Dispatches to build_org_nm1/build_person_nm1 by the resolved
+    resource's own FHIR type - the same third-consumer promotion as
+    resolve_by_reference above, shared by every 837 variant's reverse
+    builder for its billing/subscriber/dependent/payer/rendering-or-
+    attending-provider NM1 segments."""
+    return (
+        build_org_nm1(entity_code, resource)
+        if resource.get_resource_type() == "Organization"
+        else build_person_nm1(entity_code, resource, include_id=include_id)
+    )
+
+
 def resolve_payer_and_provider(bundle: Bundle, insurer_reference, provider_reference):
     """`insurer_reference`/`provider_reference` are FHIR `Reference` objects
     (or `None`) - 270's `CoverageEligibilityRequest` has both fields, 271's

@@ -173,8 +173,11 @@ _NM1_RENDERING_PROVIDER = "82"
 # Real, verified FHIR-canonical CodeSystem (confirmed by direct fetch) for
 # CDT (Current Dental Terminology) procedure codes - SV3-01's "AD" qualifier
 # maps directly here, unlike 837P's own genuinely-ambiguous "HC" qualifier
-# (see module docstring).
-_CDT_CODE_SYSTEM = "http://www.ada.org/cdt"
+# (see module docstring). Public - app/transform/claim_837d.py's own reverse
+# builder needs it to reverse a coded procedure back to its original SV3-01
+# qualifier, the same "promote once a real reverse-direction consumer exists"
+# discipline every other disclosed local-system constant in this app follows.
+CDT_CODE_SYSTEM = "http://www.ada.org/cdt"
 _PROCEDURE_QUALIFIER_FALLBACK_SYSTEM = "urn:interop-tools:x12-procedure-qualifier"
 
 # TOO01 (Code List Qualifier) - "JP" is the Universal/National Tooth
@@ -183,13 +186,15 @@ _PROCEDURE_QUALIFIER_FALLBACK_SYSTEM = "urn:interop-tools:x12-procedure-qualifie
 # Designation System CodeSystem. Deliberately NOT FHIR's own `ex-tooth`
 # CodeSystem, which is FDI (international) numbering - a genuinely
 # different vocabulary for the same physical tooth (see module docstring).
-_TOO_UNIVERSAL_QUALIFIER = "JP"
-_TOOTH_NUMBER_SYSTEM = "http://terminology.hl7.org/CodeSystem/ADAUniversalToothDesignationSystem"
-_TOOTH_NUMBER_FALLBACK_SYSTEM = "urn:interop-tools:x12-too-tooth-number"
+# All four public for the identical reverse-direction reason CDT_CODE_SYSTEM
+# is public above.
+TOO_UNIVERSAL_QUALIFIER = "JP"
+TOOTH_NUMBER_SYSTEM = "http://terminology.hl7.org/CodeSystem/ADAUniversalToothDesignationSystem"
+TOOTH_NUMBER_FALLBACK_SYSTEM = "urn:interop-tools:x12-too-tooth-number"
 # Real, verified FHIR-canonical CodeSystem (confirmed by direct fetch) for
 # tooth surface letters (M/O/D/B/L/F/I) - TOO03's own composite shape, up
 # to 5 surfaces (a real tooth has at most 5 relevant surfaces).
-_TOOTH_SURFACE_SYSTEM = "http://terminology.hl7.org/CodeSystem/ADAToothSurfaceCodes"
+TOOTH_SURFACE_SYSTEM = "http://terminology.hl7.org/CodeSystem/ADAToothSurfaceCodes"
 _MAX_TOOTH_SURFACES = 5
 
 _CLAIM_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/claim-type"
@@ -245,7 +250,7 @@ def _build_procedure_concept(sv3_01: str, delimiters: Delimiters) -> CodeableCon
     code = component(sv3_01, delimiters, 2)
     if not code:
         return None
-    system = _resolve_qualifier_system(qualifier, "AD", _CDT_CODE_SYSTEM, _PROCEDURE_QUALIFIER_FALLBACK_SYSTEM)
+    system = _resolve_qualifier_system(qualifier, "AD", CDT_CODE_SYSTEM, _PROCEDURE_QUALIFIER_FALLBACK_SYSTEM)
     return CodeableConcept(coding=[Coding(system=system, code=code)])
 
 
@@ -274,7 +279,7 @@ def _build_tooth_body_site(too: Segment | None) -> CodeableConcept | None:
     if not tooth_number:
         return None
     qualifier = element(too, 1).strip().upper()
-    system = _resolve_qualifier_system(qualifier, _TOO_UNIVERSAL_QUALIFIER, _TOOTH_NUMBER_SYSTEM, _TOOTH_NUMBER_FALLBACK_SYSTEM)
+    system = _resolve_qualifier_system(qualifier, TOO_UNIVERSAL_QUALIFIER, TOOTH_NUMBER_SYSTEM, TOOTH_NUMBER_FALLBACK_SYSTEM)
     return CodeableConcept(coding=[Coding(system=system, code=tooth_number)])
 
 
@@ -289,7 +294,7 @@ def _build_tooth_sub_sites(too: Segment | None, delimiters: Delimiters) -> list[
         surface_code = component(surfaces_composite, delimiters, position)
         if not surface_code:
             break
-        sub_sites.append(CodeableConcept(coding=[Coding(system=_TOOTH_SURFACE_SYSTEM, code=surface_code)]))
+        sub_sites.append(CodeableConcept(coding=[Coding(system=TOOTH_SURFACE_SYSTEM, code=surface_code)]))
     return sub_sites
 
 

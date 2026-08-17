@@ -1155,6 +1155,95 @@ def test_edi_837i_missing_claim_raises_mapping_error():
         build_message_from_bundle(empty_bundle, "EDI", "837I", "")
 
 
+def test_list_supported_targets_includes_837d():
+    assert ("EDI", "837D", "") in list_supported_targets()
+
+
+def test_edi_837d_round_trip_preserves_tooth_information_and_no_diagnosis():
+    # This fixture deliberately carries no HI segment at all (dental claims
+    # commonly have none - see claim_837d.py's own module docstring) and
+    # relies entirely on the claim-level DTP*472 default for both lines -
+    # proving both the no-diagnosis path and the claim-level-DTP-becomes-
+    # per-line-DTP simplification in one fixture.
+    forward_x12 = (FIXTURES / "edi_837d_basic.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_claim = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert len(original_claim.item) == 2
+    assert not original_claim.diagnosis
+    assert original_claim.item[0].bodySite.coding[0].code == "12"
+    assert [c.coding[0].code for c in original_claim.item[0].subSite] == ["M", "O"]
+
+    message_text = build_message_from_bundle(bundle, "EDI", "837D", "")
+    assert "ST*837*" in message_text
+    assert "005010X224A2" in message_text
+
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    claim = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert len(claim.item) == 2
+    assert not claim.diagnosis
+    assert claim.total.value == original_claim.total.value
+
+    for original_item, item in zip(original_claim.item, claim.item):
+        assert item.productOrService.coding[0].code == original_item.productOrService.coding[0].code
+        assert item.productOrService.coding[0].system == original_item.productOrService.coding[0].system
+        assert item.unitPrice.value == original_item.unitPrice.value
+        assert item.careTeamSequence == original_item.careTeamSequence
+        # Both lines resolve servicedDate from the one claim-level DTP*472
+        # default in the original fixture, but this reverse builder always
+        # regenerates a per-line DTP - the date itself must still match.
+        assert item.servicedDate == original_item.servicedDate
+
+    # Tooth body site/sub-site only survive on the first item, matching
+    # the original fixture's own TOO segment placement.
+    assert claim.item[0].bodySite.coding[0].code == "12"
+    assert claim.item[0].bodySite.coding[0].system == original_claim.item[0].bodySite.coding[0].system
+    assert [c.coding[0].code for c in claim.item[0].subSite] == ["M", "O"]
+    assert claim.item[1].bodySite is None
+    assert not claim.item[1].subSite
+
+    # Rendering provider (careTeam) must survive too, not just the item's
+    # own careTeamSequence pointer to it.
+    assert len(claim.careTeam) == len(original_claim.careTeam)
+
+
+def test_edi_837d_no_dependent_round_trip_preserves_diagnosis_pointer():
+    # This fixture is the mirror case of edi_837d_basic.x12: it DOES carry
+    # an HI segment and a resolvable SV3-11 diagnosis pointer, and its own
+    # DTP*472 is per-line rather than claim-level.
+    forward_x12 = (FIXTURES / "edi_837d_no_dependent.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_claim = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert len(original_claim.diagnosis) == 1
+    assert original_claim.item[0].diagnosisSequence == [1]
+
+    message_text = build_message_from_bundle(bundle, "EDI", "837D", "")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    claim = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert len(claim.diagnosis) == 1
+    assert claim.diagnosis[0].diagnosisCodeableConcept.coding[0].code == (
+        original_claim.diagnosis[0].diagnosisCodeableConcept.coding[0].code
+    )
+    assert claim.item[0].diagnosisSequence == [1]
+    assert claim.item[0].servicedDate == original_claim.item[0].servicedDate
+
+    original_patient_names = sorted(
+        f"{p.name[0].family} {p.name[0].given[0]}"
+        for p in (e.resource for e in bundle.entry if e.resource.get_resource_type() == "Patient")
+    )
+    patient_names = sorted(
+        f"{p.name[0].family} {p.name[0].given[0]}"
+        for p in (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Patient")
+    )
+    assert patient_names == original_patient_names
+    assert len(patient_names) == 1
+
+
+def test_edi_837d_missing_claim_raises_mapping_error():
+    empty_bundle = Bundle(id="test", type="collection")
+    with pytest.raises(MappingError):
+        build_message_from_bundle(empty_bundle, "EDI", "837D", "")
+
+
 def test_siu_s12_round_trip_preserves_appointment_fields():
     forward_text = (FIXTURES / "siu_s12_basic.hl7").read_text()
     bundle = convert_hl7_to_bundle(forward_text)
