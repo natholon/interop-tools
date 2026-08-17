@@ -480,6 +480,33 @@ def test_ccd_round_trip_preserves_immunization_fields():
             assert immunization.doseQuantity.unit == original.doseQuantity.unit
 
 
+def test_ccd_round_trip_preserves_vital_signs_panel_and_members():
+    forward_xml = (FIXTURES / "ccd_vitals_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original_observations = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Observation"]
+    original_panel = next(o for o in original_observations if o.code.coding[0].code == "85353-1")
+    assert len(original_panel.hasMember) == 2
+
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    observations = [e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Observation"]
+    panel = next(o for o in observations if o.code.coding[0].code == "85353-1")
+    assert len(panel.hasMember) == 2
+
+    original_members = sorted(
+        (o for o in original_observations if o.code.coding[0].code != "85353-1"), key=lambda o: o.code.coding[0].code
+    )
+    members = sorted(
+        (o for o in observations if o.code.coding[0].code != "85353-1"), key=lambda o: o.code.coding[0].code
+    )
+    for original, member in zip(original_members, members):
+        assert member.code.coding[0].code == original.code.coding[0].code
+        assert float(member.valueQuantity.value) == float(original.valueQuantity.value)
+        assert member.valueQuantity.unit == original.valueQuantity.unit
+        if original.interpretation:
+            assert member.interpretation[0].coding[0].code == original.interpretation[0].coding[0].code
+
+
 def test_ccd_missing_patient_raises_mapping_error():
     empty_bundle = Bundle(id="test", type="collection")
     with pytest.raises(MappingError):

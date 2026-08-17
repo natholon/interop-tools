@@ -69,9 +69,12 @@ _CATEGORY_SYSTEM = "http://terminology.hl7.org/CodeSystem/observation-category"
 _CATEGORY_CODE = "vital-signs"
 # Vital Signs Panel - fixed per the IG's own "C-CDA Vital Signs Organizer
 # to FHIR Observation Panel" table ("Set to 85353-1"), not derived from
-# the source organizer's own /code.
-_PANEL_CODE_SYSTEM = "http://loinc.org"
-_PANEL_CODE = "85353-1"
+# the source organizer's own /code. Public (not module-private) -
+# app/transform/cda_ccd.py became a real reverse-direction consumer,
+# using this fixed code to tell a panel Observation apart from an
+# individual vital-sign Observation within one flat Bundle.entry list.
+PANEL_CODE_SYSTEM = "http://loinc.org"
+PANEL_CODE = "85353-1"
 
 # C-CDA's statusCode is fixed to "completed" for both the Vital Signs
 # Organizer and each Vital Sign Observation per the C-CDA spec itself (not
@@ -156,7 +159,7 @@ def build_vital_signs(section, patient_id: str) -> list[Observation]:
             id=str(uuid.uuid4()),
             status=_FIXED_STATUS,
             category=[_category()],
-            code=CodeableConcept(coding=[Coding(system=_PANEL_CODE_SYSTEM, code=_PANEL_CODE)]),
+            code=CodeableConcept(coding=[Coding(system=PANEL_CODE_SYSTEM, code=PANEL_CODE)]),
             subject=Reference(reference=f"urn:uuid:{patient_id}"),
             hasMember=[Reference(reference=f"urn:uuid:{member.id}") for member in member_observations],
         )

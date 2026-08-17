@@ -39,6 +39,10 @@ from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.common import CD_FALLBACK_SYSTEM, OID_TO_FHIR_SYSTEM, RECOGNIZED_ENCOUNTER_CLASSES
 from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID
 from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
+from app.cda.vitals import ORGANIZER_TEMPLATE_ID as VITALS_ORGANIZER_TEMPLATE_ID
+from app.cda.vitals import OBSERVATION_TEMPLATE_ID as VITALS_OBSERVATION_TEMPLATE_ID
+from app.cda.vitals import PANEL_CODE as VITALS_PANEL_CODE
+from app.cda.vitals import SECTION_TEMPLATE_ID as VITALS_SECTION_TEMPLATE_ID
 from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID
 from app.cda.medications import STATUS_MAP as MEDICATION_STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
@@ -559,6 +563,82 @@ def _build_immunizations_section(immunizations) -> str:
     )
 
 
+def _is_vital_signs_panel(observation) -> bool:
+    """The fixed LOINC 85353-1 "Vital Signs Panel" code - not merely
+    "has .hasMember" - is what tells a Vital Signs panel Observation apart
+    from an individual vital-sign Observation within one flat
+    Bundle.entry list, the reverse of the forward mapper's own fixed panel
+    code assignment (see app.cda.vitals.PANEL_CODE)."""
+    return bool(observation.code and observation.code.coding and observation.code.coding[0].code == VITALS_PANEL_CODE)
+
+
+def _build_vital_sign_observation_element(observation) -> str:
+    coding = observation.code.coding[0] if observation.code and observation.code.coding else None
+    code_element = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
+    effective_time = (
+        f'<effectiveTime value="{format_hl7_ts(observation.effectiveDateTime)}"/>'
+        if observation.effectiveDateTime
+        else ""
+    )
+    value = ""
+    if observation.valueQuantity is not None:
+        unit = f' unit="{observation.valueQuantity.unit}"' if observation.valueQuantity.unit else ""
+        value = f'<value xsi:type="PQ" value="{observation.valueQuantity.value}"{unit}/>'
+    interpretation = ""
+    if observation.interpretation and observation.interpretation[0].coding:
+        interpretation = f"<interpretationCode {_build_cd_attrs(observation.interpretation[0].coding[0])}/>"
+    method = ""
+    if observation.method and observation.method.coding:
+        method = f"<methodCode {_build_cd_attrs(observation.method.coding[0])}/>"
+    body_site = ""
+    if observation.bodySite and observation.bodySite.coding:
+        body_site = f"<targetSiteCode {_build_cd_attrs(observation.bodySite.coding[0])}/>"
+
+    return (
+        '<component><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{VITALS_OBSERVATION_TEMPLATE_ID}"/>'
+        '<statusCode code="completed"/>'
+        f"{code_element}{effective_time}{value}{interpretation}{method}{body_site}"
+        "</observation></component>"
+    )
+
+
+def _build_vital_signs_organizer(panel, members_by_id: dict) -> str:
+    member_ids = [ref.reference.removeprefix("urn:uuid:") for ref in (panel.hasMember or [])]
+    member_elements = "".join(
+        _build_vital_sign_observation_element(members_by_id[member_id])
+        for member_id in member_ids
+        if member_id in members_by_id
+    )
+    if not member_elements:
+        return ""
+    effective_time = (
+        f'<effectiveTime value="{format_hl7_ts(panel.effectiveDateTime)}"/>' if panel.effectiveDateTime else ""
+    )
+    return (
+        f'<entry typeCode="DRIV"><organizer classCode="CLUSTER" moodCode="EVN">'
+        f'<templateId root="{VITALS_ORGANIZER_TEMPLATE_ID}"/>'
+        '<code code="46680005" codeSystem="2.16.840.1.113883.6.96" displayName="Vital signs"/>'
+        f'<statusCode code="completed"/>{effective_time}{member_elements}'
+        "</organizer></entry>"
+    )
+
+
+def _build_vitals_section(observations) -> str:
+    panels = [o for o in observations if _is_vital_signs_panel(o)]
+    if not panels:
+        return ""
+    members_by_id = {o.id: o for o in observations if not _is_vital_signs_panel(o)}
+    entries = "".join(entry for panel in panels if (entry := _build_vital_signs_organizer(panel, members_by_id)))
+    if not entries:
+        return ""
+    return (
+        f'<component><section><templateId root="{VITALS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="8716-3" codeSystem="2.16.840.1.113883.6.1" displayName="Vital Signs"/>'
+        f"<title>Vital Signs</title>{entries}</section></component>"
+    )
+
+
 class CcdReverseBuilder(MessageBuilder):
     def build_message(self, bundle: Bundle) -> str:
         patient = find_resource(bundle, "Patient")
@@ -569,6 +649,7 @@ class CcdReverseBuilder(MessageBuilder):
         medication_requests = find_resources(bundle, "MedicationRequest")
         allergies = find_resources(bundle, "AllergyIntolerance")
         immunizations = find_resources(bundle, "Immunization")
+        observations = find_resources(bundle, "Observation")
 
         document_id = bundle.identifier.value if bundle.identifier else "TT000"
         document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
@@ -578,7 +659,11 @@ class CcdReverseBuilder(MessageBuilder):
         medications_section = _build_medications_section(medication_requests)
         allergies_section = _build_allergies_section(allergies)
         immunizations_section = _build_immunizations_section(immunizations)
-        sections = f"{problems_section}{medications_section}{allergies_section}{immunizations_section}"
+        vitals_section = _build_vitals_section(observations)
+        sections = (
+            f"{problems_section}{medications_section}{allergies_section}"
+            f"{immunizations_section}{vitals_section}"
+        )
         body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 
         xml_text = (
