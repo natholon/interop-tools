@@ -44,7 +44,7 @@ from app.provenance.resolver import resolve_bundle_paths
 # both already use) instead, the identical finer-than-ST01 granularity
 # problem C-CDA's own per-section (not per-document-type) instrumentation
 # already had to solve.
-_INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835", "837P", "837I"}
+_INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835", "837P", "837I", "837D"}
 # C-CDA is only PARTIALLY instrumented (document header + the Problems
 # section, and - for free, via a shared entry-level builder, see
 # app/cda/hospital_discharge_diagnosis.py - Discharge Summary's own

@@ -56,27 +56,21 @@ def test_api_data_specification_adt_a01_returns_supported_report_with_entries():
     assert status_entry["reason"]
 
 
-def test_api_data_specification_edi_input_converts_but_is_unsupported():
-    # 270/271/276/277/278/835/837P/837I are instrumented (see
-    # app/edi/common.py/eligibility_270.py/eligibility_271.py/
-    # claim_status.py/prior_auth.py/remittance_835.py/claim_837p.py/
-    # claim_837i.py), so a non-instrumented variant (837D - 837P/837I/837D
-    # share ST01="837" but are tracked independently, see
-    # app/provenance/dispatch.py's own resolve_837_variant() use) is what
-    # proves the "converts but unsupported" path for EDI now - mirroring
-    # how the equivalent HL7v2/C-CDA tests each need a still-unsupported
-    # example, not the first one that happened to exist when this test was
-    # originally written.
+def test_api_data_specification_837d_type_is_now_instrumented():
+    # 837D is instrumented as of this slice - the fifth and last EDI family,
+    # completing full "big five" HIPAA EDI breadth for the Data
+    # Specification pillar (see app/provenance/dispatch.py's own
+    # _INSTRUMENTED_TRANSACTION_SETS - every EDI family this app converts is
+    # now a member, so there is no longer a "converts but unsupported" EDI
+    # example left to test against; only C-CDA input still exercises that
+    # path, see the test below).
     response = client.post("/api/data-specification", json={"hl7_text": read_fixture("edi_837d_basic.x12")})
     assert response.status_code == 200
-    body = response.json()
-    assert body["bundle"]["resourceType"] == "Bundle"
-    report = body["report"]
-    assert report["unsupported"] is True
+    report = response.json()["report"]
+    assert report["unsupported"] is False
     assert report["source_format"] == "EDI"
-    assert report["message_type"] == "EDI"
     assert report["trigger_event"] == "837D"
-    assert "X12 837D" in report["unsupported_reason"]
+    assert len(report["entries"]) > 0
 
 
 def test_api_data_specification_270_type_is_now_instrumented():

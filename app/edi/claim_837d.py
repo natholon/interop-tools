@@ -165,6 +165,7 @@ from app.edi.parser import (
 )
 from app.fhir_models.builders import parse_hl7_date
 from app.hl7.errors import MappingError, MissingSegmentError
+from app.provenance.location import edi_location
 
 TRANSACTION_SET_ID = "837"
 
@@ -243,7 +244,9 @@ def _resolve_qualifier_system(qualifier: str, recognized_qualifier: str, canonic
     return fallback_system
 
 
-def _build_procedure_concept(sv3_01: str, delimiters: Delimiters) -> CodeableConcept | None:
+def _build_procedure_concept(
+    sv3_01: str, delimiters: Delimiters, resource_id: str | None = None, relative_path: str | None = None, recorder=None
+) -> CodeableConcept | None:
     if not sv3_01:
         return None
     qualifier = component(sv3_01, delimiters, 1).strip().upper()
@@ -251,6 +254,8 @@ def _build_procedure_concept(sv3_01: str, delimiters: Delimiters) -> CodeableCon
     if not code:
         return None
     system = _resolve_qualifier_system(qualifier, "AD", CDT_CODE_SYSTEM, _PROCEDURE_QUALIFIER_FALLBACK_SYSTEM)
+    if recorder and resource_id and relative_path:
+        recorder.record(resource_id, f"{relative_path}.coding[0].code", edi_location("SV3", 1, component=2), code)
     return CodeableConcept(coding=[Coding(system=system, code=code)])
 
 
@@ -272,7 +277,9 @@ def _build_diagnosis_pointers(sv3: Segment, delimiters: Delimiters, num_diagnose
     return pointers
 
 
-def _build_tooth_body_site(too: Segment | None) -> CodeableConcept | None:
+def _build_tooth_body_site(
+    too: Segment | None, resource_id: str | None = None, relative_path: str | None = None, recorder=None
+) -> CodeableConcept | None:
     if too is None:
         return None
     tooth_number = element(too, 2)
@@ -280,10 +287,14 @@ def _build_tooth_body_site(too: Segment | None) -> CodeableConcept | None:
         return None
     qualifier = element(too, 1).strip().upper()
     system = _resolve_qualifier_system(qualifier, TOO_UNIVERSAL_QUALIFIER, TOOTH_NUMBER_SYSTEM, TOOTH_NUMBER_FALLBACK_SYSTEM)
+    if recorder and resource_id and relative_path:
+        recorder.record(resource_id, f"{relative_path}.coding[0].code", edi_location("TOO", 2), tooth_number)
     return CodeableConcept(coding=[Coding(system=system, code=tooth_number)])
 
 
-def _build_tooth_sub_sites(too: Segment | None, delimiters: Delimiters) -> list[CodeableConcept]:
+def _build_tooth_sub_sites(
+    too: Segment | None, delimiters: Delimiters, resource_id: str | None = None, relative_path: str | None = None, recorder=None
+) -> list[CodeableConcept]:
     if too is None:
         return []
     surfaces_composite = element(too, 3)
@@ -295,6 +306,13 @@ def _build_tooth_sub_sites(too: Segment | None, delimiters: Delimiters) -> list[
         if not surface_code:
             break
         sub_sites.append(CodeableConcept(coding=[Coding(system=TOOTH_SURFACE_SYSTEM, code=surface_code)]))
+        if recorder and resource_id and relative_path:
+            recorder.record(
+                resource_id,
+                f"{relative_path}[{len(sub_sites) - 1}].coding[0].code",
+                edi_location("TOO", 3, component=position),
+                surface_code,
+            )
     return sub_sites
 
 
@@ -325,37 +343,80 @@ def _build_service_line_item(
     location: CodeableConcept | None,
     num_diagnoses: int,
     care_team_sequence: int | None,
+    resource_id: str | None = None,
+    recorder=None,
 ) -> ClaimItem:
-    procedure = _build_procedure_concept(element(sv3, 1), delimiters) or CodeableConcept(text="Unspecified procedure")
+    item_path = f"item[{sequence - 1}]"
+    procedure = _build_procedure_concept(
+        element(sv3, 1), delimiters, resource_id=resource_id, relative_path=f"{item_path}.productOrService", recorder=recorder
+    )
+    if procedure is None:
+        procedure = CodeableConcept(text="Unspecified procedure")
+        if recorder and resource_id:
+            recorder.record_inferred(
+                resource_id,
+                f"{item_path}.productOrService.text",
+                "This service line's own SV3-01 (Composite Dental Procedure Identifier) has no resolvable code - Claim.item[].productOrService defaults to a generic placeholder text.",
+                "Unspecified procedure",
+            )
     item = ClaimItem(sequence=sequence, productOrService=procedure)
 
-    charge = parse_decimal(element(sv3, 2))
+    charge_raw = element(sv3, 2)
+    charge = parse_decimal(charge_raw)
     if charge is not None:
         item.unitPrice = Money(value=charge, currency="USD")
+        if recorder and resource_id:
+            recorder.record(resource_id, f"{item_path}.unitPrice.value", edi_location("SV3", 2), charge_raw)
 
-    quantity_value = parse_decimal(element(sv3, 6))
+    quantity_raw = element(sv3, 6)
+    quantity_value = parse_decimal(quantity_raw)
     if quantity_value is not None:
         item.quantity = Quantity(value=quantity_value)
+        if recorder and resource_id:
+            recorder.record(resource_id, f"{item_path}.quantity.value", edi_location("SV3", 6), quantity_raw)
 
     raw_date = resolve_line_dtp_raw_date(dtp, claim_level_dtp)
     if raw_date:
         serviced = parse_hl7_date(raw_date)
         if serviced:
             item.servicedDate = serviced
+            if recorder and resource_id:
+                # Re-derive (purely for provenance, no change to
+                # resolve_line_dtp_raw_date's own behavior) whether the
+                # per-line DTP or the claim-level default actually supplied
+                # this value - the same "report which branch really fired"
+                # discipline app/mappings/adt.py's own PV1-44-vs-EVN-2
+                # resolution already established.
+                line_dtp_fired = dtp is not None and element(dtp, 2) == "D8" and element(dtp, 3)
+                source_location = edi_location("DTP", 3) if line_dtp_fired else edi_location("DTP", 3, segment_repetition=0)
+                recorder.record(
+                    resource_id, f"{item_path}.servicedDate", source_location, serviced, source_value=raw_date
+                )
 
     if location is not None:
         item.locationCodeableConcept = location
+        if recorder and resource_id and location.coding:
+            recorder.record(
+                resource_id,
+                f"{item_path}.locationCodeableConcept.coding[0].code",
+                edi_location("CLM", 5, component=1),
+                location.coding[0].code,
+            )
 
-    body_site = _build_tooth_body_site(too)
+    body_site = _build_tooth_body_site(too, resource_id=resource_id, relative_path=f"{item_path}.bodySite", recorder=recorder)
     if body_site is not None:
         item.bodySite = body_site
-    sub_sites = _build_tooth_sub_sites(too, delimiters)
+    sub_sites = _build_tooth_sub_sites(too, delimiters, resource_id=resource_id, relative_path=f"{item_path}.subSite", recorder=recorder)
     if sub_sites:
         item.subSite = sub_sites
 
     pointers = _build_diagnosis_pointers(sv3, delimiters, num_diagnoses)
     if pointers:
         item.diagnosisSequence = pointers
+        if recorder and resource_id:
+            recorder.record(
+                resource_id, f"{item_path}.diagnosisSequence", edi_location("SV3", 11), ",".join(str(p) for p in pointers)
+            )
 
     if care_team_sequence is not None:
         item.careTeamSequence = [care_team_sequence]
@@ -367,10 +428,6 @@ class Edi837dBuilder(EdiTransactionBuilder):
     transaction_set_id = TRANSACTION_SET_ID
 
     def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters, recorder=None) -> Bundle:
-        # recorder is accepted (see app/provenance/) but not yet acted on -
-        # 837D isn't instrumented yet (this phase's scope is 270/271 only) -
-        # Bundle.identifier/.timestamp still get recorded "for free" via
-        # the shared assemble_bundle call below.
         bht = find_segment(transaction_set.segments, "BHT")
         if bht is None:
             raise MissingSegmentError(f"{self.transaction_set_id} transaction set is missing its BHT segment")
@@ -378,42 +435,56 @@ class Edi837dBuilder(EdiTransactionBuilder):
         loops = resolve_837_loops(transaction_set.segments, self.transaction_set_id)
 
         billing_provider: Resource = (
-            build_practitioner_from_nm1(loops.billing_provider_nm1)
+            build_practitioner_from_nm1(loops.billing_provider_nm1, recorder=recorder)
             if is_person_entity(loops.billing_provider_nm1)
-            else build_organization_from_nm1(loops.billing_provider_nm1)
+            else build_organization_from_nm1(loops.billing_provider_nm1, recorder=recorder)
         )
-        payer = build_organization_from_nm1(loops.payer_nm1)
-        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, loops.subscriber_dmg)
+        payer = build_organization_from_nm1(loops.payer_nm1, recorder=recorder)
+        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, loops.subscriber_dmg, recorder=recorder)
         patient = (
-            build_patient_from_nm1_dmg(loops.patient_nm1, loops.patient_dmg)
+            build_patient_from_nm1_dmg(loops.patient_nm1, loops.patient_dmg, recorder=recorder)
             if loops.patient_is_dependent
             else subscriber
         )
 
-        coverage = build_coverage(patient, payer, subscriber)
+        coverage = build_coverage(patient, payer, subscriber, recorder=recorder)
 
         clm = find_segment(loops.claim_loop.member_segments, "CLM")
         if clm is None:
             raise MissingSegmentError(f"{self.transaction_set_id} transaction set is missing its 2300 CLM (claim) segment")
 
-        total = parse_decimal(element(clm, 2))
+        total_raw = element(clm, 2)
+        total = parse_decimal(total_raw)
         if total is None:
             raise MappingError(f"{self.transaction_set_id} transaction set's CLM segment has no resolvable total charge (CLM02)")
 
+        claim_id = str(uuid.uuid4())
+
         diagnosis_concepts = []
-        for hi in iter_diagnosis_hi_segments(loops.claim_loop.member_segments, delimiters):
-            diagnosis_concepts.extend(build_diagnosis_codeable_concepts(hi, delimiters))
+        for hi_index, hi in enumerate(iter_diagnosis_hi_segments(loops.claim_loop.member_segments, delimiters)):
+            new_concepts = build_diagnosis_codeable_concepts(
+                hi,
+                delimiters,
+                resource_id=claim_id,
+                relative_path_prefix="diagnosis",
+                recorder=recorder,
+                index_offset=len(diagnosis_concepts),
+                segment_repetition=hi_index,
+            )
+            diagnosis_concepts.extend(new_concepts)
 
         rendering_nm1 = find_nm1_by_entity_code(loops.claim_loop.member_segments, _NM1_RENDERING_PROVIDER)
         rendering_provider: Resource | None = None
         if rendering_nm1 is not None:
             rendering_provider = (
-                build_practitioner_from_nm1(rendering_nm1)
+                build_practitioner_from_nm1(rendering_nm1, recorder=recorder)
                 if is_person_entity(rendering_nm1)
-                else build_organization_from_nm1(rendering_nm1)
+                else build_organization_from_nm1(rendering_nm1, recorder=recorder)
             )
 
-        created = parse_x12_datetime(element(bht, 4), element(bht, 5))
+        bht04_raw = element(bht, 4)
+        bht05_raw = element(bht, 5)
+        created = parse_x12_datetime(bht04_raw, bht05_raw)
         if created is None:
             raise MappingError(f"{self.transaction_set_id} transaction set's BHT segment has no resolvable date (BHT04)")
 
@@ -448,11 +519,13 @@ class Edi837dBuilder(EdiTransactionBuilder):
                     location,
                     len(diagnosis_concepts),
                     1 if rendering_provider is not None else None,
+                    resource_id=claim_id,
+                    recorder=recorder,
                 )
             )
 
         claim = Claim(
-            id=str(uuid.uuid4()),
+            id=claim_id,
             status="active",
             type=CodeableConcept(coding=[Coding(system=_CLAIM_TYPE_SYSTEM, code=DEFAULT_CLAIM_TYPE)]),
             use="claim",
@@ -467,6 +540,8 @@ class Edi837dBuilder(EdiTransactionBuilder):
         patient_control_number = element(clm, 1)
         if patient_control_number:
             claim.identifier = [Identifier(value=patient_control_number)]
+            if recorder:
+                recorder.record(claim_id, "identifier[0].value", edi_location("CLM", 1), patient_control_number)
 
         claim.total = Money(value=total, currency="USD")
 
@@ -484,6 +559,13 @@ class Edi837dBuilder(EdiTransactionBuilder):
                     role=CodeableConcept(coding=[Coding(system=_CARE_TEAM_ROLE_SYSTEM, code=_RENDERING_PROVIDER_ROLE)]),
                 )
             ]
+            if recorder:
+                recorder.record_inferred(
+                    claim_id,
+                    "careTeam[0].role.coding[0].code",
+                    'Every rendering-provider care team entry this app builds from an 837D claim has role="primary" - the closest fit in FHIR\'s own 4-code claimcareteamrole value set (there is no "rendering" code), not read from any X12 field.',
+                    _RENDERING_PROVIDER_ROLE,
+                )
 
         if items:
             claim.item = items
@@ -495,5 +577,35 @@ class Edi837dBuilder(EdiTransactionBuilder):
         if rendering_provider is not None:
             resources.append(rendering_provider)
         resources.append(claim)
+
+        if recorder:
+            recorder.record_inferred(
+                claim_id,
+                "status",
+                'Every Claim this app builds from an 837D transaction set has status="active" - not read from any X12 field.',
+                "active",
+            )
+            recorder.record_inferred(
+                claim_id,
+                "type.coding[0].code",
+                'Every Claim this app builds from an 837D transaction set has type="oral" - that\'s what an 837D transaction fundamentally represents, not read from any field.',
+                DEFAULT_CLAIM_TYPE,
+            )
+            recorder.record_inferred(
+                claim_id,
+                "use",
+                'Every Claim this app builds from an 837D transaction set has use="claim" - not read from any X12 field.',
+                "claim",
+            )
+            recorder.record_inferred(
+                claim_id,
+                "priority.text",
+                "837D carries no data element for a claim's own priority - Claim.priority defaults to \"normal\", the same \"default to the most common real value\" precedent as 837P's/837I's own DEFAULT_PRIORITY.",
+                DEFAULT_PRIORITY,
+            )
+            recorder.record(
+                claim_id, "created", f"{edi_location('BHT', 4)}+{edi_location('BHT', 5)}", created, source_value=bht04_raw + bht05_raw
+            )
+            recorder.record(claim_id, "total.value", edi_location("CLM", 2), total_raw)
 
         return assemble_bundle(bht, *resources, recorder=recorder)
