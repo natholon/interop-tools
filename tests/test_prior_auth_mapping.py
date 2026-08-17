@@ -39,6 +39,14 @@ def test_request_basic_fixture_maps_claim_with_diagnoses_and_no_response():
     assert requester.name[0].family == "WATSON"
     patient = by_type["Patient"][0]
     assert patient.name[0].family == "SMITH"
+    # Regression test for a real, previously undetected bug in this
+    # fixture's own NM1 segment: an extra "*" shifted NM108 (ID
+    # Qualifier)/NM109 (ID Code) one position to the right, so
+    # _build_nm1_identifier read "MI" (the qualifier) as if it were the
+    # value, silently losing the real member id "12345678901" entirely -
+    # caught while building the reverse (FHIR -> X12) transform slice for
+    # this family, not by this test suite originally.
+    assert patient.identifier[0].value == "12345678901"
 
     claim = by_type["Claim"][0]
     assert claim.use == "preauthorization"
@@ -134,7 +142,7 @@ def test_lowercase_hcr_action_code_still_resolves_correct_outcome():
         "HL*2*1*21*1~"
         "NM1*1P*2*GENERAL HOSPITAL*****XX*1234567890~"
         "HL*3*2*22*0~"
-        "NM1*IL*1*DOE*JANE*****MI*MEMBERID001~"
+        "NM1*IL*1*DOE*JANE****MI*MEMBERID001~"
         "HL*4*3*EV*0~"
         "UM*HS*I**12:B~"
         "HCR*a4~"
@@ -180,7 +188,7 @@ def test_missing_patient_event_loop_raises_missing_segment_error():
         "HL*2*1*21*1~"
         "NM1*1P*2*GENERAL HOSPITAL*****XX*1234567890~"
         "HL*3*2*22*0~"
-        "NM1*IL*1*DOE*JANE*****MI*MEMBERID001~"
+        "NM1*IL*1*DOE*JANE****MI*MEMBERID001~"
         "SE*9*0001~"
         "GE*1*1~"
         "IEA*1*000000001~"
@@ -214,7 +222,7 @@ def test_unrecognized_hcr_action_code_defaults_to_complete_outcome():
         "HL*2*1*21*1~"
         "NM1*1P*2*GENERAL HOSPITAL*****XX*1234567890~"
         "HL*3*2*22*0~"
-        "NM1*IL*1*DOE*JANE*****MI*MEMBERID001~"
+        "NM1*IL*1*DOE*JANE****MI*MEMBERID001~"
         "HL*4*3*EV*0~"
         "UM*HS*I**12:B~"
         "HCR*Z9~"

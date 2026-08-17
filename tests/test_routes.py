@@ -574,6 +574,41 @@ def test_api_transform_builds_277_interchange():
     assert "ST*277*" in message_text
 
 
+def test_index_transform_target_dropdown_includes_278_request_and_response():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "EDI 278REQUEST" in response.text
+    assert "EDI 278RESPONSE" in response.text
+
+
+def test_api_transform_builds_278_request_interchange():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("edi_278_request_basic.x12")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": bundle_json, "target_format": "EDI", "target_type": "278REQUEST", "target_trigger": ""},
+    )
+    assert response.status_code == 200
+    message_text = response.json()["message_text"]
+    assert message_text.startswith("ISA*")
+    assert "BHT*0007*13*" in message_text
+
+
+def test_api_transform_builds_278_response_interchange():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("edi_278_response_certified.x12")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": bundle_json, "target_format": "EDI", "target_type": "278RESPONSE", "target_trigger": ""},
+    )
+    assert response.status_code == 200
+    message_text = response.json()["message_text"]
+    assert message_text.startswith("ISA*")
+    assert "BHT*0007*11*" in message_text
+
+
 def test_api_transform_builds_adt_a01_message():
     convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
     bundle_json = json.dumps(convert_response.json()["bundle"])

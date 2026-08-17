@@ -127,8 +127,11 @@ _HL_PATIENT_EVENT = "EV"
 BHT02_REQUEST = "13"
 BHT02_RESPONSE = "11"
 
-_HCR_ACTION_SYSTEM = "urn:interop-tools:x12-hcr-action-code"
-_HCR_REASON_SYSTEM = "urn:interop-tools:x12-hcr-reason-code"
+# Public (not module-private) - app/transform/prior_auth.py became a real
+# reverse-direction consumer, reading ClaimResponseItemAdjudication's own
+# coding systems back apart into HCR01/HCR03 rather than guessing.
+HCR_ACTION_SYSTEM = "urn:interop-tools:x12-hcr-action-code"
+HCR_REASON_SYSTEM = "urn:interop-tools:x12-hcr-reason-code"
 
 # HCR01 (Action Code) -> ClaimResponse.outcome. Verified against a real
 # X12.org response example (HCR*A1*AUTH0001~) plus a published RFI answer
@@ -317,11 +320,11 @@ def _build_claim_response(
     adjudications = []
     if action_code:
         adjudications.append(
-            ClaimResponseItemAdjudication(category=CodeableConcept(coding=[Coding(system=_HCR_ACTION_SYSTEM, code=action_code)]))
+            ClaimResponseItemAdjudication(category=CodeableConcept(coding=[Coding(system=HCR_ACTION_SYSTEM, code=action_code)]))
         )
     if reason_code:
         adjudications.append(
-            ClaimResponseItemAdjudication(category=CodeableConcept(coding=[Coding(system=_HCR_REASON_SYSTEM, code=reason_code)]))
+            ClaimResponseItemAdjudication(category=CodeableConcept(coding=[Coding(system=HCR_REASON_SYSTEM, code=reason_code)]))
         )
     if adjudications:
         response.item = [ClaimResponseItem(itemSequence=1, adjudication=adjudications)]

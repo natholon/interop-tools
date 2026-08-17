@@ -14,6 +14,7 @@ from app.transform.cda_history_and_physical import HistoryAndPhysicalReverseBuil
 from app.transform.edi_270 import Edi270Builder
 from app.transform.edi_271 import Edi271Builder
 from app.transform.claim_status import Edi276Builder, Edi277Builder
+from app.transform.prior_auth import Edi278RequestBuilder, Edi278ResponseBuilder
 from app.transform.hl7_adt import (
     AdtA01Builder,
     AdtA02Builder,
@@ -77,6 +78,8 @@ _BUILDERS: dict[tuple[str, str, str], MessageBuilder] = {
     ("EDI", "271", ""): Edi271Builder(),
     ("EDI", "276", ""): Edi276Builder(),
     ("EDI", "277", ""): Edi277Builder(),
+    ("EDI", "278REQUEST", ""): Edi278RequestBuilder(),
+    ("EDI", "278RESPONSE", ""): Edi278ResponseBuilder(),
 }
 
 

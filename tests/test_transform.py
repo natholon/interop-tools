@@ -863,6 +863,98 @@ def test_edi_277_missing_task_raises_mapping_error():
         build_message_from_bundle(bundle, "EDI", "277", "")
 
 
+def test_list_supported_targets_includes_278_request_and_response():
+    targets = list_supported_targets()
+    assert ("EDI", "278REQUEST", "") in targets
+    assert ("EDI", "278RESPONSE", "") in targets
+
+
+def test_edi_278_request_round_trip_preserves_claim_and_diagnoses():
+    forward_x12 = (FIXTURES / "edi_278_request_basic.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_claim = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert len(original_claim.diagnosis) == 2
+    assert not [e for e in bundle.entry if e.resource.get_resource_type() == "ClaimResponse"]
+
+    message_text = build_message_from_bundle(bundle, "EDI", "278REQUEST", "")
+    assert "ST*278*" in message_text
+    assert "BHT*0007*13*" in message_text
+
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    claim = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Claim")
+    assert not [e for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "ClaimResponse"]
+    original_codes = sorted(d.diagnosisCodeableConcept.coding[0].code for d in original_claim.diagnosis)
+    codes = sorted(d.diagnosisCodeableConcept.coding[0].code for d in claim.diagnosis)
+    assert codes == original_codes
+    for original_dx, dx in zip(
+        sorted(original_claim.diagnosis, key=lambda d: d.diagnosisCodeableConcept.coding[0].code),
+        sorted(claim.diagnosis, key=lambda d: d.diagnosisCodeableConcept.coding[0].code),
+    ):
+        assert dx.diagnosisCodeableConcept.coding[0].system == original_dx.diagnosisCodeableConcept.coding[0].system
+
+
+def test_edi_278_request_with_dependent_round_trip_preserves_both_patients():
+    # The one assertion specific to this builder's own new cross-cutting
+    # logic: unlike 270's own dependent (commonly carrying no member-
+    # specific id), 278's real dependent loop does carry one, and it must
+    # survive a full reverse-then-forward round trip, not get silently
+    # dropped by copying 270's own include_id=False choice unexamined.
+    forward_x12 = (FIXTURES / "edi_278_request_with_dependent.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_patient_ids = sorted(
+        p.identifier[0].value for p in (e.resource for e in bundle.entry if e.resource.get_resource_type() == "Patient")
+    )
+    assert len(original_patient_ids) == 2
+
+    message_text = build_message_from_bundle(bundle, "EDI", "278REQUEST", "")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    patient_ids = sorted(
+        p.identifier[0].value
+        for p in (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Patient")
+    )
+    assert patient_ids == original_patient_ids
+
+
+def test_edi_278_response_round_trip_preserves_outcome_and_auth_ref():
+    forward_x12 = (FIXTURES / "edi_278_response_certified.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_response = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "ClaimResponse")
+    assert original_response.outcome == "complete"
+    assert original_response.preAuthRef == "AUTH0001"
+
+    message_text = build_message_from_bundle(bundle, "EDI", "278RESPONSE", "")
+    assert "BHT*0007*11*" in message_text
+    assert "HCR*A1*AUTH0001" in message_text
+
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    response = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "ClaimResponse")
+    assert response.outcome == original_response.outcome
+    assert response.preAuthRef == original_response.preAuthRef
+
+
+def test_edi_278_response_denied_round_trips_partial_certification_data():
+    forward_x12 = (FIXTURES / "edi_278_response_denied.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_response = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "ClaimResponse")
+
+    message_text = build_message_from_bundle(bundle, "EDI", "278RESPONSE", "")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    response = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "ClaimResponse")
+    assert response.outcome == original_response.outcome == "complete"
+
+
+def test_edi_278_request_missing_claim_raises_mapping_error():
+    empty_bundle = Bundle(id="test", type="collection")
+    with pytest.raises(MappingError):
+        build_message_from_bundle(empty_bundle, "EDI", "278REQUEST", "")
+
+
+def test_edi_278_response_missing_claim_raises_mapping_error():
+    empty_bundle = Bundle(id="test", type="collection")
+    with pytest.raises(MappingError):
+        build_message_from_bundle(empty_bundle, "EDI", "278RESPONSE", "")
+
+
 def test_siu_s12_round_trip_preserves_appointment_fields():
     forward_text = (FIXTURES / "siu_s12_basic.hl7").read_text()
     bundle = convert_hl7_to_bundle(forward_text)
