@@ -6,8 +6,8 @@ test_cda_validation.py already established relative to the HL7v2
 test_validation_*.py files.
 
 Scope so far: the document header (Patient + optional Encounter), Problems,
-Medications, and Allergies - see app/provenance/dispatch.py's own
-_CDA_UNSUPPORTED_REASON for why no CDA document type is "fully
+Medications, Allergies, and Immunizations - see app/provenance/dispatch.py's
+own _CDA_UNSUPPORTED_REASON for why no CDA document type is "fully
 instrumented" yet despite these pieces producing real facts."""
 
 import itertools
@@ -41,11 +41,11 @@ def _build_bundle(fixture_name: str, recorder=None):
 
 
 # A representative fixture per document type this slice's own header +
-# Problems + Medications + Allergies instrumentation touches, plus a few
-# fixtures whose own section (Vitals/Results/Procedures/Immunizations) is
-# NOT instrumented yet - included specifically to prove the "accept
-# recorder, no-op" additions to those 6 other SECTION_BUILDERS entries
-# don't alter their own output either.
+# Problems + Medications + Allergies + Immunizations instrumentation
+# touches, plus a few fixtures whose own section (Vitals/Results/
+# Procedures) is NOT instrumented yet - included specifically to prove the
+# "accept recorder, no-op" additions to those 3 other SECTION_BUILDERS
+# entries don't alter their own output either.
 _CDA_FIXTURES = [
     "ccd_basic.xml",
     "ccd_minimal.xml",
@@ -409,6 +409,62 @@ def test_ccd_allergies_no_known_records_inferred_negation_text_and_status():
     assert status_entry.derivation == "inferred"
 
     assert f"{prefix}.code.coding[0].code" not in by_path
+
+
+def test_ccd_immunizations_basic_crosswalk_matches_known_field_values():
+    # ccd_immunizations_basic.xml's own EVN-mood entries exercise both
+    # branches this section maps: an administered, fully-populated entry
+    # (structured dosing/lot number/route) and a refused (negationInd)
+    # entry with no resolvable effectiveTime - the same fixture
+    # test_ccd_mapping.py itself asserts against. Its third, INT-mood
+    # planned entry must never appear in the resolved crosswalk at all.
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("ccd_immunizations_basic.xml", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    immunization_indices = [i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Immunization"]
+    assert len(immunization_indices) == 2
+    administered_index, refused_index = immunization_indices
+
+    code_entry = by_path[f"Bundle.entry[{administered_index}].resource.vaccineCode.coding[0].code"]
+    assert code_entry.value == "88"
+    assert code_entry.derivation == "direct"
+    assert code_entry.source_location == xpath_location(
+        "substanceAdministration", "consumable", "manufacturedProduct", "manufacturedMaterial", "code", "@code"
+    )
+
+    status_entry = by_path[f"Bundle.entry[{administered_index}].resource.status"]
+    assert status_entry.value == "completed"
+    assert status_entry.derivation == "direct"
+    assert status_entry.source_location == xpath_location("substanceAdministration", "statusCode", "@code")
+
+    occurrence_entry = by_path[f"Bundle.entry[{administered_index}].resource.occurrenceDateTime"]
+    assert occurrence_entry.value == "2010-08-15"
+
+    lot_entry = by_path[f"Bundle.entry[{administered_index}].resource.lotNumber"]
+    assert lot_entry.value == "1"
+    route_entry = by_path[f"Bundle.entry[{administered_index}].resource.route.coding[0].code"]
+    assert route_entry.value == "C28161"
+    dose_entry = by_path[f"Bundle.entry[{administered_index}].resource.doseQuantity.value"]
+    assert dose_entry.value == "0.5"
+
+    # The refused entry: status is driven directly by negationInd (a real
+    # source field, not a fabricated inference), while occurrenceString's
+    # own "Unknown" fallback genuinely has no source field to point at.
+    refused_status_entry = by_path[f"Bundle.entry[{refused_index}].resource.status"]
+    assert refused_status_entry.value == "not-done"
+    assert refused_status_entry.derivation == "direct"
+    assert refused_status_entry.source_location == xpath_location("substanceAdministration", "@negationInd")
+
+    occurrence_string_entry = by_path[f"Bundle.entry[{refused_index}].resource.occurrenceString"]
+    assert occurrence_string_entry.value == "Unknown"
+    assert occurrence_string_entry.derivation == "inferred"
+    assert occurrence_string_entry.source_location is None
+
+    # The INT-mood planned entry never produces an Immunization at all -
+    # only two vaccineCode facts should exist anywhere in the crosswalk.
+    assert sum(1 for e in entries if "vaccineCode.coding[0].code" in e.fhir_path) == 2
 
 
 def test_discharge_medications_reuses_medications_own_recorder_instrumentation():

@@ -46,22 +46,24 @@ from app.provenance.resolver import resolve_bundle_paths
 # already had to solve.
 _INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835", "837P", "837I", "837D"}
 # C-CDA is only PARTIALLY instrumented (document header + the Problems,
-# Medications, and Allergies sections, and - for free, via shared
-# entry-level builders, see app/cda/hospital_discharge_diagnosis.py/
-# discharge_medications.py - Discharge Summary's own Hospital Discharge
-# Diagnosis and Discharge Medications sections) - every other section
-# (Immunizations, Vital Signs, Results, Procedures) isn't instrumented yet
-# for any of the three document types, so no CDA document type is added to
-# a "fully instrumented" set the way an HL7v2 message_type is -
-# `unsupported` stays True for every CDA document unconditionally this
-# phase, even though `entries` below is genuinely non-empty for a document
-# with a header and/or a Problems/Medications/Allergies section, mirroring
-# the identical "some real facts, still unsupported" shape an HL7v2
-# message type not yet in _INSTRUMENTED_MESSAGE_TYPES already produces.
+# Medications, Allergies, and Immunizations sections, and - for free, via
+# shared entry-level builders, see
+# app/cda/hospital_discharge_diagnosis.py/discharge_medications.py -
+# Discharge Summary's own Hospital Discharge Diagnosis and Discharge
+# Medications sections) - every other section (Vital Signs, Results,
+# Procedures) isn't instrumented yet for any of the three document types,
+# so no CDA document type is added to a "fully instrumented" set the way
+# an HL7v2 message_type is - `unsupported` stays True for every CDA
+# document unconditionally this phase, even though `entries` below is
+# genuinely non-empty for a document with a header and/or a
+# Problems/Medications/Allergies/Immunizations section, mirroring the
+# identical "some real facts, still unsupported" shape an HL7v2 message
+# type not yet in _INSTRUMENTED_MESSAGE_TYPES already produces.
 _CDA_UNSUPPORTED_REASON = (
     "Field-level provenance for C-CDA is only partially implemented so far "
-    "(document header and the Problems/Medications/Allergies sections) - "
-    "the rest of each document type's own sections aren't instrumented yet."
+    "(document header and the Problems/Medications/Allergies/Immunizations "
+    "sections) - the rest of each document type's own sections aren't "
+    "instrumented yet."
 )
 
 # Message types with real, complete field-level instrumentation. Extended

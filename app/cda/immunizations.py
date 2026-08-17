@@ -21,8 +21,9 @@ import uuid
 from fhir.resources.R4B.immunization import Immunization
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, parse_partial_ts
+from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, effective_time_location, parse_partial_ts
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
+from app.provenance.location import xpath_location
 
 # Public (not module-private) - reused by app/cda/generator.py and
 # app/cda/validation.py, same pattern as the other section modules.
@@ -57,6 +58,11 @@ STATUS_MAP = {
 # moodCode (default "order").
 _DEFAULT_STATUS = "completed"
 
+# No wrapping Act - the entry element itself, same shape as Medications'
+# own bare substanceAdministration (unlike Problems'/Allergies' own
+# Concern-Act-wrapped entries).
+_ENTRY_BASE = "substanceAdministration"
+
 
 def _resolve_status(substance_administration) -> str:
     if substance_administration.get("negationInd") == "true":
@@ -66,15 +72,14 @@ def _resolve_status(substance_administration) -> str:
     return STATUS_MAP.get(code, _DEFAULT_STATUS)
 
 
-def _build_immunization(substance_administration, patient_id: str) -> Immunization | None:
+def _build_immunization(substance_administration, patient_id: str, recorder=None) -> Immunization | None:
     consumable = find_child(substance_administration, "consumable")
     manufactured_product = find_child(consumable, "manufacturedProduct") if consumable is not None else None
     manufactured_material = (
         find_child(manufactured_product, "manufacturedMaterial") if manufactured_product is not None else None
     )
-    vaccine_code = build_codeable_concept_from_cd(
-        find_child(manufactured_material, "code") if manufactured_material is not None else None
-    )
+    code_element = find_child(manufactured_material, "code") if manufactured_material is not None else None
+    vaccine_code = build_codeable_concept_from_cd(code_element)
     if vaccine_code is None:
         # vaccineCode is FHIR-required - skip the entry rather than
         # construct an invalid resource, matching every other section's
@@ -88,30 +93,92 @@ def _build_immunization(substance_administration, patient_id: str) -> Immunizati
     # when effectiveTime doesn't resolve, FHIR's own conventional
     # representation for "this vaccine was given, exact date unrecorded"
     # (see e.g. US Core's Immunization guidance), not a local guess.
-    occurrence, _ = ivl_ts_bounds(find_child(substance_administration, "effectiveTime"))
+    effective_time = find_child(substance_administration, "effectiveTime")
+    occurrence, _ = ivl_ts_bounds(effective_time)
     occurrence_dt = parse_partial_ts(occurrence)
     occurrence_kwargs = {"occurrenceDateTime": occurrence_dt} if occurrence_dt else {"occurrenceString": "Unknown"}
 
+    immunization_id = str(uuid.uuid4())
+    status = _resolve_status(substance_administration)
     immunization = Immunization(
-        id=str(uuid.uuid4()),
-        status=_resolve_status(substance_administration),
+        id=immunization_id,
+        status=status,
         patient=Reference(reference=f"urn:uuid:{patient_id}"),
         vaccineCode=vaccine_code,
         **occurrence_kwargs,
     )
 
+    if recorder:
+        code_location = xpath_location(_ENTRY_BASE, "consumable", "manufacturedProduct", "manufacturedMaterial", "code")
+        code_value = code_element.get("code")
+        display_value = code_element.get("displayName")
+        if code_value:
+            recorder.record(immunization_id, "vaccineCode.coding[0].code", f"{code_location}/@code", code_value)
+        if display_value:
+            recorder.record(immunization_id, "vaccineCode.coding[0].display", f"{code_location}/@displayName", display_value)
+
+        if substance_administration.get("negationInd") == "true":
+            recorder.record(immunization_id, "status", xpath_location(_ENTRY_BASE, "@negationInd"), status)
+        else:
+            status_element = find_child(substance_administration, "statusCode")
+            status_code = status_element.get("code") if status_element is not None else None
+            if status_code and status_code.strip().lower() in STATUS_MAP:
+                recorder.record(immunization_id, "status", xpath_location(_ENTRY_BASE, "statusCode", "@code"), status)
+            else:
+                recorder.record_inferred(
+                    immunization_id,
+                    "status",
+                    f"statusCode was absent or not one of the recognized CF_ImmunizationStatus codes, and negationInd wasn't \"true\" - defaults to the disclosed fallback \"{_DEFAULT_STATUS}\".",
+                    status,
+                )
+
+        if occurrence_dt:
+            recorder.record(
+                immunization_id,
+                "occurrenceDateTime",
+                effective_time_location(xpath_location(_ENTRY_BASE, "effectiveTime"), effective_time, "low"),
+                occurrence_dt,
+            )
+        else:
+            recorder.record_inferred(
+                immunization_id,
+                "occurrenceString",
+                "effectiveTime was absent or unparseable - occurrenceString falls back to FHIR's own conventional \"Unknown\" representation rather than fabricating a fake timestamp.",
+                "Unknown",
+            )
+
     if manufactured_material is not None:
         lot_element = find_child(manufactured_material, "lotNumberText")
         if lot_element is not None and lot_element.text and lot_element.text.strip():
             immunization.lotNumber = lot_element.text.strip()
+            if recorder:
+                recorder.record(
+                    immunization_id,
+                    "lotNumber",
+                    xpath_location(_ENTRY_BASE, "consumable", "manufacturedProduct", "manufacturedMaterial", "lotNumberText"),
+                    immunization.lotNumber,
+                )
 
-    route = build_codeable_concept_from_cd(find_child(substance_administration, "routeCode"))
+    route_element = find_child(substance_administration, "routeCode")
+    route = build_codeable_concept_from_cd(route_element)
     if route:
         immunization.route = route
+        if recorder:
+            recorder.record(
+                immunization_id, "route.coding[0].code", xpath_location(_ENTRY_BASE, "routeCode", "@code"), route.coding[0].code
+            )
 
-    dose_quantity = build_quantity_from_pq(find_child(substance_administration, "doseQuantity"))
+    dose_quantity_element = find_child(substance_administration, "doseQuantity")
+    dose_quantity = build_quantity_from_pq(dose_quantity_element)
     if dose_quantity:
         immunization.doseQuantity = dose_quantity
+        if recorder:
+            recorder.record(
+                immunization_id,
+                "doseQuantity.value",
+                xpath_location(_ENTRY_BASE, "doseQuantity", "@value"),
+                dose_quantity_element.get("value"),
+            )
 
     return immunization
 
@@ -120,12 +187,7 @@ def build_immunizations(section, patient_id: str, recorder=None) -> list[Immuniz
     """One Immunization per EVN-mood Immunization Activity entry in the
     section - a section can (and commonly does) have multiple entries.
     INT-mood entries (planned, not yet administered) are silently skipped -
-    see module docstring.
-
-    `recorder` is accepted (see app/provenance/) but not yet acted on - see
-    app/cda/medications.py::build_medication_requests' own docstring for
-    why every SECTION_BUILDERS entry accepts it uniformly regardless of
-    whether its own section is instrumented yet."""
+    see module docstring."""
     immunizations = []
     for entry in find_all(section, "entry"):
         substance_administration = find_child(entry, "substanceAdministration")
@@ -135,7 +197,7 @@ def build_immunizations(section, patient_id: str, recorder=None) -> list[Immuniz
             continue
         if substance_administration.get("moodCode") != "EVN":
             continue
-        immunization = _build_immunization(substance_administration, patient_id)
+        immunization = _build_immunization(substance_administration, patient_id, recorder=recorder)
         if immunization is not None:
             immunizations.append(immunization)
     return immunizations
