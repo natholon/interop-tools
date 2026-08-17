@@ -26,6 +26,10 @@
         </select>
     </div>
     <div class="actions">
+        <label class="checkbox-field" title="Merge duplicate Patient/Practitioner/Organization/Location resources within the converted Bundle (e.g. a billing provider and rendering provider that are the same person). Only applies to Convert to FHIR.">
+            <input type="checkbox" id="deduplicate" name="deduplicate">
+            Deduplicate resources
+        </label>
         <button type="button" id="generate-sample" data-busy-text="Generating&hellip;">
             <span class="btn-label">Generate sample</span>
         </button>
@@ -61,6 +65,15 @@
         <button type="button" class="btn-copy" id="copy-output" data-target="output-code">Copy JSON</button>
     </div>
     <div id="resource-chip-row" class="chip-row" hidden></div>
+    <div id="dedup-summary" class="dedup-summary" {% if not dedup_summary %}hidden{% endif %}>
+        {% if dedup_summary %}
+        {% if dedup_summary.resources_merged %}
+        Merged {{ dedup_summary.resources_merged }} duplicate resource{{ "s" if dedup_summary.resources_merged != 1 else "" }}.
+        {% else %}
+        No duplicate resources found.
+        {% endif %}
+        {% endif %}
+    </div>
     <pre><code id="output-code">{{ result or "" }}</code></pre>
 </section>
 

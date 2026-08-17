@@ -33,6 +33,43 @@ def test_api_convert_success():
     assert len(body["bundle"]["entry"]) == 2
 
 
+def test_api_convert_without_deduplicate_omits_deduplication_key():
+    response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
+    assert response.status_code == 200
+    assert "deduplication" not in response.json()
+
+
+def test_api_convert_with_deduplicate_reports_zero_merges_when_nothing_to_merge():
+    response = client.post(
+        "/api/convert", json={"hl7_text": read_fixture("adt_a01_basic.hl7"), "deduplicate": True}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deduplication"]["resources_merged"] == 0
+    assert body["deduplication"]["merges"] == []
+
+
+def test_api_convert_with_deduplicate_merges_837p_billing_and_rendering_provider():
+    # The real motivating case for this feature - see tests/test_dedup.py's
+    # equivalent direct-module test for the full assertion detail.
+    response = client.post(
+        "/api/convert", json={"hl7_text": read_fixture("edi_837p_basic.x12"), "deduplicate": True}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deduplication"]["resources_merged"] == 1
+    practitioners = [e for e in body["bundle"]["entry"] if e["resource"]["resourceType"] == "Practitioner"]
+    assert len(practitioners) == 1
+
+
+def test_form_convert_with_deduplicate_checkbox_renders_summary():
+    response = client.post(
+        "/convert", data={"hl7_text": read_fixture("edi_837p_basic.x12"), "deduplicate": "on"}
+    )
+    assert response.status_code == 200
+    assert "Merged 1 duplicate resource" in response.text
+
+
 def test_api_convert_malformed_returns_error_category():
     response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a01_malformed.hl7")})
     assert response.status_code == 400

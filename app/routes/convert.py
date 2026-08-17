@@ -6,6 +6,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ValidationError
 
 from app.cda.errors import CdaParseError
+from app.dedup import deduplicate_bundle
 from app.edi.errors import EdiParseError
 from app.generators.registry import generate as generate_sample
 from app.generators.registry import list_supported_types
@@ -63,6 +64,7 @@ _VALIDATION_ERROR_STATUS = {
 
 class ConvertResult(BaseModel):
     bundle_json: str | None = None
+    dedup_summary: dict | None = None
     error_category: str | None = None
     error_message: str | None = None
     status_code: int = 200
@@ -84,13 +86,28 @@ async def _resolve_raw_text(hl7_text: str, hl7_file: UploadFile | None) -> str:
     return raw_text
 
 
-def _run_conversion(raw_text: str) -> ConvertResult:
+def _run_conversion(raw_text: str, deduplicate: bool = False) -> ConvertResult:
     try:
         bundle = convert_to_bundle(raw_text)
     except tuple(_ERROR_STATUS) as exc:
         category, status_code = _ERROR_STATUS[type(exc)]
         return ConvertResult(error_category=category, error_message=str(exc), status_code=status_code)
-    return ConvertResult(bundle_json=bundle.model_dump_json(indent=2, exclude_none=True))
+
+    dedup_summary = None
+    if deduplicate:
+        result = deduplicate_bundle(bundle)
+        bundle = result.bundle
+        dedup_summary = {
+            "resources_merged": result.merged_count,
+            "merges": [
+                {"resource_type": m.resource_type, "kept_id": m.kept_id, "removed_ids": list(m.removed_ids)}
+                for m in result.merges
+            ],
+        }
+    return ConvertResult(
+        bundle_json=bundle.model_dump_json(indent=2, exclude_none=True),
+        dedup_summary=dedup_summary,
+    )
 
 
 def _run_validation(raw_text: str) -> ValidationResult:
@@ -110,6 +127,7 @@ async def index(request: Request):
         {
             "hl7_text": "",
             "result": None,
+            "dedup_summary": None,
             "error": None,
             "validation_result": None,
             "validation_error": None,
@@ -123,10 +141,11 @@ async def convert_form(
     request: Request,
     hl7_text: str = Form(""),
     hl7_file: UploadFile | None = File(None),
+    deduplicate: str | None = Form(None),
 ):
     raw_text = await _resolve_raw_text(hl7_text, hl7_file)
 
-    outcome = _run_conversion(raw_text)
+    outcome = _run_conversion(raw_text, deduplicate=deduplicate is not None)
     error = (
         {"category": outcome.error_category, "message": outcome.error_message}
         if outcome.error_category
@@ -138,6 +157,7 @@ async def convert_form(
         {
             "hl7_text": raw_text,
             "result": outcome.bundle_json,
+            "dedup_summary": outcome.dedup_summary,
             "error": error,
             "validation_result": None,
             "validation_error": None,
@@ -166,6 +186,7 @@ async def validate_form(
         {
             "hl7_text": raw_text,
             "result": None,
+            "dedup_summary": None,
             "error": None,
             "validation_result": outcome.report_json,
             "validation_error": validation_error,
@@ -176,17 +197,21 @@ async def validate_form(
 
 class ConvertApiRequest(BaseModel):
     hl7_text: str
+    deduplicate: bool = False
 
 
 @router.post("/api/convert")
 async def convert_api(payload: ConvertApiRequest):
-    outcome = _run_conversion(payload.hl7_text)
+    outcome = _run_conversion(payload.hl7_text, deduplicate=payload.deduplicate)
     if outcome.error_category:
         return JSONResponse(
             status_code=outcome.status_code,
             content={"error": {"category": outcome.error_category, "message": outcome.error_message}},
         )
-    return JSONResponse(content={"bundle": json.loads(outcome.bundle_json)})
+    content = {"bundle": json.loads(outcome.bundle_json)}
+    if outcome.dedup_summary is not None:
+        content["deduplication"] = outcome.dedup_summary
+    return JSONResponse(content=content)
 
 
 class ValidateApiRequest(BaseModel):

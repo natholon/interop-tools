@@ -48,6 +48,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const outputPane = document.getElementById("output-pane");
     const outputCode = document.getElementById("output-code");
     const resourceChipRow = document.getElementById("resource-chip-row");
+    const dedupSummaryEl = document.getElementById("dedup-summary");
+    const deduplicateCheckbox = document.getElementById("deduplicate");
     const errorPane = document.getElementById("error-pane");
     const validationPane = document.getElementById("validation-pane");
     const formatBadge = document.getElementById("format-badge");
@@ -173,11 +175,22 @@ document.addEventListener("DOMContentLoaded", () => {
         resourceChipRow.hidden = false;
     }
 
-    function showResult(bundle) {
+    function showResult(bundle, dedupSummary) {
         const json = JSON.stringify(bundle, null, 2);
         outputCode.innerHTML = highlightJson(json);
         outputCode.dataset.raw = json;
         buildResourceChips(bundle);
+        if (dedupSummaryEl) {
+            if (dedupSummary) {
+                const count = dedupSummary.resources_merged || 0;
+                dedupSummaryEl.textContent = count
+                    ? `Merged ${count} duplicate resource${count === 1 ? "" : "s"}.`
+                    : "No duplicate resources found.";
+                dedupSummaryEl.hidden = false;
+            } else {
+                dedupSummaryEl.hidden = true;
+            }
+        }
         outputPane.hidden = false;
         errorPane.hidden = true;
         validationPane.hidden = true;
@@ -302,10 +315,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const endpoint = isValidate ? "/api/validate" : "/api/convert";
         setBusy(submitter, true);
         try {
+            const body = { hl7_text: textarea.value };
+            if (!isValidate && deduplicateCheckbox) {
+                body.deduplicate = deduplicateCheckbox.checked;
+            }
             const response = await fetch(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ hl7_text: textarea.value }),
+                body: JSON.stringify(body),
             });
             const data = await response.json();
             if (!response.ok) {
@@ -315,7 +332,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (isValidate) {
                 showValidationResult(data.report);
             } else {
-                showResult(data.bundle);
+                showResult(data.bundle, data.deduplication);
             }
         } catch (err) {
             showError("Network error", String(err));

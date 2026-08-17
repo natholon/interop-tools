@@ -158,8 +158,30 @@ select {
 .actions {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 0.6rem;
     margin: 0.25rem 0 1.75rem;
+}
+
+.checkbox-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.9rem;
+    color: var(--ink-soft);
+    margin-right: auto;
+    cursor: pointer;
+    user-select: none;
+}
+
+.checkbox-field input {
+    cursor: pointer;
+}
+
+.dedup-summary {
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+    margin: -0.25rem 0 0.6rem;
 }
 
 button {
