@@ -9,7 +9,11 @@ from fhir.resources.R4B.humanname import HumanName
 from app.hl7.parser import component_str, field_repetitions, field_str
 
 _GENDER_MAP = {"M": "male", "F": "female", "O": "other"}
-_CWE_FALLBACK_SYSTEM = "urn:interop-tools:coded-value"
+# Public (not module-private) - app/transform/hl7_siu.py reuses this as
+# its second real consumer, to know when a CodeableConcept.coding.system
+# should reverse back to an empty CWE component 3 (fallback was used) vs.
+# a real system string (component 3 was genuinely present).
+CWE_FALLBACK_SYSTEM = "urn:interop-tools:coded-value"
 
 
 def hl7_sex_to_fhir_gender(code: str) -> str:
@@ -114,7 +118,7 @@ def build_codeable_concept_from_cwe(segment, field_num: int) -> CodeableConcept 
     if not code:
         return None
     display = field_str(segment, field_num, component=2)
-    system = field_str(segment, field_num, component=3) or _CWE_FALLBACK_SYSTEM
+    system = field_str(segment, field_num, component=3) or CWE_FALLBACK_SYSTEM
     coding = Coding(system=system, code=code)
     if display:
         coding.display = display

@@ -13,25 +13,28 @@ Reverses app/mappings/common.py::build_patient/app/mappings/adt.py::
 build_encounter_core field-for-field, using each one's own exact field
 positions/component shapes - not re-deriving them independently, so a
 future change to the forward mapping's field shape has an obvious reverse
-counterpart to update. **A real, disclosed round-trip fidelity gap, not a
-bug**: several HL7v2 fields the forward mapper reads have no FHIR-side
-home at all (MSH-3/4/5/6 sending/receiving application-facility, PV1-2's
-full patient-class nuance beyond the four codes FHIR's ActEncounterCode
-binding covers), and two forward-mapped fields are collapsed into a single
-*display string* rather than kept as separate components
-(app.mappings.common.location_display for PV1-3/PV1-6, person_display for
-PV1-7) - reversing a display string back into structured components is
-inherently lossy/ambiguous, so this builder makes the same one deliberate
-choice both fields share: place the whole display string in the field's
-first component and leave the rest empty, rather than guessing at a split
-point. Fields with no FHIR-side source at all get a fixed, disclosed
-placeholder value (matching this app's own generator's own "always
-produce valid output" precedent) rather than being left empty, since MSH's
-own structural fields are required by the HL7v2 standard itself.
+counterpart to update. Shared PID/MSH construction lives in
+app/transform/hl7_common.py (promoted there once app/transform/hl7_siu.py
+became a second real consumer of the identical PID reversal). **A real,
+disclosed round-trip fidelity gap, not a bug**: several HL7v2 fields the
+forward mapper reads have no FHIR-side home at all (MSH-3/4/5/6 sending/
+receiving application-facility, PV1-2's full patient-class nuance beyond
+the four codes FHIR's ActEncounterCode binding covers), and two forward-
+mapped fields are collapsed into a single *display string* rather than
+kept as separate components (app.mappings.common.location_display for
+PV1-3/PV1-6, person_display for PV1-7) - reversing a display string back
+into structured components is inherently lossy/ambiguous, so this builder
+makes the same one deliberate choice both fields share: place the whole
+display string in the field's first component and leave the rest empty,
+rather than guessing at a split point. Fields with no FHIR-side source at
+all get a fixed, disclosed placeholder value (matching this app's own
+generator's own "always produce valid output" precedent) rather than
+being left empty, since MSH's own structural fields are required by the
+HL7v2 standard itself.
 
 **All five triggers this module now covers (A01/A02/A04/A05/A08) share one
-`_build_pv1`/`_build_evn`/`_build_msh` implementation, not five separate
-ones** - a deliberate simplification found once A02/A03/A08's own reverse
+`_build_pv1`/`_build_evn` implementation, not five separate ones** - a
+deliberate simplification found once A02/A03/A08's own reverse
 requirements were actually worked out: `_build_pv1` reflects whatever the
 source `Encounter` resource actually contains (PV1-6 prior location
 whenever a `status="completed"` location entry is present, PV1-36
@@ -48,73 +51,18 @@ forward mapper's own `AdtA03Mapper` raises without one), so
 `AdtA03Builder` overrides `_validate` to raise the same way, rather than
 silently emitting an A03 message with no PV1-45."""
 
-from datetime import datetime, timezone
-
 from fhir.resources.R4B.bundle import Bundle
 
 from app.generators.base import segment
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
-from app.transform.common import find_resource, format_hl7_date, format_hl7_ts
+from app.transform.common import find_resource, format_hl7_ts
+from app.transform.hl7_common import build_msh, build_pid
 
 # Reverse of app/mappings/common.py::_PATIENT_CLASS_MAP - "AMB" is the
 # fallback on the forward side, so it's also the safest default here for
 # an Encounter.class code this table doesn't recognize.
 _CLASS_TO_PATIENT_CLASS = {"IMP": "I", "AMB": "O", "EMER": "E", "PRENC": "P"}
-# Reverse of app/fhir_models/builders.py::_GENDER_MAP.
-_GENDER_TO_HL7_SEX = {"male": "M", "female": "F", "other": "O"}
-
-_DEFAULT_SENDING_APP = "interop-tools"
-_DEFAULT_SENDING_FACILITY = "INTEROP"
-_DEFAULT_RECEIVING_APP = "UNKNOWN"
-_DEFAULT_RECEIVING_FACILITY = "UNKNOWN"
-_DEFAULT_CONTROL_ID = "MSG00001"
-
-
-def _build_pid(patient) -> str:
-    fields: dict[int, str] = {1: "1"}
-
-    if patient.identifier:
-        identifier = patient.identifier[0]
-        system = identifier.system or ""
-        fields[3] = f"{identifier.value or ''}^^^{system}^MR"
-
-    if patient.name:
-        name = patient.name[0]
-        family = name.family or ""
-        # PID-5 (XPN) components 2/3 are the first-given-name/middle-name,
-        # matching app.fhir_models.builders.build_human_names' own read of
-        # them as two separate components - space-joining Patient.name[0]
-        # .given into one component would silently collapse that
-        # distinction on the way back out.
-        given = name.given or []
-        first_given = given[0] if given else ""
-        middle_given = given[1] if len(given) > 1 else ""
-        fields[5] = f"{family}^{first_given}^{middle_given}"
-
-    if patient.birthDate:
-        fields[7] = format_hl7_date(patient.birthDate)
-
-    if patient.gender:
-        sex = _GENDER_TO_HL7_SEX.get(patient.gender)
-        if sex:
-            fields[8] = sex
-
-    if patient.address:
-        address = patient.address[0]
-        line1 = address.line[0] if address.line else ""
-        line2 = address.line[1] if address.line and len(address.line) > 1 else ""
-        fields[11] = (
-            f"{line1}^{line2}^{address.city or ''}^{address.state or ''}"
-            f"^{address.postalCode or ''}^{address.country or ''}"
-        )
-
-    if patient.telecom:
-        phone = next((t.value for t in patient.telecom if t.system == "phone" and t.value), None)
-        if phone:
-            fields[13] = phone
-
-    return segment("PID", fields, 13)
 
 
 def _build_pv1(encounter) -> str:
@@ -168,22 +116,6 @@ class _BaseAdtBuilder(MessageBuilder):
         """Overridden by AdtA03Builder - every other trigger has no
         structural requirement beyond "a Patient exists"."""
 
-    def _build_msh(self, bundle: Bundle) -> tuple[str, str]:
-        """Returns (segment_text, formatted_datetime) - MSH-7 is reused for
-        EVN-2 when the Encounter itself has no period.start, the same
-        "reuse the message-level timestamp as an event fallback"
-        relationship the forward mapper's build_encounter_core already has
-        with EVN-2."""
-        dt = format_hl7_ts(datetime.now(timezone.utc))
-        if bundle.timestamp:
-            dt = format_hl7_ts(bundle.timestamp) or dt
-        control_id = (bundle.identifier.value if bundle.identifier else None) or _DEFAULT_CONTROL_ID
-        text = (
-            f"MSH|^~\\&|{_DEFAULT_SENDING_APP}|{_DEFAULT_SENDING_FACILITY}|"
-            f"{_DEFAULT_RECEIVING_APP}|{_DEFAULT_RECEIVING_FACILITY}|{dt}||ADT^{self.trigger_event}|{control_id}|P|2.5"
-        )
-        return text, dt
-
     def _build_evn(self, encounter, msh_dt: str) -> str:
         evn_dt = msh_dt
         if encounter is not None and encounter.period and encounter.period.start:
@@ -197,9 +129,9 @@ class _BaseAdtBuilder(MessageBuilder):
         encounter = find_resource(bundle, "Encounter")
         self._validate(encounter)
 
-        msh, msh_dt = self._build_msh(bundle)
+        msh, msh_dt = build_msh(bundle, "ADT", self.trigger_event)
         evn = self._build_evn(encounter, msh_dt)
-        pid = _build_pid(patient)
+        pid = build_pid(patient)
         pv1 = _build_pv1(encounter)
 
         return "\r".join([msh, evn, pid, pv1]) + "\r"

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from fhir.resources.R4B.appointment import Appointment
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
 from fhir.resources.R4B.organization import Organization
 from fhir.resources.R4B.patient import Patient
@@ -23,6 +24,10 @@ def test_list_supported_targets_includes_all_six_adt_triggers():
     targets = list_supported_targets()
     for trigger in ("A01", "A02", "A03", "A04", "A05", "A08"):
         assert ("HL7", "ADT", trigger) in targets
+
+
+def test_list_supported_targets_includes_siu_s12():
+    assert ("HL7", "SIU", "S12") in list_supported_targets()
 
 
 def test_list_supported_targets_includes_ccd():
@@ -375,3 +380,60 @@ def test_edi_271_missing_payer_raises_mapping_error():
     empty_bundle = Bundle(id="test", type="collection")
     with pytest.raises(MappingError):
         build_message_from_bundle(empty_bundle, "EDI", "271", "")
+
+
+def test_siu_s12_round_trip_preserves_appointment_fields():
+    forward_text = (FIXTURES / "siu_s12_basic.hl7").read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+    original = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Appointment")
+
+    message_text = build_message_from_bundle(bundle, "HL7", "SIU", "S12")
+    assert "||SIU^S12|" in message_text
+
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    appointment = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Appointment")
+
+    assert appointment.status == original.status == "booked"
+    assert appointment.start == original.start
+    assert appointment.end == original.end
+    assert appointment.minutesDuration == original.minutesDuration
+    assert appointment.reasonCode[0].coding[0].code == original.reasonCode[0].coding[0].code
+    assert appointment.appointmentType.coding[0].code == original.appointmentType.coding[0].code
+    assert appointment.serviceType[0].coding[0].code == original.serviceType[0].coding[0].code
+    assert appointment.comment == original.comment
+    assert len(appointment.participant) == len(original.participant)
+
+
+def test_siu_s12_round_trip_preserves_practitioner_location_and_device():
+    forward_text = (FIXTURES / "siu_s12_basic.hl7").read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+
+    message_text = build_message_from_bundle(bundle, "HL7", "SIU", "S12")
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+
+    resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
+    assert resource_types == {"Patient", "Appointment", "Practitioner", "Location", "Device"}
+
+    practitioner = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Practitioner")
+    assert practitioner.name[0].family == "Smith"
+    assert practitioner.name[0].given == ["John"]
+
+    device = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Device")
+    assert device.deviceName[0].name == "Portable X-Ray"
+    assert device.type.coding[0].code == "EQUIPMENT"
+
+
+def test_siu_s12_missing_patient_raises_mapping_error():
+    appointment = Appointment(id="a1", status="booked", participant=[])
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:a1", resource=appointment)]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "HL7", "SIU", "S12")
+
+
+def test_siu_s12_missing_appointment_raises_mapping_error():
+    patient = Patient(id="p1", name=[{"family": "Solo"}])
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:p1", resource=patient)]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "HL7", "SIU", "S12")
