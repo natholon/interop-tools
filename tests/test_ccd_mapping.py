@@ -337,17 +337,27 @@ def test_procedures_basic_fixture_maps_completed_and_negated_entries():
     assert colonoscopy.identifier[0].value == "urn:oid:d1e2f3a4-0002-4a1a-8a1a-000000000002"
 
 
-def test_discharge_summary_maps_header_and_recognized_sections_skips_discharge_specific_ones():
+def test_discharge_summary_maps_header_and_all_four_of_its_sections():
     bundle = convert_cda_to_bundle(read_fixture("discharge_summary_basic.xml"))
     entries = _entries_by_type(bundle)
 
-    # Hospital Discharge Diagnosis and Discharge Medications sections use
-    # entry templates this app doesn't recognize (see
-    # app/cda/discharge_summary.py's module docstring) and must be
-    # silently skipped - only the plain Problems-shaped Condition converts.
-    assert set(entries.keys()) == {"Patient", "Encounter", "Condition"}
-    assert len(entries["Condition"]) == 1
-    assert entries["Condition"][0].resource.code.coding[0].display == "Hypertensive disorder"
+    # Hospital Discharge Diagnosis and Discharge Medications sections wrap
+    # the byte-for-byte identical Problem Observation/Medication Activity
+    # templates Problems/Medications already parse (see
+    # app/cda/hospital_discharge_diagnosis.py and
+    # app/cda/discharge_medications.py) - both must convert now, alongside
+    # the plain Problems-shaped Condition.
+    assert set(entries.keys()) == {"Patient", "Encounter", "Condition", "MedicationRequest"}
+    conditions = {c.resource.code.coding[0].display: c.resource for c in entries["Condition"]}
+    assert set(conditions) == {"Hypertensive disorder", "Community-acquired pneumonia"}
+
+    discharge_diagnosis = conditions["Community-acquired pneumonia"]
+    assert discharge_diagnosis.category[0].coding[0].code == "encounter-diagnosis"
+    problem_list_condition = conditions["Hypertensive disorder"]
+    assert problem_list_condition.category is None
+
+    medication_request = entries["MedicationRequest"][0].resource
+    assert medication_request.medicationCodeableConcept.coding[0].display == "Amoxicillin 500 MG Oral Capsule"
 
     encounter = entries["Encounter"][0].resource
     assert encounter.class_fhir.code == "IMP"

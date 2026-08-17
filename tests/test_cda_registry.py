@@ -4,7 +4,11 @@ import pytest
 
 from app.cda.allergies import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL, build_allergy_intolerances
 from app.cda.ccd import CcdBuilder
+from app.cda.discharge_medications import SECTION_TEMPLATE_ID as DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID
+from app.cda.discharge_medications import build_discharge_medication_requests
 from app.cda.discharge_summary import DischargeSummaryBuilder
+from app.cda.hospital_discharge_diagnosis import SECTION_TEMPLATE_ID as HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID
+from app.cda.hospital_discharge_diagnosis import build_hospital_discharge_diagnoses
 from app.cda.history_and_physical import HistoryAndPhysicalBuilder
 from app.cda.parser import parse_document
 from app.cda.procedures import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as PROCEDURES_ENTRIES_OPTIONAL
@@ -66,3 +70,12 @@ def test_section_builders_registers_both_vitals_results_procedures_section_varia
     assert SECTION_BUILDERS[VITALS_ENTRIES_OPTIONAL] is build_vital_signs
     assert SECTION_BUILDERS[RESULTS_ENTRIES_OPTIONAL] is build_diagnostic_reports
     assert SECTION_BUILDERS[PROCEDURES_ENTRIES_OPTIONAL] is build_procedures
+
+
+def test_section_builders_registers_discharge_specific_sections():
+    # Confirmed via a real official HL7 Discharge Summary example that both
+    # of these sections wrap the byte-for-byte identical Problem
+    # Observation/Medication Activity templates Problems/Medications
+    # already parse - only the outer Act template differs.
+    assert SECTION_BUILDERS[HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID] is build_hospital_discharge_diagnoses
+    assert SECTION_BUILDERS[DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID] is build_discharge_medication_requests

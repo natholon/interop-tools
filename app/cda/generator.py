@@ -43,8 +43,12 @@ from app.cda.allergies import (
 from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
 from app.cda.allergies import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as ALLERGIES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
 from app.cda.ccd import CCD_TEMPLATE_ID
+from app.cda.discharge_medications import DISCHARGE_MEDICATION_ACT_TEMPLATE_ID
+from app.cda.discharge_medications import SECTION_TEMPLATE_ID as DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
 from app.cda.history_and_physical import HISTORY_AND_PHYSICAL_TEMPLATE_ID
+from app.cda.hospital_discharge_diagnosis import HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID
+from app.cda.hospital_discharge_diagnosis import SECTION_TEMPLATE_ID as HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID
 from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID
 from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
 from app.cda.immunizations import STATUS_MAP as IMMUNIZATION_STATUS_MAP
@@ -353,6 +357,41 @@ def _random_problems_section(rng: random.Random) -> str | None:
     )
 
 
+def _random_hospital_discharge_diagnosis_entry(rng: random.Random) -> str:
+    # Wraps the identical Problem Observation shape _random_problem_entry
+    # builds, inside a Hospital Discharge Diagnosis Act rather than
+    # Problems' own Concern Act - see app/cda/hospital_discharge_diagnosis.py.
+    act_id = _random_uuid_like(rng)
+    obs_id = _random_uuid_like(rng)
+    code, display = rng.choice(_PROBLEM_CODES)
+    start, end = random_time_range(rng, min_days=-14, max_days=2)
+    effective_time = _random_ivl_ts(rng, start, end)
+    value = f'<value xsi:type="CD" code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
+    return (
+        f'<entry typeCode="DRIV"><act classCode="ACT" moodCode="EVN">'
+        f'<templateId root="{HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID}"/><id root="{act_id}"/>'
+        '<code code="11535-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital Discharge Diagnosis"/>'
+        '<statusCode code="active"/>'
+        f'<entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{PROBLEM_OBSERVATION_TEMPLATE_ID}"/><id root="{obs_id}"/>'
+        '<code code="55607006" codeSystem="2.16.840.1.113883.6.96" displayName="Problem"/>'
+        '<statusCode code="completed"/>'
+        f"{effective_time}{value}"
+        "</observation></entryRelationship></act></entry>"
+    )
+
+
+def _random_hospital_discharge_diagnosis_section(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.7):
+        return None
+    entries = "".join(_random_hospital_discharge_diagnosis_entry(rng) for _ in range(rng.randint(1, 2)))
+    return (
+        f'<component><section><templateId root="{HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="11535-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital Discharge Diagnosis"/>'
+        f"<title>Discharge Diagnosis</title>{entries}</section></component>"
+    )
+
+
 def _random_medication_entry(rng: random.Random) -> str:
     subad_id = _random_uuid_like(rng)
     mood_code = "INT" if maybe(rng, 0.5) else "EVN"
@@ -418,6 +457,48 @@ def _random_medications_section(rng: random.Random) -> str | None:
         f'<component><section><templateId root="{MEDICATIONS_SECTION_TEMPLATE_ID}"/>'
         '<code code="10160-0" codeSystem="2.16.840.1.113883.6.1" displayName="History of medication use"/>'
         f"<title>Medications</title>{entries}</section></component>"
+    )
+
+
+def _random_discharge_medication_entry(rng: random.Random) -> str:
+    # Wraps the identical Medication Activity shape _random_medication_entry
+    # builds, inside a Discharge Medication Act rather than a bare
+    # substanceAdministration - see app/cda/discharge_medications.py.
+    subad_id = _random_uuid_like(rng)
+    code, display = rng.choice(_MEDICATION_CODES)
+    status_code = rng.choice(list(STATUS_MAP)) if maybe(rng, 0.85) else "new"
+    dosing = ""
+    if maybe(rng, 0.7):
+        route_code, route_display = rng.choice(_MEDICATION_ROUTES)
+        dose_value = rng.choice((5, 10, 20, 25, 50, 100, 200, 500))
+        dosing = (
+            f'<routeCode code="{route_code}" codeSystem="2.16.840.1.113883.3.26.1.1" displayName="{route_display}"/>'
+            f'<doseQuantity value="{dose_value}" unit="mg"/>'
+        )
+    return (
+        f'<entry typeCode="DRIV"><act classCode="ACT" moodCode="EVN">'
+        f'<templateId root="{DISCHARGE_MEDICATION_ACT_TEMPLATE_ID}"/>'
+        '<code code="10183-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital discharge medication"/>'
+        '<statusCode code="completed"/>'
+        f'<entryRelationship typeCode="SUBJ"><substanceAdministration classCode="SBADM" moodCode="EVN">'
+        f'<templateId root="{MEDICATION_ACTIVITY_TEMPLATE_ID}"/><id root="{subad_id}"/>'
+        f'<statusCode code="{status_code}"/>'
+        f"{dosing}"
+        '<consumable><manufacturedProduct classCode="MANU">'
+        f'<manufacturedMaterial><code code="{code}" codeSystem="2.16.840.1.113883.6.88" displayName="{display}"/></manufacturedMaterial>'
+        "</manufacturedProduct></consumable>"
+        "</substanceAdministration></entryRelationship></act></entry>"
+    )
+
+
+def _random_discharge_medications_section(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.7):
+        return None
+    entries = "".join(_random_discharge_medication_entry(rng) for _ in range(rng.randint(1, 2)))
+    return (
+        f'<component><section><templateId root="{DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="10183-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital Discharge Medications"/>'
+        f"<title>Discharge Medications</title>{entries}</section></component>"
     )
 
 
@@ -805,15 +886,22 @@ def _generate_sectioned_document(
     doc_code_display: str,
     title: str,
     force_encounter: bool = False,
+    include_discharge_specific_sections: bool = False,
 ) -> str:
     """Shared body for every "header + generic sections" C-CDA document
-    type this generator produces - CCD and Discharge Summary are both
-    exactly this shape (see app.cda.common.build_sectioned_bundle, the
-    conversion-side counterpart of this same "extract once a second real
-    consumer exists" pattern). `force_encounter` exists because a real
-    Discharge Summary is inherently tied to one hospitalization and so
-    (unlike CCD, where an encompassingEncounter is genuinely optional)
-    almost always carries one - see app/cda/discharge_summary.py."""
+    type this generator produces - CCD, Discharge Summary, and History and
+    Physical are all exactly this shape (see
+    app.cda.common.build_sectioned_bundle, the conversion-side counterpart
+    of this same "extract once a second real consumer exists" pattern).
+    `force_encounter` exists because a real Discharge Summary is inherently
+    tied to one hospitalization and so (unlike CCD, where an
+    encompassingEncounter is genuinely optional) almost always carries one -
+    see app/cda/discharge_summary.py. `include_discharge_specific_sections`
+    exists because Hospital Discharge Diagnosis/Discharge Medications only
+    make real-world sense on a Discharge Summary (SECTION_BUILDERS itself
+    has no document-type awareness - any document type carrying one of
+    these sections would convert it - but generating them for CCD/H&P would
+    produce unrealistic synthetic data no real sender would emit)."""
     ids = "".join(_random_id_element(rng) for _ in range(1))
     # A ~10-day window around "now" (rather than always-past) exercises the
     # (warning-severity) "document date in the future" rule about half the
@@ -835,6 +923,12 @@ def _generate_sectioned_document(
     vitals_section = _random_vital_signs_section(rng) or ""
     results_section = _random_results_section(rng) or ""
     procedures_section = _random_procedures_section(rng) or ""
+    discharge_diagnosis_section = (
+        _random_hospital_discharge_diagnosis_section(rng) or "" if include_discharge_specific_sections else ""
+    )
+    discharge_medications_section = (
+        _random_discharge_medications_section(rng) or "" if include_discharge_specific_sections else ""
+    )
     sections = (
         problems_section
         + medications_section
@@ -843,6 +937,8 @@ def _generate_sectioned_document(
         + vitals_section
         + results_section
         + procedures_section
+        + discharge_diagnosis_section
+        + discharge_medications_section
     )
     body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 
@@ -881,6 +977,7 @@ def generate_discharge_summary(rng: random.Random) -> str:
         doc_code_display="Discharge Summary",
         title="Discharge Summary",
         force_encounter=True,
+        include_discharge_specific_sections=True,
     )
 
 

@@ -111,7 +111,12 @@ def _build_dosage(substance_administration) -> Dosage | None:
     return dosage
 
 
-def _build_medication_request(substance_administration, patient_id: str) -> MedicationRequest | None:
+# Public (not module-private) - app/cda/discharge_medications.py became a
+# second real consumer once that section was confirmed (against a real
+# official HL7 example) to wrap the byte-for-byte identical Medication
+# Activity template inside a different Act wrapper - only the Act template
+# differs, so the per-entry builder itself is reused as-is.
+def build_medication_request(substance_administration, patient_id: str) -> MedicationRequest | None:
     if substance_administration.get("negationInd") == "true":
         # This specific administration/order did NOT happen - disclosed
         # limitation, not modeled as its own resource this slice, same
@@ -159,7 +164,7 @@ def build_medication_requests(section, patient_id: str) -> list[MedicationReques
             substance_administration, MEDICATION_ACTIVITY_TEMPLATE_ID
         ):
             continue
-        request = _build_medication_request(substance_administration, patient_id)
+        request = build_medication_request(substance_administration, patient_id)
         if request is not None:
             requests.append(request)
     return requests

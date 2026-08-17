@@ -16,6 +16,10 @@ _ALLERGY_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.
 _REACTION_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.9"/>'
 _IMMUNIZATIONS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.2.1"/>'
 _IMMUNIZATION_ACTIVITY_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.52"/>'
+_HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.24"/>'
+_HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.33"/>'
+_DISCHARGE_MEDICATIONS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.11.1"/>'
+_DISCHARGE_MEDICATION_ACT_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.35"/>'
 _VITALS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.4.1"/>'
 _VITALS_SECTION_TEMPLATE_ENTRIES_OPTIONAL = '<templateId root="2.16.840.1.113883.10.20.22.2.4"/>'
 _VITAL_SIGNS_ORGANIZER_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.26"/>'
@@ -743,6 +747,105 @@ def test_procedure_rules_also_run_against_entries_optional_section_variant():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.procedure-status-unrecognized")
     assert finding.severity == "info"
+
+
+def _hospital_discharge_diagnosis_entry(effective_time: str = "", value: str = "") -> str:
+    value = value or '<value xsi:type="CD" code="385093006" codeSystem="2.16.840.1.113883.6.96" displayName="CAP"/>'
+    return (
+        f'<entry><act classCode="ACT" moodCode="EVN">{_HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE}'
+        '<statusCode code="active"/>'
+        '<entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN">'
+        '<templateId root="2.16.840.1.113883.10.20.22.4.4"/><statusCode code="completed"/>'
+        f"{effective_time}{value}</observation></entryRelationship></act></entry>"
+    )
+
+
+def _hospital_discharge_diagnosis_section(entries: str) -> str:
+    return (
+        f"<component><structuredBody><component><section>{_HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE}"
+        f"{entries}</section></component></structuredBody></component>"
+    )
+
+
+def test_clean_hospital_discharge_diagnosis_produces_no_findings():
+    entry = _hospital_discharge_diagnosis_entry()
+    document = _doc(_patient() + _hospital_discharge_diagnosis_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+    assert report.is_valid is True
+
+
+def test_hospital_discharge_diagnosis_missing_value_is_info():
+    entry = _hospital_discharge_diagnosis_entry(value='<value xsi:type="CD" nullFlavor="UNK"/>')
+    document = _doc(_patient() + _hospital_discharge_diagnosis_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.hospital-discharge-diagnosis-missing-value")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_hospital_discharge_diagnosis_onset_in_future_is_warning():
+    entry = _hospital_discharge_diagnosis_entry(effective_time='<effectiveTime value="20990101"/>')
+    document = _doc(_patient() + _hospital_discharge_diagnosis_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.hospital-discharge-diagnosis-onset-in-future")
+    assert finding.severity == "warning"
+
+
+def test_hospital_discharge_diagnosis_onset_before_birth_is_error():
+    entry = _hospital_discharge_diagnosis_entry(effective_time='<effectiveTime value="20100101"/>')
+    document = _doc(_patient(extra='<birthTime value="20200101"/>') + _hospital_discharge_diagnosis_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.hospital-discharge-diagnosis-onset-before-birth")
+    assert finding.severity == "error"
+    assert report.is_valid is False
+
+
+def _discharge_medication_entry(status: str = "active", code: str = "") -> str:
+    consumable_code = code or '<code code="308191" codeSystem="2.16.840.1.113883.6.88" displayName="Amoxicillin"/>'
+    return (
+        f'<entry><act classCode="ACT" moodCode="EVN">{_DISCHARGE_MEDICATION_ACT_TEMPLATE}'
+        '<statusCode code="completed"/>'
+        '<entryRelationship typeCode="SUBJ"><substanceAdministration classCode="SBADM" moodCode="EVN">'
+        '<templateId root="2.16.840.1.113883.10.20.22.4.16"/>'
+        f'<statusCode code="{status}"/>'
+        f"<consumable><manufacturedProduct><manufacturedMaterial>{consumable_code}"
+        "</manufacturedMaterial></manufacturedProduct></consumable>"
+        "</substanceAdministration></entryRelationship></act></entry>"
+    )
+
+
+def _discharge_medications_section(entries: str) -> str:
+    return (
+        f"<component><structuredBody><component><section>{_DISCHARGE_MEDICATIONS_SECTION_TEMPLATE}"
+        f"{entries}</section></component></structuredBody></component>"
+    )
+
+
+def test_clean_discharge_medication_produces_no_findings():
+    entry = _discharge_medication_entry()
+    document = _doc(_patient() + _discharge_medications_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+    assert report.is_valid is True
+
+
+def test_discharge_medication_missing_code_is_info():
+    entry = _discharge_medication_entry(code='<code nullFlavor="UNK"/>')
+    document = _doc(_patient() + _discharge_medications_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.discharge-medication-missing-code")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_discharge_medication_status_unrecognized_is_info():
+    entry = _discharge_medication_entry(status="new")
+    document = _doc(_patient() + _discharge_medications_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.discharge-medication-status-unrecognized")
+    assert finding.severity == "info"
+    assert report.is_valid is True
 
 
 def test_unregistered_document_type_is_info():

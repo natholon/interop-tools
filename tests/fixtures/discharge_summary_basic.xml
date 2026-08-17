@@ -36,7 +36,7 @@
   <component>
     <structuredBody>
       <component>
-        <!-- Hospital Discharge Diagnosis Section - discharge-specific, out of scope this slice, must be silently skipped -->
+        <!-- Hospital Discharge Diagnosis Section - wraps the same Problem Observation template as Problems, inside a Hospital Discharge Diagnosis Act - must convert to a Condition with category=encounter-diagnosis -->
         <section>
           <templateId root="2.16.840.1.113883.10.20.22.2.24"/>
           <code code="11535-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital Discharge Diagnosis"/>
@@ -84,7 +84,7 @@
         </section>
       </component>
       <component>
-        <!-- Discharge Medications Section - discharge-specific, out of scope this slice, must be silently skipped -->
+        <!-- Discharge Medications Section - wraps the same Medication Activity template as Medications, inside a Discharge Medication Act - must convert to a MedicationRequest -->
         <section>
           <templateId root="2.16.840.1.113883.10.20.22.2.11.1"/>
           <code code="10183-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital Discharge Medications"/>

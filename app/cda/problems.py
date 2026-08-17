@@ -58,7 +58,12 @@ def _resolve_clinical_status(act, problem_observation) -> CodeableConcept | None
     return CodeableConcept(coding=[Coding(system=_CLINICAL_STATUS_SYSTEM, code=mapped)]) if mapped else None
 
 
-def _build_condition(act, problem_observation, patient_id: str) -> Condition | None:
+# Public (not module-private) - app/cda/hospital_discharge_diagnosis.py
+# became a second real consumer once that section was confirmed (against a
+# real official HL7 example) to wrap the byte-for-byte identical Problem
+# Observation template inside a different Act wrapper - only the Act
+# template differs, so the per-entry builder itself is reused as-is.
+def build_condition(act, problem_observation, patient_id: str) -> Condition | None:
     if problem_observation.get("negationInd") == "true":
         # "No known problem" pattern - disclosed limitation, not modeled as
         # its own resource this slice (see CLAUDE.md).
@@ -104,7 +109,7 @@ def build_conditions(section, patient_id: str) -> list[Condition]:
             observation = find_child(relationship, "observation")
             if observation is None or not has_template_id(observation, PROBLEM_OBSERVATION_TEMPLATE_ID):
                 continue
-            condition = _build_condition(act, observation, patient_id)
+            condition = build_condition(act, observation, patient_id)
             if condition is not None:
                 conditions.append(condition)
     return conditions

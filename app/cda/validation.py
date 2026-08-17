@@ -30,8 +30,14 @@ from app.cda.allergies import ALLERGY_CONCERN_ACT_TEMPLATE_ID, ALLERGY_OBSERVATI
 from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
 from app.cda.allergies import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as ALLERGIES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
 from app.cda.ccd import CCD_TEMPLATE_ID
+from app.cda.discharge_medications import DISCHARGE_MEDICATION_ACT_TEMPLATE_ID
+from app.cda.discharge_medications import SECTION_TEMPLATE_ID as DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
 from app.cda.history_and_physical import HISTORY_AND_PHYSICAL_TEMPLATE_ID
+from app.cda.hospital_discharge_diagnosis import HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID
+from app.cda.hospital_discharge_diagnosis import (
+    SECTION_TEMPLATE_ID as HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID,
+)
 from app.cda.common import RECOGNIZED_ENCOUNTER_CLASSES, build_codeable_concept_from_cd
 from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP as IMMUNIZATION_STATUS_MAP
 from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
@@ -129,6 +135,14 @@ def _find_results_section(document):
 
 def _find_procedures_section(document):
     return _find_section(document, PROCEDURES_SECTION_TEMPLATE_ID, PROCEDURES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL)
+
+
+def _find_hospital_discharge_diagnosis_section(document):
+    return _find_section(document, HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID)
+
+
+def _find_discharge_medications_section(document):
+    return _find_section(document, DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID)
 
 
 def _rule_patient_name_missing(patient) -> list[ValidationFinding]:
@@ -283,12 +297,23 @@ def _iter_problem_observations(section):
             yield observation
 
 
-def _rule_problems(section, patient, now: datetime) -> list[ValidationFinding]:
+def _rule_problem_observations(
+    observations, rule_prefix: str, segment_prefix: str, patient, now: datetime
+) -> list[ValidationFinding]:
+    """Shared rule body for any section wrapping Problem-Observation-shaped
+    entries - Problems' own Concern Act, and Hospital Discharge Diagnosis's
+    own Act (see app/cda/hospital_discharge_diagnosis.py), which was
+    confirmed against a real official HL7 example to wrap the byte-for-byte
+    identical Problem Observation template. Promoted here once that second
+    real consumer needed the identical checks against a differently-scoped
+    observation set - `rule_prefix`/`segment_prefix` keep each section's own
+    findings independently identifiable (e.g. `cda.problem-missing-value`
+    vs. `cda.hospital-discharge-diagnosis-missing-value`)."""
     findings = []
     raw_birth = ts_value(find_child(patient, "birthTime")) if patient is not None else None
     birth_dt = parse_comparable_datetime(raw_birth) if raw_birth else None
 
-    for observation in _iter_problem_observations(section):
+    for observation in observations:
         if observation.get("negationInd") == "true":
             continue
 
@@ -297,8 +322,8 @@ def _rule_problems(section, patient, now: datetime) -> list[ValidationFinding]:
             findings.append(
                 ValidationFinding(
                     severity="info",
-                    rule_id="cda.problem-missing-value",
-                    segment="Problems/.../observation/value",
+                    rule_id=f"{rule_prefix}-missing-value",
+                    segment=f"{segment_prefix}/observation/value",
                     message="A Problem Observation has no resolvable coded value - the converter will silently skip this entry.",
                 )
             )
@@ -311,8 +336,8 @@ def _rule_problems(section, patient, now: datetime) -> list[ValidationFinding]:
                 findings.append(
                     ValidationFinding(
                         severity="warning",
-                        rule_id="cda.problem-onset-in-future",
-                        segment="Problems/.../observation/effectiveTime",
+                        rule_id=f"{rule_prefix}-onset-in-future",
+                        segment=f"{segment_prefix}/observation/effectiveTime",
                         message="A Problem Observation's onset date is in the future.",
                     )
                 )
@@ -320,8 +345,8 @@ def _rule_problems(section, patient, now: datetime) -> list[ValidationFinding]:
                 findings.append(
                     ValidationFinding(
                         severity="error",
-                        rule_id="cda.problem-onset-before-birth",
-                        segment="Problems/.../observation/effectiveTime",
+                        rule_id=f"{rule_prefix}-onset-before-birth",
+                        segment=f"{segment_prefix}/observation/effectiveTime",
                         message="A Problem Observation's onset date is before the patient's birthTime.",
                     )
                 )
@@ -331,12 +356,16 @@ def _rule_problems(section, patient, now: datetime) -> list[ValidationFinding]:
                     findings.append(
                         ValidationFinding(
                             severity="error",
-                            rule_id="cda.problem-abatement-before-onset",
-                            segment="Problems/.../observation/effectiveTime",
+                            rule_id=f"{rule_prefix}-abatement-before-onset",
+                            segment=f"{segment_prefix}/observation/effectiveTime",
                             message="A Problem Observation's abatement date is before its onset date.",
                         )
                     )
     return findings
+
+
+def _rule_problems(section, patient, now: datetime) -> list[ValidationFinding]:
+    return _rule_problem_observations(_iter_problem_observations(section), "cda.problem", "Problems/...", patient, now)
 
 
 def _iter_medication_activities(section):
@@ -353,9 +382,17 @@ def _iter_medication_activities(section):
         yield substance_administration
 
 
-def _rule_medications(section, now: datetime) -> list[ValidationFinding]:
+def _rule_medication_activities(
+    substance_administrations, rule_prefix: str, segment_prefix: str
+) -> list[ValidationFinding]:
+    """Shared rule body for any section wrapping Medication-Activity-shaped
+    entries - Medications' own bare substanceAdministration, and Discharge
+    Medications' own Act wrapper (see app/cda/discharge_medications.py),
+    confirmed against a real official HL7 example to wrap the byte-for-byte
+    identical Medication Activity template. Same promotion rationale as
+    _rule_problem_observations above."""
     findings = []
-    for substance_administration in _iter_medication_activities(section):
+    for substance_administration in substance_administrations:
         if substance_administration.get("negationInd") == "true":
             continue
 
@@ -369,8 +406,8 @@ def _rule_medications(section, now: datetime) -> list[ValidationFinding]:
             findings.append(
                 ValidationFinding(
                     severity="info",
-                    rule_id="cda.medication-missing-code",
-                    segment="Medications/.../substanceAdministration/consumable",
+                    rule_id=f"{rule_prefix}-missing-code",
+                    segment=f"{segment_prefix}/substanceAdministration/consumable",
                     message="A Medication Activity has no resolvable medication code - the converter will silently skip this entry.",
                 )
             )
@@ -382,8 +419,8 @@ def _rule_medications(section, now: datetime) -> list[ValidationFinding]:
             findings.append(
                 ValidationFinding(
                     severity="info",
-                    rule_id="cda.medication-status-unrecognized",
-                    segment="Medications/.../substanceAdministration/statusCode",
+                    rule_id=f"{rule_prefix}-status-unrecognized",
+                    segment=f"{segment_prefix}/substanceAdministration/statusCode",
                     message=f"statusCode {status_code!r} is not recognized - the converter will silently default to 'unknown'.",
                 )
             )
@@ -396,12 +433,16 @@ def _rule_medications(section, now: datetime) -> list[ValidationFinding]:
                 findings.append(
                     ValidationFinding(
                         severity="error",
-                        rule_id="cda.medication-period-end-before-start",
-                        segment="Medications/.../substanceAdministration/effectiveTime",
+                        rule_id=f"{rule_prefix}-period-end-before-start",
+                        segment=f"{segment_prefix}/substanceAdministration/effectiveTime",
                         message="A Medication Activity's dosing period end is before its start.",
                     )
                 )
     return findings
+
+
+def _rule_medications(section, now: datetime) -> list[ValidationFinding]:
+    return _rule_medication_activities(_iter_medication_activities(section), "cda.medication", "Medications/...")
 
 
 def _iter_allergy_observations(section):
@@ -719,6 +760,62 @@ def _rule_procedures(section, now: datetime) -> list[ValidationFinding]:
     return findings
 
 
+def _iter_hospital_discharge_diagnosis_observations(section):
+    """Yield each Problem Observation nested under a Hospital Discharge
+    Diagnosis Act, via the same walk
+    app.cda.hospital_discharge_diagnosis.build_hospital_discharge_diagnoses()
+    uses, so validation can never see a different set of entries than
+    conversion does."""
+    for entry in find_all(section, "entry"):
+        act = find_child(entry, "act")
+        if act is None or not has_template_id(act, HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID):
+            continue
+        for relationship in find_all(act, "entryRelationship"):
+            if relationship.get("typeCode") != "SUBJ":
+                continue
+            observation = find_child(relationship, "observation")
+            if observation is None or not has_template_id(observation, PROBLEM_OBSERVATION_TEMPLATE_ID):
+                continue
+            yield observation
+
+
+def _rule_hospital_discharge_diagnoses(section, patient, now: datetime) -> list[ValidationFinding]:
+    return _rule_problem_observations(
+        _iter_hospital_discharge_diagnosis_observations(section),
+        "cda.hospital-discharge-diagnosis",
+        "HospitalDischargeDiagnosis/...",
+        patient,
+        now,
+    )
+
+
+def _iter_discharge_medication_activities(section):
+    """Yield each Medication Activity nested under a Discharge Medication
+    Act, via the same walk
+    app.cda.discharge_medications.build_discharge_medication_requests()
+    uses, so validation can never see a different set of entries than
+    conversion does."""
+    for entry in find_all(section, "entry"):
+        act = find_child(entry, "act")
+        if act is None or not has_template_id(act, DISCHARGE_MEDICATION_ACT_TEMPLATE_ID):
+            continue
+        for relationship in find_all(act, "entryRelationship"):
+            if relationship.get("typeCode") != "SUBJ":
+                continue
+            substance_administration = find_child(relationship, "substanceAdministration")
+            if substance_administration is None or not has_template_id(
+                substance_administration, MEDICATION_ACTIVITY_TEMPLATE_ID
+            ):
+                continue
+            yield substance_administration
+
+
+def _rule_discharge_medications(section, now: datetime) -> list[ValidationFinding]:
+    return _rule_medication_activities(
+        _iter_discharge_medication_activities(section), "cda.discharge-medication", "DischargeMedications/..."
+    )
+
+
 def _check_convertibility(document) -> list[ValidationFinding]:
     # Deferred import: app/cda/registry.py imports app/cda/ccd.py at module
     # load time; this module doesn't need to be part of that load-order
@@ -811,6 +908,14 @@ def validate_document(document) -> ValidationReport:
     procedures_section = _find_procedures_section(document)
     if procedures_section is not None:
         findings.extend(_rule_procedures(procedures_section, now))
+
+    hospital_discharge_diagnosis_section = _find_hospital_discharge_diagnosis_section(document)
+    if hospital_discharge_diagnosis_section is not None:
+        findings.extend(_rule_hospital_discharge_diagnoses(hospital_discharge_diagnosis_section, patient, now))
+
+    discharge_medications_section = _find_discharge_medications_section(document)
+    if discharge_medications_section is not None:
+        findings.extend(_rule_discharge_medications(discharge_medications_section, now))
 
     findings.extend(_check_convertibility(document))
 

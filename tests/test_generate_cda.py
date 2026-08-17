@@ -758,6 +758,73 @@ def test_generated_discharge_summary_always_has_an_encounter():
         assert find_child(document, "componentOf") is not None
 
 
+_HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.33"
+_DISCHARGE_MEDICATION_ACT_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.35"
+
+
+def _discharge_diagnosis_acts(document):
+    for section in find_all(document, "component/structuredBody/component/section"):
+        for entry in find_all(section, "entry"):
+            act = find_child(entry, "act")
+            if act is not None and has_template_id(act, _HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID):
+                yield act
+
+
+def _discharge_medication_acts(document):
+    for section in find_all(document, "component/structuredBody/component/section"):
+        for entry in find_all(section, "entry"):
+            act = find_child(entry, "act")
+            if act is not None and has_template_id(act, _DISCHARGE_MEDICATION_ACT_TEMPLATE_ID):
+                yield act
+
+
+def test_discharge_specific_sections_vary_present_and_absent_across_seeds():
+    diagnosis_present = diagnosis_absent = 0
+    medication_present = medication_absent = 0
+    for seed in range(60):
+        document = _discharge_summary_document(seed)
+        if any(True for _ in _discharge_diagnosis_acts(document)):
+            diagnosis_present += 1
+        else:
+            diagnosis_absent += 1
+        if any(True for _ in _discharge_medication_acts(document)):
+            medication_present += 1
+        else:
+            medication_absent += 1
+    assert diagnosis_present > 0 and diagnosis_absent > 0
+    assert medication_present > 0 and medication_absent > 0
+
+
+def test_discharge_specific_sections_never_occur_on_ccd_or_history_and_physical():
+    # include_discharge_specific_sections is scoped to generate_discharge_
+    # summary only - see _generate_sectioned_document's own docstring for
+    # why generating these on CCD/H&P would produce unrealistic data.
+    for seed in range(60):
+        ccd_document = _document(seed)
+        hp_document = _history_and_physical_document(seed)
+        for document in (ccd_document, hp_document):
+            assert not any(True for _ in _discharge_diagnosis_acts(document))
+            assert not any(True for _ in _discharge_medication_acts(document))
+
+
+def test_discharge_medication_status_code_varies_across_recognized_and_unrecognized():
+    from app.cda.medications import STATUS_MAP
+
+    recognized = unrecognized = 0
+    for seed in range(80):
+        for act in _discharge_medication_acts(_discharge_summary_document(seed)):
+            for relationship in find_all(act, "entryRelationship"):
+                substance_administration = find_child(relationship, "substanceAdministration")
+                if substance_administration is None:
+                    continue
+                status = find_child(substance_administration, "statusCode").get("code")
+                if status in STATUS_MAP:
+                    recognized += 1
+                else:
+                    unrecognized += 1
+    assert recognized > 0 and unrecognized > 0
+
+
 def test_discharge_summary_round_trips_through_real_converter():
     for seed in range(1000, 1020):
         xml_text = generate_discharge_summary(random.Random(seed))
