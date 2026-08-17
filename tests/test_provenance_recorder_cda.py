@@ -5,11 +5,14 @@ own parsing/dispatch layer, the same "own file per format" discipline
 test_cda_validation.py already established relative to the HL7v2
 test_validation_*.py files.
 
-Scope so far: the document header (Patient + optional Encounter), Problems,
-Medications, Allergies, Immunizations, Vital Signs, and Results - see
-app/provenance/dispatch.py's own _CDA_UNSUPPORTED_REASON for why no CDA
-document type is "fully instrumented" yet despite these pieces producing
-real facts."""
+Scope: the document header (Patient + optional Encounter) and all seven
+general-purpose sections (Problems, Medications, Allergies, Immunizations,
+Vital Signs, Results, Procedures) - see app/provenance/dispatch.py's own
+_CDA_UNSUPPORTED_REASON for why no CDA document type is "fully
+instrumented" yet despite these pieces producing real facts (History and
+Physical's own IG-required narrative sections remain unmapped entirely,
+the one disclosed gap this pillar shares with the forward-conversion
+pillar itself)."""
 
 import itertools
 import uuid
@@ -41,12 +44,8 @@ def _build_bundle(fixture_name: str, recorder=None):
     return builder.build_bundle(document, recorder=recorder)
 
 
-# A representative fixture per document type this slice's own header +
-# Problems + Medications + Allergies + Immunizations + Vital Signs +
-# Results instrumentation touches, plus a fixture whose own section
-# (Procedures) is NOT instrumented yet - included specifically to prove
-# the "accept recorder, no-op" addition to that one remaining
-# SECTION_BUILDERS entry doesn't alter its own output either.
+# A representative fixture per document type this slice's own header + all
+# seven general-purpose sections' instrumentation touches.
 _CDA_FIXTURES = [
     "ccd_basic.xml",
     "ccd_minimal.xml",
@@ -584,6 +583,59 @@ def test_ccd_results_basic_crosswalk_matches_known_field_values():
     pq_code_entry = by_path[f"{pq_prefix}.code.coding[0].code"]
     st_code_entry = by_path[f"{st_prefix}.code.coding[0].code"]
     assert pq_code_entry.source_location != st_code_entry.source_location
+
+
+def test_ccd_procedures_basic_crosswalk_matches_known_field_values():
+    # ccd_procedures_basic.xml's own two entries exercise both
+    # performedDateTime-vs-performedPeriod branches and both identifier
+    # shapes in one fixture - a completed, point-in-time Appendectomy with
+    # a root+extension id, and a negated Colonoscopy (a low+high period,
+    # status driven by negationInd) with a root-only id - the same fixture
+    # test_ccd_mapping.py itself asserts against. The last general-purpose
+    # C-CDA section instrumented, completing full section breadth for this
+    # pillar.
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("ccd_procedures_basic.xml", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    procedure_indices = [i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Procedure"]
+    assert len(procedure_indices) == 2
+    completed_index, negated_index = (
+        procedure_indices
+        if bundle.entry[procedure_indices[0]].resource.status == "completed"
+        else procedure_indices[::-1]
+    )
+
+    completed_prefix = f"Bundle.entry[{completed_index}].resource"
+    status_entry = by_path[f"{completed_prefix}.status"]
+    assert status_entry.value == "completed"
+    assert status_entry.derivation == "direct"
+    assert status_entry.source_location == xpath_location("procedure", "statusCode", "@code")
+    code_entry = by_path[f"{completed_prefix}.code.coding[0].code"]
+    assert code_entry.value == "80146002"
+    identifier_entry = by_path[f"{completed_prefix}.identifier[0].value"]
+    assert identifier_entry.value == "PROC001"
+    performed_entry = by_path[f"{completed_prefix}.performedDateTime"]
+    assert performed_entry.value == "2026-06-15T12:00:00-05:00"
+    assert performed_entry.source_location == xpath_location("procedure", "effectiveTime", "@value")
+    body_site_entry = by_path[f"{completed_prefix}.bodySite[0].coding[0].code"]
+    assert body_site_entry.value == "66754008"
+
+    negated_prefix = f"Bundle.entry[{negated_index}].resource"
+    negated_status_entry = by_path[f"{negated_prefix}.status"]
+    assert negated_status_entry.value == "not-done"
+    assert negated_status_entry.derivation == "direct"
+    assert negated_status_entry.source_location == xpath_location("procedure", "@negationInd")
+    negated_identifier_entry = by_path[f"{negated_prefix}.identifier[0].value"]
+    # The root-only identifier shape - _reverse_generic_identifier's own
+    # fuller three-shape resolution, this fixture's own real exercise of it.
+    assert negated_identifier_entry.value.startswith("urn:oid:")
+    start_entry = by_path[f"{negated_prefix}.performedPeriod.start"]
+    assert start_entry.value == "2026-02-01"
+    end_entry = by_path[f"{negated_prefix}.performedPeriod.end"]
+    assert end_entry.value == "2026-02-01"
+    assert f"{negated_prefix}.performedDateTime" not in by_path
 
 
 def test_discharge_medications_reuses_medications_own_recorder_instrumentation():

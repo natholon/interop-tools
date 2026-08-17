@@ -35,10 +35,14 @@ from fhir.resources.R4B.period import Period
 from fhir.resources.R4B.procedure import Procedure
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, build_identifiers, parse_partial_ts
+from app.cda.common import build_codeable_concept_from_cd, build_identifiers, effective_time_location, parse_partial_ts
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
+from app.provenance.location import xpath_location
 
 _ID_FALLBACK_SYSTEM = "urn:interop-tools:cda-procedure-id"
+# No wrapping Act - the entry element itself, same shape as Medications'/
+# Immunizations' own bare substanceAdministration.
+_ENTRY_BASE = "procedure"
 
 # Public (not module-private) - reused by app/cda/generator.py and
 # app/cda/validation.py, same pattern as every other section module.
@@ -87,14 +91,40 @@ def _resolve_status(procedure_element) -> str:
     return STATUS_MAP.get(code, _DEFAULT_STATUS)
 
 
-def _build_procedure(procedure_element, patient_id: str) -> Procedure:
+def _record_status(recorder, procedure_id: str, procedure_element, status: str) -> None:
+    if procedure_element.get("negationInd") == "true":
+        # A real source field genuinely read (negationInd's own value, not
+        # merely its presence) - direct, the identical distinction
+        # Immunizations' own negationInd-driven status recording already
+        # established.
+        recorder.record(procedure_id, "status", xpath_location(_ENTRY_BASE, "@negationInd"), status)
+        return
+    status_element = find_child(procedure_element, "statusCode")
+    code = status_element.get("code") if status_element is not None else None
+    if code and code.strip().lower() in STATUS_MAP:
+        recorder.record(procedure_id, "status", xpath_location(_ENTRY_BASE, "statusCode", "@code"), status)
+    else:
+        recorder.record_inferred(
+            procedure_id,
+            "status",
+            f'statusCode was absent or not one of the recognized CF_ProcedureStatus codes, and negationInd wasn\'t "true" - defaults to the disclosed fallback "{_DEFAULT_STATUS}".',
+            status,
+        )
+
+
+def _build_procedure(procedure_element, patient_id: str, recorder=None) -> Procedure:
+    procedure_id = str(uuid.uuid4())
+    status = _resolve_status(procedure_element)
     procedure = Procedure(
-        id=str(uuid.uuid4()),
-        status=_resolve_status(procedure_element),
+        id=procedure_id,
+        status=status,
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
     )
+    if recorder:
+        _record_status(recorder, procedure_id, procedure_element, status)
 
-    code = build_codeable_concept_from_cd(find_child(procedure_element, "code"))
+    code_element = find_child(procedure_element, "code")
+    code = build_codeable_concept_from_cd(code_element)
     if code:
         # Procedure.code is genuinely optional per FHIR R4 (confirmed via
         # model_fields, unlike most of this app's coded resources) - a
@@ -102,8 +132,23 @@ def _build_procedure(procedure_element, patient_id: str) -> Procedure:
         # than skipped, since the entry itself (status/date/bodySite) can
         # still be meaningful without one.
         procedure.code = code
+        if recorder:
+            code_value = code_element.get("code")
+            display_value = code_element.get("displayName")
+            if code_value:
+                recorder.record(procedure_id, "code.coding[0].code", xpath_location(_ENTRY_BASE, "code", "@code"), code_value)
+            if display_value:
+                recorder.record(
+                    procedure_id, "code.coding[0].display", xpath_location(_ENTRY_BASE, "code", "@displayName"), display_value
+                )
 
-    ids = build_identifiers(find_all(procedure_element, "id"), _ID_FALLBACK_SYSTEM)
+    ids = build_identifiers(
+        find_all(procedure_element, "id"),
+        _ID_FALLBACK_SYSTEM,
+        resource_id=procedure_id,
+        location_prefix=xpath_location(_ENTRY_BASE, "id"),
+        recorder=recorder,
+    )
     if ids:
         procedure.identifier = ids
 
@@ -117,37 +162,54 @@ def _build_procedure(procedure_element, patient_id: str) -> Procedure:
     point_in_time = parse_partial_ts(ts_value(effective_time)) if effective_time is not None else None
     if point_in_time:
         procedure.performedDateTime = point_in_time
+        if recorder:
+            recorder.record(procedure_id, "performedDateTime", xpath_location(_ENTRY_BASE, "effectiveTime", "@value"), point_in_time)
     else:
         low, high = ivl_ts_bounds(effective_time)
         period_start = parse_partial_ts(low)
         period_end = parse_partial_ts(high)
         if period_start or period_end:
             period = Period()
+            effective_time_base = xpath_location(_ENTRY_BASE, "effectiveTime")
             if period_start:
                 period.start = period_start
+                if recorder:
+                    recorder.record(
+                        procedure_id,
+                        "performedPeriod.start",
+                        effective_time_location(effective_time_base, effective_time, "low"),
+                        period_start,
+                    )
             if period_end:
                 period.end = period_end
+                if recorder:
+                    recorder.record(
+                        procedure_id,
+                        "performedPeriod.end",
+                        effective_time_location(effective_time_base, effective_time, "high"),
+                        period_end,
+                    )
             procedure.performedPeriod = period
 
-    body_site = build_codeable_concept_from_cd(find_child(procedure_element, "targetSiteCode"))
+    body_site_element = find_child(procedure_element, "targetSiteCode")
+    body_site = build_codeable_concept_from_cd(body_site_element)
     if body_site:
         procedure.bodySite = [body_site]
+        if recorder:
+            recorder.record(
+                procedure_id, "bodySite[0].coding[0].code", xpath_location(_ENTRY_BASE, "targetSiteCode", "@code"), body_site.coding[0].code
+            )
 
     return procedure
 
 
 def build_procedures(section, patient_id: str, recorder=None) -> list[Procedure]:
     """One Procedure per Procedure Activity Procedure entry in the section
-    - a section can (and commonly does) have multiple entries.
-
-    `recorder` is accepted (see app/provenance/) but not yet acted on - see
-    app/cda/medications.py::build_medication_requests' own docstring for
-    why every SECTION_BUILDERS entry accepts it uniformly regardless of
-    whether its own section is instrumented yet."""
+    - a section can (and commonly does) have multiple entries."""
     procedures = []
     for entry in find_all(section, "entry"):
         procedure_element = find_child(entry, "procedure")
         if procedure_element is None or not has_template_id(procedure_element, PROCEDURE_TEMPLATE_ID):
             continue
-        procedures.append(_build_procedure(procedure_element, patient_id))
+        procedures.append(_build_procedure(procedure_element, patient_id, recorder=recorder))
     return procedures

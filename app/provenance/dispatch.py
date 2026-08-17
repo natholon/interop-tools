@@ -45,25 +45,39 @@ from app.provenance.resolver import resolve_bundle_paths
 # problem C-CDA's own per-section (not per-document-type) instrumentation
 # already had to solve.
 _INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835", "837P", "837I", "837D"}
-# C-CDA is only PARTIALLY instrumented (document header + the Problems,
-# Medications, Allergies, Immunizations, Vital Signs, and Results
-# sections, and - for free, via shared entry-level builders, see
-# app/cda/hospital_discharge_diagnosis.py/discharge_medications.py -
-# Discharge Summary's own Hospital Discharge Diagnosis and Discharge
-# Medications sections) - the one remaining section (Procedures) isn't
-# instrumented yet for any of the three document types, so no CDA document
-# type is added to a "fully instrumented" set the way an HL7v2
-# message_type is - `unsupported` stays True for every CDA document
-# unconditionally this phase, even though `entries` below is genuinely
-# non-empty for a document with a header and/or a Problems/Medications/
-# Allergies/Immunizations/Vital-Signs/Results section, mirroring the
-# identical "some real facts, still unsupported" shape an HL7v2 message
-# type not yet in _INSTRUMENTED_MESSAGE_TYPES already produces.
+# Every section registered in app/cda/registry.py::SECTION_BUILDERS is now
+# instrumented: all seven general-purpose sections (Problems, Medications,
+# Allergies, Immunizations, Vital Signs, Results, Procedures) plus, for
+# free via shared entry-level builders, Discharge Summary's own Hospital
+# Discharge Diagnosis (reuses problems.py::build_condition) and Discharge
+# Medications (reuses medications.py::build_medication_request) - see each
+# module's own docstring.
+#
+# `unsupported` still deliberately stays True unconditionally for every
+# CDA document, though - not graduated to a per-document-type
+# _INSTRUMENTED_...-style set the way HL7v2/EDI's own binary
+# "registered => fully covered" bar works. That bar doesn't translate
+# cleanly here: unlike an HL7v2 message type (where every segment the
+# standard defines for that type is either read or a disclosed, narrow
+# per-field gap) or an EDI transaction set, a C-CDA document type carries
+# its own IG-required *sections* this app's forward-conversion pillar
+# itself never maps at all - Discharge Summary's own Hospital Course/Plan
+# of Treatment, and History and Physical's own required narrative sections
+# (Reason for Visit, HPI, Physical Exam, etc., see
+# app/cda/history_and_physical.py/discharge_summary.py) - not merely
+# "outside this app's read scope" the way an unread HL7v2 field is, but
+# entire required sections a real consumer would expect reflected in the
+# output. Marking any document type "fully supported" here would overclaim
+# relative to what conversion itself actually guarantees for it - the
+# identical, permanent disclosure the forward-conversion pillar already
+# makes for this exact gap (see CLAUDE.md's own C-CDA subsection).
 _CDA_UNSUPPORTED_REASON = (
-    "Field-level provenance for C-CDA is only partially implemented so far "
-    "(document header and the Problems/Medications/Allergies/Immunizations/"
-    "Vital Signs/Results sections) - the rest of each document type's own "
-    "sections aren't instrumented yet."
+    "Field-level provenance for C-CDA covers every section this app's "
+    "forward conversion recognizes (the document header and all seven "
+    "general-purpose sections), but some document types (Discharge "
+    "Summary, History and Physical) carry their own additional IG-required "
+    "sections this app's conversion never maps at all - so no C-CDA "
+    "document type is ever reported fully supported."
 )
 
 # Message types with real, complete field-level instrumentation. Extended
