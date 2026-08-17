@@ -1,15 +1,24 @@
+from pathlib import Path
+
 import pytest
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
 from fhir.resources.R4B.patient import Patient
 
+from app.cda.pipeline import convert_cda_to_bundle
 from app.hl7.errors import MappingError
 from app.hl7.pipeline import convert_hl7_to_bundle
 from app.transform.pipeline import build_message_from_bundle
 from app.transform.registry import get_builder, list_supported_targets
 
+FIXTURES = Path(__file__).parent / "fixtures"
+
 
 def test_list_supported_targets_includes_adt_a01():
     assert ("HL7", "ADT", "A01") in list_supported_targets()
+
+
+def test_list_supported_targets_includes_ccd():
+    assert ("CDA", "CCD", "") in list_supported_targets()
 
 
 def test_get_builder_raises_mapping_error_for_unregistered_target():
@@ -109,3 +118,56 @@ def test_multiple_given_names_map_to_separate_xpn_components():
     message_text = build_message_from_bundle(bundle, "HL7", "ADT", "A01")
     pid = next(s for s in message_text.split("\r") if s.startswith("PID|"))
     assert pid.split("|")[5] == "Multi^Ann^Beth"
+
+
+def test_ccd_round_trip_produces_a_convertible_document_again():
+    # The real fixture used to prove the forward direction, run in reverse
+    # then forward again - the genuine round-trip proof, not just "XML was
+    # produced," mirroring test_round_trip_produces_a_convertible_message_
+    # again's discipline for the HL7v2 slice.
+    forward_xml = (FIXTURES / "ccd_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+
+    assert document_text.startswith('<?xml version="1.0"')
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+
+    patient = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Patient")
+    assert patient.name[0].family == "Betterhalf"
+    assert patient.name[0].given == ["Eve"]
+    assert patient.gender == "female"
+    assert patient.birthDate.isoformat() == "1975-05-01"
+    assert patient.address[0].city == "Beaverton"
+    # A real OID-shaped identifier.system must round-trip exactly, not
+    # collapse into a disclosed placeholder root - see
+    # app/transform/cda_ccd.py::_reverse_identifier_root.
+    assert patient.identifier[0].system == "urn:oid:2.16.840.1.113883.19.5"
+    assert patient.identifier[0].value == "998991"
+
+    encounter = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Encounter")
+    assert encounter.class_fhir.code == "AMB"
+    assert encounter.period.start is not None
+    assert encounter.period.end is not None
+
+    conditions = [e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Condition"]
+    displays = {c.code.coding[0].display for c in conditions}
+    assert displays == {"Hypertensive disorder", "Type 2 diabetes mellitus"}
+
+
+def test_ccd_missing_patient_raises_mapping_error():
+    empty_bundle = Bundle(id="test", type="collection")
+    with pytest.raises(MappingError):
+        build_message_from_bundle(empty_bundle, "CDA", "CCD", "")
+
+
+def test_ccd_encounter_and_problems_are_optional():
+    patient = Patient(id="p1", name=[{"family": "Solo"}])
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:p1", resource=patient)]
+
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
+    assert resource_types == {"Patient"}

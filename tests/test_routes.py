@@ -305,6 +305,29 @@ def test_index_transform_target_dropdown_includes_adt_a01():
     assert "HL7 ADT^A01" in response.text
 
 
+def test_index_transform_target_dropdown_includes_ccd_without_stray_caret():
+    # A target with no real trigger-event concept must render as "CDA CCD",
+    # not "CDA CCD^" - see _transform_target_options' own docstring.
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "CDA CCD" in response.text
+    assert "CDA CCD^" not in response.text
+
+
+def test_api_transform_builds_ccd_document():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("ccd_basic.xml")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": bundle_json, "target_format": "CDA", "target_type": "CCD", "target_trigger": ""},
+    )
+    assert response.status_code == 200
+    document_text = response.json()["message_text"]
+    assert document_text.startswith('<?xml version="1.0"')
+    assert "Betterhalf" in document_text
+
+
 def test_api_transform_builds_adt_a01_message():
     convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
     bundle_json = json.dumps(convert_response.json()["bundle"])

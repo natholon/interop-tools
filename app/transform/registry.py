@@ -8,10 +8,12 @@ for the forward direction), never a second registry axis."""
 
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
+from app.transform.cda_ccd import CcdReverseBuilder
 from app.transform.hl7_adt_a01 import AdtA01Builder
 
 _BUILDERS: dict[tuple[str, str, str], MessageBuilder] = {
     ("HL7", "ADT", "A01"): AdtA01Builder(),
+    ("CDA", "CCD", ""): CcdReverseBuilder(),
 }
 
 

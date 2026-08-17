@@ -50,10 +50,20 @@ def _transform_target_options() -> list[tuple[str, str, str, str]]:
     """(target_format, target_type, target_trigger, label) tuples for the
     reverse-transform target dropdown - mirrors _grouped_supported_types'
     role for the forward-direction sample dropdown, but flat (not grouped)
-    since app/transform/registry.py has only one target so far; grouping
-    can be added the same way once there are enough to warrant it."""
+    since app/transform/registry.py has only a couple of targets so far;
+    grouping can be added the same way once there are enough to warrant
+    it. The trigger suffix is omitted entirely for a target with no real
+    trigger-event concept (e.g. "CDA CCD", not "CDA CCD^") - str.partition
+    on a caret-less label still parses back to an empty target_trigger
+    correctly (see transform_form/app.js's own submit handler), so this is
+    purely a display improvement, not a parsing-format change."""
     return [
-        (target_format, target_type, target_trigger, f"{target_format} {target_type}^{target_trigger}".strip())
+        (
+            target_format,
+            target_type,
+            target_trigger,
+            f"{target_format} {target_type}^{target_trigger}" if target_trigger else f"{target_format} {target_type}",
+        )
         for target_format, target_type, target_trigger in list_supported_targets()
     ]
 
