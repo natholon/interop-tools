@@ -161,3 +161,15 @@ class AdtA03Builder(_BaseAdtBuilder):
                 "ADT^A03 (discharge) requires an Encounter with period.end - "
                 "cannot build a discharge message with no discharge time"
             )
+
+
+class AdtA11Builder(_BaseAdtBuilder):
+    trigger_event = "A11"
+
+
+class AdtA38Builder(_BaseAdtBuilder):
+    trigger_event = "A38"
+
+
+class AdtA13Builder(_BaseAdtBuilder):
+    trigger_event = "A13"

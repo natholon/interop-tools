@@ -18,6 +18,9 @@ from app.transform.hl7_adt import (
     AdtA04Builder,
     AdtA05Builder,
     AdtA08Builder,
+    AdtA11Builder,
+    AdtA13Builder,
+    AdtA38Builder,
 )
 from app.transform.hl7_mdm import (
     MdmT02Builder,
@@ -44,6 +47,9 @@ _BUILDERS: dict[tuple[str, str, str], MessageBuilder] = {
     ("HL7", "ADT", "A04"): AdtA04Builder(),
     ("HL7", "ADT", "A05"): AdtA05Builder(),
     ("HL7", "ADT", "A08"): AdtA08Builder(),
+    ("HL7", "ADT", "A11"): AdtA11Builder(),
+    ("HL7", "ADT", "A13"): AdtA13Builder(),
+    ("HL7", "ADT", "A38"): AdtA38Builder(),
     ("HL7", "SIU", "S12"): SiuS12Builder(),
     ("HL7", "SIU", "S13"): SiuS13Builder(),
     ("HL7", "SIU", "S14"): SiuS14Builder(),

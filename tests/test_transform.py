@@ -29,6 +29,12 @@ def test_list_supported_targets_includes_all_six_adt_triggers():
         assert ("HL7", "ADT", trigger) in targets
 
 
+def test_list_supported_targets_includes_all_three_adt_cancel_triggers():
+    targets = list_supported_targets()
+    for trigger in ("A11", "A13", "A38"):
+        assert ("HL7", "ADT", trigger) in targets
+
+
 def test_list_supported_targets_includes_siu_s12():
     assert ("HL7", "SIU", "S12") in list_supported_targets()
 
@@ -249,6 +255,49 @@ def test_adt_a08_round_trips_inferred_status(fixture, expected_status):
     round_tripped_bundle = convert_hl7_to_bundle(message_text)
     encounter = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Encounter")
     assert encounter.status == expected_status
+
+
+@pytest.mark.parametrize(
+    "trigger,fixture",
+    [("A11", "adt_a11_basic.hl7"), ("A13", "adt_a13_with_discharge.hl7"), ("A38", "adt_a38_basic.hl7")],
+)
+def test_adt_cancel_trigger_round_trips_and_preserves_entered_in_error_status(trigger, fixture):
+    # A11/A13/A38 needed zero cancel-trigger-specific reverse logic, the
+    # same "no A08-specific code needed" discovery the earlier ADT breadth
+    # pass made: _build_pv1/_build_evn already faithfully re-emit whatever
+    # the source Encounter carries, and the forward mapper's own
+    # _drop_evn2_period_start_fallback ignores EVN-2 for period.start on
+    # every cancel trigger regardless of what this builder writes there, so
+    # a plain trigger_event swap round-trips correctly without needing to
+    # special-case the EVN-2 hazard on the way back out.
+    forward_text = (FIXTURES / fixture).read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+    original_encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
+
+    message_text = build_message_from_bundle(bundle, "HL7", "ADT", trigger)
+    assert f"||ADT^{trigger}|" in message_text
+
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    encounter = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Encounter")
+    assert encounter.status == "entered-in-error" == original_encounter.status
+    original_period_start = original_encounter.period.start if original_encounter.period else None
+    period_start = encounter.period.start if encounter.period else None
+    assert period_start == original_period_start
+
+
+def test_adt_a13_round_trips_discharge_disposition():
+    forward_text = (FIXTURES / "adt_a13_with_discharge.hl7").read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+    original_encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
+
+    message_text = build_message_from_bundle(bundle, "HL7", "ADT", "A13")
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    encounter = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Encounter")
+
+    assert (
+        encounter.hospitalization.dischargeDisposition.coding[0].code
+        == original_encounter.hospitalization.dischargeDisposition.coding[0].code
+    )
 
 
 def test_ccd_round_trip_produces_a_convertible_document_again():

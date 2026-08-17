@@ -312,6 +312,26 @@ def test_index_transform_target_dropdown_includes_all_six_adt_triggers():
         assert f"HL7 ADT^{trigger}" in response.text
 
 
+def test_index_transform_target_dropdown_includes_all_three_adt_cancel_triggers():
+    response = client.get("/")
+    assert response.status_code == 200
+    for trigger in ("A11", "A13", "A38"):
+        assert f"HL7 ADT^{trigger}" in response.text
+
+
+def test_api_transform_builds_adt_a11_message():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a11_basic.hl7")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": bundle_json, "target_format": "HL7", "target_type": "ADT", "target_trigger": "A11"},
+    )
+    assert response.status_code == 200
+    message_text = response.json()["message_text"]
+    assert "||ADT^A11|" in message_text
+
+
 def test_api_transform_builds_adt_a03_message():
     convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a03_basic.hl7")})
     bundle_json = json.dumps(convert_response.json()["bundle"])
