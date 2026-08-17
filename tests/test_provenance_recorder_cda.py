@@ -6,7 +6,7 @@ test_cda_validation.py already established relative to the HL7v2
 test_validation_*.py files.
 
 Scope so far: the document header (Patient + optional Encounter), Problems,
-Medications, Allergies, Immunizations, and Vital Signs - see
+Medications, Allergies, Immunizations, Vital Signs, and Results - see
 app/provenance/dispatch.py's own _CDA_UNSUPPORTED_REASON for why no CDA
 document type is "fully instrumented" yet despite these pieces producing
 real facts."""
@@ -42,11 +42,11 @@ def _build_bundle(fixture_name: str, recorder=None):
 
 
 # A representative fixture per document type this slice's own header +
-# Problems + Medications + Allergies + Immunizations + Vital Signs
-# instrumentation touches, plus a few fixtures whose own section (Results/
-# Procedures) is NOT instrumented yet - included specifically to prove the
-# "accept recorder, no-op" additions to those 2 other SECTION_BUILDERS
-# entries don't alter their own output either.
+# Problems + Medications + Allergies + Immunizations + Vital Signs +
+# Results instrumentation touches, plus a fixture whose own section
+# (Procedures) is NOT instrumented yet - included specifically to prove
+# the "accept recorder, no-op" addition to that one remaining
+# SECTION_BUILDERS entry doesn't alter its own output either.
 _CDA_FIXTURES = [
     "ccd_basic.xml",
     "ccd_minimal.xml",
@@ -531,6 +531,59 @@ def test_ccd_vitals_basic_crosswalk_matches_known_field_values():
     # same collision class Allergies'/837I's own fixes already established.
     assert temp_code_entry.source_location != hr_code_entry.source_location
     assert f"{temperature_prefix}.interpretation[0].coding[0].code" not in by_path
+
+
+def test_ccd_results_basic_crosswalk_matches_known_field_values():
+    # ccd_results_basic.xml's own one Result Organizer wraps two Result
+    # Observations - a PQ-valued one with a referenceRange, and a free-text
+    # ST-valued one - exercising two of _build_observation_value's own
+    # xsi:type branches in one fixture, plus a real (not fallback) report
+    # code, the same fixture test_ccd_mapping.py itself asserts against.
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("ccd_results_basic.xml", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    report_index = next(i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "DiagnosticReport")
+    report_prefix = f"Bundle.entry[{report_index}].resource"
+
+    report_code_entry = by_path[f"{report_prefix}.code.coding[0].code"]
+    assert report_code_entry.value == "58410-2"
+    assert report_code_entry.derivation == "direct"
+    assert report_code_entry.source_location == xpath_location("organizer", "code", "@code")
+    report_status_entry = by_path[f"{report_prefix}.status"]
+    assert report_status_entry.value == "final"
+    assert report_status_entry.derivation == "direct"
+    assert report_status_entry.source_location == xpath_location("organizer", "statusCode", "@code")
+
+    pq_index = next(
+        i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Observation" and e.resource.code.coding[0].code == "6690-2"
+    )
+    st_index = next(
+        i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Observation" and e.resource.code.coding[0].code == "33747-0"
+    )
+
+    pq_prefix = f"Bundle.entry[{pq_index}].resource"
+    value_entry = by_path[f"{pq_prefix}.valueQuantity.value"]
+    assert value_entry.value == "6.8"
+    unit_entry = by_path[f"{pq_prefix}.valueQuantity.unit"]
+    assert unit_entry.value == "10*3/uL"
+    range_low_entry = by_path[f"{pq_prefix}.referenceRange[0].low.value"]
+    assert range_low_entry.value == "4.5"
+    range_high_entry = by_path[f"{pq_prefix}.referenceRange[0].high.value"]
+    assert range_high_entry.value == "11.0"
+
+    st_prefix = f"Bundle.entry[{st_index}].resource"
+    string_entry = by_path[f"{st_prefix}.valueString"]
+    assert string_entry.value == "No growth after 48 hours"
+    assert string_entry.derivation == "direct"
+    assert f"{st_prefix}.valueQuantity.value" not in by_path
+
+    # The two members' own source locations must genuinely differ, the
+    # same disambiguation Vital Signs' own multiple-member fix established.
+    pq_code_entry = by_path[f"{pq_prefix}.code.coding[0].code"]
+    st_code_entry = by_path[f"{st_prefix}.code.coding[0].code"]
+    assert pq_code_entry.source_location != st_code_entry.source_location
 
 
 def test_discharge_medications_reuses_medications_own_recorder_instrumentation():
