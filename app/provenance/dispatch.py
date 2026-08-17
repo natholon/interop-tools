@@ -17,6 +17,7 @@ from fhir.resources.R4B.bundle import Bundle
 from app.cda.parser import parse_document
 from app.cda.registry import get_document_builder
 from app.cda.validation import resolve_trigger_event as resolve_cda_trigger_event
+from app.edi.common import resolve_837_variant
 from app.edi.parser import first_transaction_set, parse_interchange
 from app.edi.registry import get_transaction_builder
 from app.hl7.errors import MissingSegmentError
@@ -27,14 +28,23 @@ from app.provenance.models import CrosswalkReport
 from app.provenance.recorder import ProvenanceRecorder
 from app.provenance.resolver import resolve_bundle_paths
 
-# X12 transaction-set families (keyed by ST01) with real, complete
-# field-level instrumentation - the EDI-format mirror of
-# _INSTRUMENTED_MESSAGE_TYPES below. Extended as each family's own
-# provenance slice actually ships. 270/271 became this pillar's own first
-# proof the architecture generalizes to a delimited-text format with no
-# XML/pipe-delimited structure to lean on - see CLAUDE.md's own Data
+# X12 transaction-set families (keyed by ST01, EXCEPT the 837 trio - see
+# below) with real, complete field-level instrumentation - the EDI-format
+# mirror of _INSTRUMENTED_MESSAGE_TYPES below. Extended as each family's
+# own provenance slice actually ships. 270/271 became this pillar's own
+# first proof the architecture generalizes to a delimited-text format with
+# no XML/pipe-delimited structure to lean on - see CLAUDE.md's own Data
 # Specification section for the edi_location() design notes.
-_INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835"}
+#
+# 837P/837I/837D share the literal ST01="837" (see app/edi/registry.py's
+# own get_transaction_builder docstring), so a single "837" entry here
+# would incorrectly mark all three variants instrumented the moment any
+# one of them ships - keyed by the resolved variant string ("837P"/"837I"/
+# "837D", via the same resolve_837_variant() registry.py/validation.py
+# both already use) instead, the identical finer-than-ST01 granularity
+# problem C-CDA's own per-section (not per-document-type) instrumentation
+# already had to solve.
+_INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835", "837P"}
 # C-CDA is only PARTIALLY instrumented (document header + the Problems
 # section, and - for free, via a shared entry-level builder, see
 # app/cda/hospital_discharge_diagnosis.py - Discharge Summary's own
@@ -99,13 +109,17 @@ def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:
         bundle = builder.build_bundle(transaction_set, interchange.delimiters, recorder=recorder)
         entries = resolve_bundle_paths(bundle, recorder)
         st01 = transaction_set.st01.strip().upper()
-        unsupported = st01 not in _INSTRUMENTED_TRANSACTION_SETS
+        # 837P/837I/837D share ST01="837" - resolve which variant this
+        # actually is (the same resolver registry.py's own dispatch uses)
+        # so _INSTRUMENTED_TRANSACTION_SETS can track them independently.
+        trigger_event = resolve_837_variant(transaction_set.st03) if st01 == "837" else st01
+        unsupported = trigger_event not in _INSTRUMENTED_TRANSACTION_SETS
         unsupported_reason = (
-            f"Field-level provenance for X12 {st01} is not implemented yet." if unsupported else None
+            f"Field-level provenance for X12 {trigger_event} is not implemented yet." if unsupported else None
         )
         return bundle, CrosswalkReport(
             message_type="EDI",
-            trigger_event=st01,
+            trigger_event=trigger_event,
             source_format="EDI",
             entries=entries,
             unsupported=unsupported,

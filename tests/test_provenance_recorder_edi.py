@@ -7,9 +7,11 @@ test_provenance_recorder_cda.py already established.
 
 Scope so far: 270 (Eligibility Inquiry), 271 (Eligibility Response), 276
 (Claim Status Request), 277 (Claim Status Response), 278 (Health Care
-Services Review - Request for Review and Response), and 835 (Health Care
-Claim Payment/Advice) - see app/provenance/dispatch.py's own
-_INSTRUMENTED_TRANSACTION_SETS for why every other EDI family still
+Services Review - Request for Review and Response), 835 (Health Care
+Claim Payment/Advice), and 837P (Health Care Claim: Professional) - see
+app/provenance/dispatch.py's own _INSTRUMENTED_TRANSACTION_SETS for why
+every other EDI family (including 837I/837D, which share ST01="837" with
+837P but are tracked independently via resolve_837_variant()) still
 reports unsupported=True."""
 
 import itertools
@@ -43,11 +45,11 @@ def _build_bundle(fixture_name: str, recorder=None):
     return builder.build_bundle(transaction_set, interchange.delimiters, recorder=recorder)
 
 
-# 270/271/276/277/278/835's own real fixtures, plus a fixture from the
-# remaining still-uninstrumented EDI family (837P) - included specifically
-# to prove the no-op `recorder=None` additions to the 2 remaining sibling
-# builder files (837I, 837D) and the "free" Bundle.identifier/.timestamp
-# facts they now get via the shared assemble_bundle don't alter their own
+# 270/271/276/277/278/835/837P's own real fixtures, plus a fixture from
+# each remaining still-uninstrumented EDI family (837I, 837D) - included
+# specifically to prove the no-op `recorder=None` additions to those 2
+# sibling builder files (and the "free" Bundle.identifier/.timestamp facts
+# they now get via the shared assemble_bundle) don't alter their own
 # output either.
 _EDI_FIXTURES = [
     "edi_270_basic.x12",
@@ -65,6 +67,9 @@ _EDI_FIXTURES = [
     "edi_835_basic.x12",
     "edi_835_multi_claim.x12",
     "edi_837p_basic.x12",
+    "edi_837p_with_dependent.x12",
+    "edi_837i_basic.x12",
+    "edi_837d_basic.x12",
 ]
 
 
@@ -244,18 +249,97 @@ def test_edi_270_no_dependent_records_only_subscriber_facts():
     assert family_facts[0].value == "SMITH"
 
 
-def test_edi_837p_non_instrumented_family_still_gets_free_bundle_level_facts():
-    # 837P isn't instrumented this slice (see app/edi/claim_837p.py's own
-    # recorder docstring), but the shared assemble_bundle() still records
+def test_edi_837i_non_instrumented_variant_still_gets_free_bundle_level_facts():
+    # 837I isn't instrumented this slice (see app/edi/claim_837i.py's own
+    # recorder docstring) - 837P/837I/837D share ST01="837" but are tracked
+    # independently (see app/provenance/dispatch.py's own resolve_837_
+    # variant() use), so 837I still reports unsupported even though 837P
+    # now ships - the shared assemble_bundle() still records
     # Bundle.identifier/.timestamp "for free" via the BHT segment every EDI
     # family shares - the identical "some real facts, still not fully
     # instrumented" shape ORU/MDM's own recorder already exhibited before
     # their own slices shipped.
     recorder = ProvenanceRecorder(source_format="EDI")
-    bundle = _build_bundle("edi_837p_basic.x12", recorder=recorder)
+    bundle = _build_bundle("edi_837i_basic.x12", recorder=recorder)
     entries = resolve_bundle_paths(bundle, recorder)
     assert len(entries) > 0
     assert all(e.fhir_path.startswith("Bundle.identifier") or e.fhir_path.startswith("Bundle.timestamp") for e in entries)
+
+
+def test_edi_837p_basic_crosswalk_matches_known_field_values():
+    # edi_837p_basic.x12's own claim carries two service lines - one with
+    # both diagnosis pointers resolved, one with only the first - plus a
+    # rendering provider distinct from the billing provider.
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_837p_basic.x12", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    claim = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Claim")
+    claim_index = next(i for i, e in enumerate(bundle.entry) if e.resource is claim)
+
+    status_entry = by_path[f"Bundle.entry[{claim_index}].resource.status"]
+    assert status_entry.derivation == "inferred"
+    type_entry = by_path[f"Bundle.entry[{claim_index}].resource.type.coding[0].code"]
+    assert type_entry.value == "professional"
+    use_entry = by_path[f"Bundle.entry[{claim_index}].resource.use"]
+    assert use_entry.value == "claim"
+    priority_entry = by_path[f"Bundle.entry[{claim_index}].resource.priority.text"]
+    assert priority_entry.derivation == "inferred"
+
+    identifier_entry = by_path[f"Bundle.entry[{claim_index}].resource.identifier[0].value"]
+    assert identifier_entry.value == "26407789"
+    assert identifier_entry.source_location == edi_location("CLM", 1)
+    total_entry = by_path[f"Bundle.entry[{claim_index}].resource.total.value"]
+    assert total_entry.value == "79.04"
+    assert total_entry.source_location == edi_location("CLM", 2)
+
+    diagnosis0 = by_path[f"Bundle.entry[{claim_index}].resource.diagnosis[0].diagnosisCodeableConcept.coding[0].code"]
+    assert diagnosis0.value == "J209"
+    diagnosis1 = by_path[f"Bundle.entry[{claim_index}].resource.diagnosis[1].diagnosisCodeableConcept.coding[0].code"]
+    assert diagnosis1.value == "E119"
+
+    item0_procedure = by_path[f"Bundle.entry[{claim_index}].resource.item[0].productOrService.coding[0].code"]
+    assert item0_procedure.value == "99213"
+    assert item0_procedure.source_location == edi_location("SV1", 1, component=2)
+    item0_price = by_path[f"Bundle.entry[{claim_index}].resource.item[0].unitPrice.value"]
+    assert item0_price.value == "43"
+    item0_pointers = by_path[f"Bundle.entry[{claim_index}].resource.item[0].diagnosisSequence"]
+    assert item0_pointers.value == "1,2"
+    assert item0_pointers.source_location == edi_location("SV1", 7)
+    item0_location = by_path[f"Bundle.entry[{claim_index}].resource.item[0].locationCodeableConcept.coding[0].code"]
+    assert item0_location.value == "11"
+    assert item0_location.source_location == edi_location("CLM", 5, component=1)
+
+    item1_pointers = by_path[f"Bundle.entry[{claim_index}].resource.item[1].diagnosisSequence"]
+    assert item1_pointers.value == "1"
+
+    care_team_entry = by_path[f"Bundle.entry[{claim_index}].resource.careTeam[0].role.coding[0].code"]
+    assert care_team_entry.derivation == "inferred"
+    assert care_team_entry.value == "primary"
+
+    created_entry = by_path[f"Bundle.entry[{claim_index}].resource.created"]
+    assert created_entry.derivation == "direct"
+    assert created_entry.source_location == f"{edi_location('BHT', 4)}+{edi_location('BHT', 5)}"
+
+
+def test_edi_837p_with_dependent_records_both_patients():
+    # edi_837p_with_dependent.x12's own dependent must resolve as its own
+    # Patient's worth of facts, and the claim's own single service line has
+    # no rendering provider - no careTeam fact should appear at all.
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_837p_with_dependent.x12", recorder=recorder)
+    patients = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Patient"]
+    assert len(patients) == 2
+
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+    claim = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Claim")
+    claim_index = next(i for i, e in enumerate(bundle.entry) if e.resource is claim)
+    assert f"Bundle.entry[{claim_index}].resource.careTeam[0].role.coding[0].code" not in by_path
+
+    given_facts = {e.value for e in entries if e.fhir_path.endswith("resource.name[0].given[0]")}
+    assert given_facts == {"JANE", "TED"}
 
 
 def test_edi_278_request_basic_crosswalk_matches_known_field_values():

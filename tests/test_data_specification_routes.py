@@ -57,14 +57,16 @@ def test_api_data_specification_adt_a01_returns_supported_report_with_entries():
 
 
 def test_api_data_specification_edi_input_converts_but_is_unsupported():
-    # 270/271/276/277/278 are instrumented (see app/edi/common.py/
-    # eligibility_270.py/eligibility_271.py/claim_status.py/prior_auth.py),
-    # so a non-instrumented family (837P, still un-instrumented this slice)
-    # is what proves the "converts but unsupported" path for EDI now -
-    # mirroring how the equivalent HL7v2/C-CDA tests each need a
-    # still-unsupported example, not the first one that happened to exist
-    # when this test was originally written.
-    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("edi_837p_basic.x12")})
+    # 270/271/276/277/278/835/837P are instrumented (see app/edi/common.py/
+    # eligibility_270.py/eligibility_271.py/claim_status.py/prior_auth.py/
+    # remittance_835.py/claim_837p.py), so a non-instrumented variant
+    # (837I - 837P/837I/837D share ST01="837" but are tracked
+    # independently, see app/provenance/dispatch.py's own resolve_837_
+    # variant() use) is what proves the "converts but unsupported" path
+    # for EDI now - mirroring how the equivalent HL7v2/C-CDA tests each
+    # need a still-unsupported example, not the first one that happened to
+    # exist when this test was originally written.
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("edi_837i_basic.x12")})
     assert response.status_code == 200
     body = response.json()
     assert body["bundle"]["resourceType"] == "Bundle"
@@ -72,8 +74,8 @@ def test_api_data_specification_edi_input_converts_but_is_unsupported():
     assert report["unsupported"] is True
     assert report["source_format"] == "EDI"
     assert report["message_type"] == "EDI"
-    assert report["trigger_event"] == "837"
-    assert "X12 837" in report["unsupported_reason"]
+    assert report["trigger_event"] == "837I"
+    assert "X12 837I" in report["unsupported_reason"]
 
 
 def test_api_data_specification_270_type_is_now_instrumented():
@@ -113,6 +115,16 @@ def test_api_data_specification_835_type_is_now_instrumented():
     assert report["unsupported"] is False
     assert report["source_format"] == "EDI"
     assert report["trigger_event"] == "835"
+    assert len(report["entries"]) > 0
+
+
+def test_api_data_specification_837p_type_is_now_instrumented():
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("edi_837p_basic.x12")})
+    assert response.status_code == 200
+    report = response.json()["report"]
+    assert report["unsupported"] is False
+    assert report["source_format"] == "EDI"
+    assert report["trigger_event"] == "837P"
     assert len(report["entries"]) > 0
 
 
