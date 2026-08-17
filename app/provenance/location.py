@@ -42,20 +42,32 @@ def xpath_location(*segments: str) -> str:
     return "/".join(segments)
 
 
-def edi_location(segment_id: str, element_num: int, *, component: int | None = None) -> str:
+def edi_location(
+    segment_id: str, element_num: int, *, component: int | None = None, segment_repetition: int | None = None
+) -> str:
     """`edi_location("NM1", 9)` -> `"NM1-9"`; `edi_location("HI", 1,
     component=2)` -> `"HI-1.2"` - the X12 equivalent of `hl7_location()`,
     intentionally the same `SEGMENT-element[.component]` shape since X12's
     own element numbering (`NM109`, i.e. "element 9 of segment NM1") is
-    already positional like HL7v2's fields, just without HL7's own
-    repeating-field-within-one-segment shape - X12 handles repetition via
-    repeated *segments* (multiple `NM1`s, one per loop) rather than
-    repeating elements within one segment, so there's no `repetition`
-    parameter here the way `hl7_location()` has one. `component` mirrors
+    already positional like HL7v2's fields. `component` mirrors
     `app/edi/parser.py::component()`'s own 1-based sub-element numbering
-    into a composite element value (e.g. `HI01`'s own qualifier:code
-    pair)."""
-    location = f"{segment_id}-{element_num}"
+    into a composite element value (e.g. `HI01`'s own qualifier:code pair).
+
+    `segment_repetition` (0-based, mirroring `hl7_location()`'s own
+    `repetition` convention) disambiguates X12's own repetition shape -
+    unlike HL7v2, X12 handles a repeating field by repeating the whole
+    *segment* rather than a value within one segment, so a caller walking
+    several same-type segments (e.g. institutional/dental claims' own
+    multiple `HI` segments, one per diagnosis code-list "type") needs a way
+    to say *which* segment occurrence a value came from - `edi_location("HI",
+    1, component=2, segment_repetition=1)` -> `"HI[1]-1.2"`. Omitted (the
+    common case - most segments this app reads occur at most once per
+    loop) for a location identical to the no-repetition form, so every
+    pre-existing call site's own recorded location string is unaffected."""
+    location = segment_id
+    if segment_repetition is not None:
+        location += f"[{segment_repetition}]"
+    location += f"-{element_num}"
     if component is not None:
         location += f".{component}"
     return location

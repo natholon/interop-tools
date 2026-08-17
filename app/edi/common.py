@@ -328,6 +328,8 @@ def build_diagnosis_codeable_concepts(
     resource_id: str | None = None,
     relative_path_prefix: str | None = None,
     recorder=None,
+    index_offset: int = 0,
+    segment_repetition: int | None = None,
 ) -> list[CodeableConcept]:
     """Parse an HI segment's repeating diagnosis-code composites
     (`HI*ABK:J209*ABF:E119~` = two diagnoses, not two segments) into one
@@ -348,7 +350,20 @@ def build_diagnosis_codeable_concepts(
     837P wrap this function's own returned CodeableConcepts in - hardcoding
     that wrapper name here (rather than leaving it to each caller) is safe
     since both of this function's real consumers target the identical
-    `Claim.diagnosis[]` field."""
+    `Claim.diagnosis[]` field. `index_offset`/`segment_repetition` are both
+    for claim_837i.py's/claim_837d.py's own genuinely different shape:
+    institutional/dental claims can carry several HI segments per claim
+    (one per code-list "type"), each parsed via its own separate call to
+    this function - `index_offset` is needed since each call's own internal
+    `concepts` list starts fresh, so without it every call would record its
+    own diagnoses starting back at FHIR index 0, silently overwriting an
+    earlier HI segment's own facts instead of continuing the real, combined
+    `Claim.diagnosis[]` index sequence; `segment_repetition` (passed through
+    to `edi_location`) is needed for the identical reason on the *source*
+    side - two different physical HI segments can each have their own
+    diagnosis at intra-segment position 1, which would otherwise both
+    record the identical, ambiguous `"HI-1.2"` location string even though
+    they came from different segments in the raw X12 text."""
     if hi is None:
         return []
     concepts = []
@@ -365,8 +380,8 @@ def build_diagnosis_codeable_concepts(
         if recorder and resource_id and relative_path_prefix:
             recorder.record(
                 resource_id,
-                f"{relative_path_prefix}[{len(concepts) - 1}].diagnosisCodeableConcept.coding[0].code",
-                edi_location("HI", position, component=2),
+                f"{relative_path_prefix}[{index_offset + len(concepts) - 1}].diagnosisCodeableConcept.coding[0].code",
+                edi_location("HI", position, component=2, segment_repetition=segment_repetition),
                 code,
             )
     return concepts
