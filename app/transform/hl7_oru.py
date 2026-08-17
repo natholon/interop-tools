@@ -1,16 +1,19 @@
-"""FHIR Bundle -> HL7v2 ORU^R01 - the sixth reverse-direction slice, and
-the second proof (after SIU's `Appointment`) that this architecture
-handles a genuinely different FHIR shape - `DiagnosticReport` +
-`Observation`, with a real *grouping* relationship (`DiagnosticReport.
-result[]` referencing only its own `Observation`s) that neither ADT's
-Encounter nor SIU's flat-participant-list Appointment needed to
-reconstruct. Scoped to R01 alone - R30/R31/R32/R40 all produce identical
-FHIR output on the forward side (see `app/mappings/oru.py`'s own module
-docstring: they differ only in upstream ordering-workflow semantics this
-stateless converter never modeled in the first place), so a real R30/R31/
-R32/R40 reverse slice would be a one-line trigger-string change on top of
-this one, disclosed as a natural next slice rather than speculatively
-built ahead of need.
+"""FHIR Bundle -> HL7v2 ORU - the sixth reverse-direction slice, and the
+second proof (after SIU's `Appointment`) that this architecture handles a
+genuinely different FHIR shape - `DiagnosticReport` + `Observation`, with
+a real *grouping* relationship (`DiagnosticReport.result[]` referencing
+only its own `Observation`s) that neither ADT's Encounter nor SIU's
+flat-participant-list Appointment needed to reconstruct. Originally R01
+alone; **R30/R31/R32/R40 shipped as an immediate follow-up breadth pass**,
+the same "one-line trigger-string change" the module's own original
+docstring disclosed as a natural next step - confirmed genuinely trivial,
+not just assumed: `app/mappings/oru.py::BaseOruMapper` handles all five
+triggers with byte-for-byte identical forward logic (they differ only in
+upstream ordering-workflow semantics this stateless converter never
+modeled), so the reverse direction mirrors that exactly via a
+`_BaseOruBuilder` + five one-line `trigger_event` subclasses, the same
+`_BaseAdtBuilder` shape `hl7_adt.py` already established for its own
+five-trigger breadth pass.
 
 Reverses `app/mappings/oru.py::build_observation`/`build_diagnostic_report`
 field-for-field: `OBR-4`/`-7`/`-8`/`-22`/`-25` (code/effective timing/
@@ -158,19 +161,23 @@ def _build_obr(index: int, report) -> str:
     return segment("OBR", fields, 25)
 
 
-class OruR01Builder(MessageBuilder):
+class _BaseOruBuilder(MessageBuilder):
+    trigger_event: str
+
     def build_message(self, bundle: Bundle) -> str:
         patient = find_resource(bundle, "Patient")
         if patient is None:
-            raise MappingError("Bundle has no Patient resource - cannot build an ORU^R01 message")
+            raise MappingError(f"Bundle has no Patient resource - cannot build an ORU^{self.trigger_event} message")
         reports = find_resources(bundle, "DiagnosticReport")
         if not reports:
-            raise MappingError("Bundle has no DiagnosticReport resource - cannot build an ORU^R01 message")
+            raise MappingError(
+                f"Bundle has no DiagnosticReport resource - cannot build an ORU^{self.trigger_event} message"
+            )
         encounter = find_resource(bundle, "Encounter")
         observations_by_id = {o.id: o for o in find_resources(bundle, "Observation")}
         practitioners_by_id = {p.id: p for p in find_resources(bundle, "Practitioner")}
 
-        msh, _msh_dt = build_msh(bundle, "ORU", "R01")
+        msh, _msh_dt = build_msh(bundle, "ORU", self.trigger_event)
         pv1 = _build_pv1(encounter)
         pid = build_pid(patient)
 
@@ -189,3 +196,23 @@ class OruR01Builder(MessageBuilder):
                 segments.append(_build_obx(obx_index, observation, practitioners_by_id))
 
         return "\r".join(segments) + "\r"
+
+
+class OruR01Builder(_BaseOruBuilder):
+    trigger_event = "R01"
+
+
+class OruR30Builder(_BaseOruBuilder):
+    trigger_event = "R30"
+
+
+class OruR31Builder(_BaseOruBuilder):
+    trigger_event = "R31"
+
+
+class OruR32Builder(_BaseOruBuilder):
+    trigger_event = "R32"
+
+
+class OruR40Builder(_BaseOruBuilder):
+    trigger_event = "R40"

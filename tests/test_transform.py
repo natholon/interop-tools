@@ -35,6 +35,12 @@ def test_list_supported_targets_includes_oru_r01():
     assert ("HL7", "ORU", "R01") in list_supported_targets()
 
 
+def test_list_supported_targets_includes_all_five_oru_triggers():
+    targets = list_supported_targets()
+    for trigger in ("R01", "R30", "R31", "R32", "R40"):
+        assert ("HL7", "ORU", trigger) in targets
+
+
 def test_list_supported_targets_includes_ccd():
     assert ("CDA", "CCD", "") in list_supported_targets()
 
@@ -493,6 +499,32 @@ def test_oru_r01_round_trip_preserves_observation_values_and_performer():
     )
     assert practitioner.name[0].family == "Rivera"
     assert practitioner.name[0].given == ["Ana"]
+
+
+@pytest.mark.parametrize(
+    "trigger,fixture",
+    [("R30", "oru_r30_basic.hl7"), ("R31", "oru_r31_basic.hl7"), ("R32", "oru_r32_basic.hl7"), ("R40", "oru_r40_basic.hl7")],
+)
+def test_oru_trigger_round_trips_and_preserves_report_grouping(trigger, fixture):
+    # R01/R30/R31/R32/R40 all reuse the identical base builder - this
+    # confirms the trigger-string swap alone is enough for each sibling.
+    forward_text = (FIXTURES / fixture).read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+
+    message_text = build_message_from_bundle(bundle, "HL7", "ORU", trigger)
+    assert f"||ORU^{trigger}|" in message_text
+
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    original_reports = sorted(
+        (e.resource for e in bundle.entry if e.resource.get_resource_type() == "DiagnosticReport"),
+        key=lambda r: r.code.coding[0].code,
+    )
+    round_tripped_reports = sorted(
+        (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DiagnosticReport"),
+        key=lambda r: r.code.coding[0].code,
+    )
+    assert [r.code.coding[0].code for r in round_tripped_reports] == [r.code.coding[0].code for r in original_reports]
+    assert [len(r.result) for r in round_tripped_reports] == [len(r.result) for r in original_reports]
 
 
 def test_oru_r01_missing_patient_raises_mapping_error():

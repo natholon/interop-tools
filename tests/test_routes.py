@@ -351,6 +351,26 @@ def test_index_transform_target_dropdown_includes_oru_r01():
     assert "HL7 ORU^R01" in response.text
 
 
+def test_index_transform_target_dropdown_includes_all_five_oru_triggers():
+    response = client.get("/")
+    assert response.status_code == 200
+    for trigger in ("R01", "R30", "R31", "R32", "R40"):
+        assert f"HL7 ORU^{trigger}" in response.text
+
+
+def test_api_transform_builds_oru_r30_message():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("oru_r30_basic.hl7")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": bundle_json, "target_format": "HL7", "target_type": "ORU", "target_trigger": "R30"},
+    )
+    assert response.status_code == 200
+    message_text = response.json()["message_text"]
+    assert "||ORU^R30|" in message_text
+
+
 def test_api_transform_builds_oru_r01_message():
     convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("oru_r01_basic.hl7")})
     bundle_json = json.dumps(convert_response.json()["bundle"])
