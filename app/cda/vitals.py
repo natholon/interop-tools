@@ -44,8 +44,9 @@ from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.observation import Observation
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, parse_partial_ts
+from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, effective_time_location, parse_partial_ts
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
+from app.provenance.location import xpath_location
 
 # Public (not module-private) - reused by app/cda/generator.py and
 # app/cda/validation.py, same pattern as every other section module.
@@ -89,42 +90,112 @@ def _category() -> CodeableConcept:
     return CodeableConcept(coding=[Coding(system=_CATEGORY_SYSTEM, code=_CATEGORY_CODE)])
 
 
-def _build_vital_sign_observation(observation_element, patient_id: str) -> Observation | None:
-    code = build_codeable_concept_from_cd(find_child(observation_element, "code"))
+def _record_fixed_status_and_category(recorder, resource_id: str) -> None:
+    """status and category are both fixed per the C-CDA spec itself, for
+    both the panel and every member Observation - no ConceptMap, no
+    source field to point at, so both are recorded inferred with the
+    identical disclosed reason regardless of which resource carries them."""
+    recorder.record_inferred(
+        resource_id,
+        "status",
+        'C-CDA fixes Vital Signs statusCode to "completed" per the spec itself -> FHIR "final", not read from any per-entry field.',
+        _FIXED_STATUS,
+    )
+    recorder.record_inferred(
+        resource_id,
+        "category[0].coding[0].code",
+        "Every Vital Signs Observation this app builds (panel or member) carries category=\"vital-signs\" unconditionally - not read from any C-CDA field.",
+        _CATEGORY_CODE,
+    )
+
+
+def _member_base(index: int) -> str:
+    """The i-th (0-based) component's own nested Observation - an organizer
+    commonly wraps more than one member, so a bare "organizer/component/
+    observation" alone would record the identical, ambiguous location for
+    every member's own facts, the same collision risk Allergies' own
+    multiple-reaction fix and 837I's own multi-HI-segment fix already
+    addressed - disambiguated here proactively the same way."""
+    return xpath_location("organizer", f"component[{index}]", "observation")
+
+
+def _build_vital_sign_observation(
+    observation_element, patient_id: str, index: int, recorder=None
+) -> Observation | None:
+    code_element = find_child(observation_element, "code")
+    code = build_codeable_concept_from_cd(code_element)
     if code is None:
         # No resolvable coded value - skip the entry, matching every other
         # section's own "no resolvable code -> skip" convention (Problems,
         # Medications, Allergies, Immunizations).
         return None
 
+    observation_id = str(uuid.uuid4())
     observation = Observation(
-        id=str(uuid.uuid4()),
+        id=observation_id,
         status=_FIXED_STATUS,
         category=[_category()],
         code=code,
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
     )
 
-    effective, _ = ivl_ts_bounds(find_child(observation_element, "effectiveTime"))
+    member_base = _member_base(index)
+    if recorder:
+        _record_fixed_status_and_category(recorder, observation_id)
+        code_value = code_element.get("code")
+        display_value = code_element.get("displayName")
+        if code_value:
+            recorder.record(observation_id, "code.coding[0].code", f"{member_base}/code/@code", code_value)
+        if display_value:
+            recorder.record(observation_id, "code.coding[0].display", f"{member_base}/code/@displayName", display_value)
+
+    effective_time = find_child(observation_element, "effectiveTime")
+    effective, _ = ivl_ts_bounds(effective_time)
     effective_dt = parse_partial_ts(effective)
     if effective_dt:
         observation.effectiveDateTime = effective_dt
+        if recorder:
+            recorder.record(
+                observation_id,
+                "effectiveDateTime",
+                effective_time_location(f"{member_base}/effectiveTime", effective_time, "low"),
+                effective_dt,
+            )
 
-    value = build_quantity_from_pq(find_child(observation_element, "value"))
+    value_element = find_child(observation_element, "value")
+    value = build_quantity_from_pq(value_element)
     if value:
         observation.valueQuantity = value
+        if recorder:
+            recorder.record(observation_id, "valueQuantity.value", f"{member_base}/value/@value", value_element.get("value"))
+            if value.unit:
+                recorder.record(observation_id, "valueQuantity.unit", f"{member_base}/value/@unit", value.unit)
 
-    interpretation = build_codeable_concept_from_cd(find_child(observation_element, "interpretationCode"))
+    interpretation_element = find_child(observation_element, "interpretationCode")
+    interpretation = build_codeable_concept_from_cd(interpretation_element)
     if interpretation:
         observation.interpretation = [interpretation]
+        if recorder:
+            recorder.record(
+                observation_id,
+                "interpretation[0].coding[0].code",
+                f"{member_base}/interpretationCode/@code",
+                interpretation.coding[0].code,
+            )
 
-    method = build_codeable_concept_from_cd(find_child(observation_element, "methodCode"))
+    method_element = find_child(observation_element, "methodCode")
+    method = build_codeable_concept_from_cd(method_element)
     if method:
         observation.method = method
+        if recorder:
+            recorder.record(observation_id, "method.coding[0].code", f"{member_base}/methodCode/@code", method.coding[0].code)
 
-    body_site = build_codeable_concept_from_cd(find_child(observation_element, "targetSiteCode"))
+    body_site_element = find_child(observation_element, "targetSiteCode")
+    body_site = build_codeable_concept_from_cd(body_site_element)
     if body_site:
         observation.bodySite = body_site
+        if recorder:
+            recorder.record(observation_id, "bodySite.coding[0].code", f"{member_base}/targetSiteCode/@code", body_site.coding[0].code)
 
     return observation
 
@@ -136,12 +207,7 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
     returned as a flat list of separate, top-level resources. An organizer
     whose every child observation lacks a resolvable code produces no
     panel either (nothing to group), matching the "no resolvable code ->
-    skip" convention at the organizer level too, not just the leaf level.
-
-    `recorder` is accepted (see app/provenance/) but not yet acted on - see
-    app/cda/medications.py::build_medication_requests' own docstring for
-    why every SECTION_BUILDERS entry accepts it uniformly regardless of
-    whether its own section is instrumented yet."""
+    skip" convention at the organizer level too, not just the leaf level."""
     observations: list[Observation] = []
     for entry in find_all(section, "entry"):
         organizer = find_child(entry, "organizer")
@@ -149,19 +215,20 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
             continue
 
         member_observations = []
-        for component in find_all(organizer, "component"):
+        for index, component in enumerate(find_all(organizer, "component")):
             observation_element = find_child(component, "observation")
             if observation_element is None or not has_template_id(observation_element, OBSERVATION_TEMPLATE_ID):
                 continue
-            observation = _build_vital_sign_observation(observation_element, patient_id)
+            observation = _build_vital_sign_observation(observation_element, patient_id, index, recorder=recorder)
             if observation is not None:
                 member_observations.append(observation)
 
         if not member_observations:
             continue
 
+        panel_id = str(uuid.uuid4())
         panel = Observation(
-            id=str(uuid.uuid4()),
+            id=panel_id,
             status=_FIXED_STATUS,
             category=[_category()],
             code=CodeableConcept(coding=[Coding(system=PANEL_CODE_SYSTEM, code=PANEL_CODE)]),
@@ -169,15 +236,32 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
             hasMember=[Reference(reference=f"urn:uuid:{member.id}") for member in member_observations],
         )
 
+        if recorder:
+            _record_fixed_status_and_category(recorder, panel_id)
+            recorder.record_inferred(
+                panel_id,
+                "code.coding[0].code",
+                'The IG\'s own "C-CDA Vital Signs Organizer to FHIR Observation Panel" table fixes this to "85353-1" - the organizer\'s own narrative-only /code is never read into this field.',
+                PANEL_CODE,
+            )
+
         # If organizer/effectiveTime is missing, the IG's own guidance says
         # to fall back to the earliest/latest observation effectiveTime -
         # disclosed and deferred (every real example fetched while
         # verifying this module carried its own organizer-level
         # effectiveTime, making this the rare case, not the common one).
-        organizer_effective, _ = ivl_ts_bounds(find_child(organizer, "effectiveTime"))
+        organizer_effective_time = find_child(organizer, "effectiveTime")
+        organizer_effective, _ = ivl_ts_bounds(organizer_effective_time)
         panel_effective_dt = parse_partial_ts(organizer_effective)
         if panel_effective_dt:
             panel.effectiveDateTime = panel_effective_dt
+            if recorder:
+                recorder.record(
+                    panel_id,
+                    "effectiveDateTime",
+                    effective_time_location("organizer/effectiveTime", organizer_effective_time, "low"),
+                    panel_effective_dt,
+                )
 
         observations.append(panel)
         observations.extend(member_observations)

@@ -6,9 +6,10 @@ test_cda_validation.py already established relative to the HL7v2
 test_validation_*.py files.
 
 Scope so far: the document header (Patient + optional Encounter), Problems,
-Medications, Allergies, and Immunizations - see app/provenance/dispatch.py's
-own _CDA_UNSUPPORTED_REASON for why no CDA document type is "fully
-instrumented" yet despite these pieces producing real facts."""
+Medications, Allergies, Immunizations, and Vital Signs - see
+app/provenance/dispatch.py's own _CDA_UNSUPPORTED_REASON for why no CDA
+document type is "fully instrumented" yet despite these pieces producing
+real facts."""
 
 import itertools
 import uuid
@@ -41,10 +42,10 @@ def _build_bundle(fixture_name: str, recorder=None):
 
 
 # A representative fixture per document type this slice's own header +
-# Problems + Medications + Allergies + Immunizations instrumentation
-# touches, plus a few fixtures whose own section (Vitals/Results/
+# Problems + Medications + Allergies + Immunizations + Vital Signs
+# instrumentation touches, plus a few fixtures whose own section (Results/
 # Procedures) is NOT instrumented yet - included specifically to prove the
-# "accept recorder, no-op" additions to those 3 other SECTION_BUILDERS
+# "accept recorder, no-op" additions to those 2 other SECTION_BUILDERS
 # entries don't alter their own output either.
 _CDA_FIXTURES = [
     "ccd_basic.xml",
@@ -465,6 +466,71 @@ def test_ccd_immunizations_basic_crosswalk_matches_known_field_values():
     # The INT-mood planned entry never produces an Immunization at all -
     # only two vaccineCode facts should exist anywhere in the crosswalk.
     assert sum(1 for e in entries if "vaccineCode.coding[0].code" in e.fhir_path) == 2
+
+
+def test_ccd_vitals_basic_crosswalk_matches_known_field_values():
+    # ccd_vitals_basic.xml's own one Vital Signs Organizer wraps two Vital
+    # Sign Observations - Heart Rate (with an interpretationCode) and Body
+    # Temperature (without one) - the same fixture test_ccd_mapping.py
+    # itself asserts against. The first real proof (after ORU's own
+    # DiagnosticReport/Observation grouping) that this pillar can
+    # reconstruct a panel/member grouping relationship, not just a flat
+    # entry list.
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("ccd_vitals_basic.xml", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    panel_index = next(
+        i
+        for i, e in enumerate(bundle.entry)
+        if e.resource.get_resource_type() == "Observation" and e.resource.hasMember
+    )
+    member_indices = [
+        i
+        for i, e in enumerate(bundle.entry)
+        if e.resource.get_resource_type() == "Observation" and not e.resource.hasMember
+    ]
+    assert len(member_indices) == 2
+    heart_rate_index, temperature_index = (
+        (member_indices[0], member_indices[1])
+        if bundle.entry[member_indices[0]].resource.code.coding[0].code == "8867-4"
+        else (member_indices[1], member_indices[0])
+    )
+
+    # The panel's own status/category/code are all fixed, inferred facts -
+    # never read from the organizer's own /code.
+    panel_prefix = f"Bundle.entry[{panel_index}].resource"
+    panel_code_entry = by_path[f"{panel_prefix}.code.coding[0].code"]
+    assert panel_code_entry.value == "85353-1"
+    assert panel_code_entry.derivation == "inferred"
+    panel_status_entry = by_path[f"{panel_prefix}.status"]
+    assert panel_status_entry.derivation == "inferred"
+    panel_effective_entry = by_path[f"{panel_prefix}.effectiveDateTime"]
+    assert panel_effective_entry.derivation == "direct"
+    assert panel_effective_entry.source_location == xpath_location("organizer", "effectiveTime", "@value")
+
+    heart_rate_prefix = f"Bundle.entry[{heart_rate_index}].resource"
+    hr_code_entry = by_path[f"{heart_rate_prefix}.code.coding[0].code"]
+    assert hr_code_entry.value == "8867-4"
+    assert hr_code_entry.derivation == "direct"
+    assert hr_code_entry.source_location == xpath_location("organizer", "component[0]", "observation", "code", "@code")
+    hr_value_entry = by_path[f"{heart_rate_prefix}.valueQuantity.value"]
+    assert hr_value_entry.value == "76"
+    hr_unit_entry = by_path[f"{heart_rate_prefix}.valueQuantity.unit"]
+    assert hr_unit_entry.value == "/min"
+    hr_interpretation_entry = by_path[f"{heart_rate_prefix}.interpretation[0].coding[0].code"]
+    assert hr_interpretation_entry.value == "N"
+
+    temperature_prefix = f"Bundle.entry[{temperature_index}].resource"
+    temp_code_entry = by_path[f"{temperature_prefix}.code.coding[0].code"]
+    assert temp_code_entry.value == "8310-5"
+    assert temp_code_entry.source_location == xpath_location("organizer", "component[1]", "observation", "code", "@code")
+    # The two members' source locations must genuinely differ - the
+    # disambiguation this section's own multiple-member shape needs, the
+    # same collision class Allergies'/837I's own fixes already established.
+    assert temp_code_entry.source_location != hr_code_entry.source_location
+    assert f"{temperature_prefix}.interpretation[0].coding[0].code" not in by_path
 
 
 def test_discharge_medications_reuses_medications_own_recorder_instrumentation():
