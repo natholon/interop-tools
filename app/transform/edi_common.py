@@ -37,6 +37,42 @@ DEFAULT_GS_CONTROL = "1"
 DEFAULT_ST_CONTROL = "0001"
 
 
+_X12_RESERVED_CHARS = "*:~\r\n"
+
+
+def sanitize_x12_text(value) -> str:
+    """Strips X12's own reserved delimiter characters - element separator
+    `*`, component separator `:`, segment terminator `~` (this app's own
+    fixed choices for every generated interchange - see
+    `build_envelope_segments`/`DEFAULT_ST_CONTROL` below) - plus newlines
+    (a segment must stay on one physical line), from a value before it's
+    interpolated into a generated segment.
+
+    A genuine, disclosed lossy simplification, not an oversight: X12
+    defines no universal escape-character convention, and this app's own
+    parser (`app/edi/parser.py`) splits purely positionally on the raw
+    delimiter byte with no escape awareness at all - so a literal reserved
+    character inside regenerated free text can't be round-tripped
+    losslessly without extending the parser itself, a forward-direction
+    change out of scope for a reverse-direction fix. Stripping keeps the
+    regenerated segment well-formed rather than silently corrupting every
+    later positional field's own offset the way an unescaped reserved
+    character previously did - reproduced directly: an `Organization.name`
+    of `"Smith*Jones Medical Group"` previously split `NM103` into
+    `"Smith"`/`"Jones Medical Group"` across two elements, shifting the id
+    qualifier/value fields that follow out of position with no error
+    raised anywhere. Every builder that writes a resource-derived name,
+    identifier value, or free-text field into a segment calls this first -
+    `build_org_nm1`/`build_person_nm1` below, `remittance_835.py`'s own N1
+    builder, and `edi_271.py`'s own EB05 description field."""
+    if value is None:
+        return ""
+    text = str(value)
+    for char in _X12_RESERVED_CHARS:
+        text = text.replace(char, " ")
+    return text
+
+
 def reverse_nm1_qualifier(identifier) -> str:
     if identifier is None or not identifier.system:
         return _DEFAULT_ID_QUALIFIER
@@ -48,22 +84,22 @@ def reverse_nm1_qualifier(identifier) -> str:
 
 
 def build_org_nm1(entity_code: str, organization) -> str:
-    name = organization.name or "UNKNOWN"
+    name = sanitize_x12_text(organization.name) or "UNKNOWN"
     identifier = organization.identifier[0] if organization.identifier else None
     if identifier and identifier.value:
         qualifier = reverse_nm1_qualifier(identifier)
-        return f"NM1*{entity_code}*2*{name}*****{qualifier}*{identifier.value}~"
+        return f"NM1*{entity_code}*2*{name}*****{qualifier}*{sanitize_x12_text(identifier.value)}~"
     return f"NM1*{entity_code}*2*{name}~"
 
 
 def build_person_nm1(entity_code: str, person, include_id: bool) -> str:
     name = person.name[0] if person.name else None
-    family = (name.family or "") if name else ""
-    given = name.given[0] if name and name.given else ""
+    family = sanitize_x12_text(name.family) if name and name.family else ""
+    given = sanitize_x12_text(name.given[0]) if name and name.given else ""
     identifier = person.identifier[0] if person.identifier else None
     if include_id and identifier and identifier.value:
         qualifier = reverse_nm1_qualifier(identifier)
-        return f"NM1*{entity_code}*1*{family}*{given}****{qualifier}*{identifier.value}~"
+        return f"NM1*{entity_code}*1*{family}*{given}****{qualifier}*{sanitize_x12_text(identifier.value)}~"
     return f"NM1*{entity_code}*1*{family}*{given}~"
 
 

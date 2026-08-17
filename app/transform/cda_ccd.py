@@ -123,6 +123,29 @@ _CLINICAL_STATUS_TO_ACT_STATUS = {"active": "active", "inactive": "suspended", "
 _PLACEHOLDER_ROOT = "2.16.840.1.113883.19.5.99999.1"
 
 
+def _esc(value) -> str:
+    """XML-escapes a value before it's interpolated into element text
+    content or a double-quoted attribute value - this module builds XML
+    via raw f-strings (not ElementTree), so nothing does this
+    automatically, unlike the parsing side's own `xml.etree.ElementTree`
+    use. `&` must be escaped first (escaping `<`/`>` before `&` would
+    double-escape the literal ampersand `&lt;` etc. just produced).
+    Escaping `"` is what attribute-value safety needs (every attribute in
+    this module uses double quotes, never single); escaping it in text
+    content too is harmless, so one function safely covers both contexts.
+    A real, reproduced bug this fixes: any `Coding.display` (a diagnosis/
+    medication/allergen display name) containing a literal `&` - extremely
+    plausible for real clinical text (e.g. "Diseases of the ear & mastoid
+    process") - previously produced unparseable XML (`CdaParseError: not
+    well-formed`) on the very next forward pass, silently breaking
+    `/api/transform` for that Bundle. `None` passes through as `""` so
+    every existing `if field:`-guarded call site stays a one-line wrap."""
+    if value is None:
+        return ""
+    text = str(value)
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
 def _reverse_identifier_root(identifier) -> str:
     """The reverse of app.cda.common.build_identifier's own root/extension
     resolution: an Identifier.system of urn:oid:<root> (the shape
@@ -139,14 +162,14 @@ def _reverse_identifier_root(identifier) -> str:
 
 def _build_patient_role(patient) -> str:
     ids = "".join(
-        f'<id root="{_reverse_identifier_root(identifier)}" extension="{identifier.value}"/>'
+        f'<id root="{_reverse_identifier_root(identifier)}" extension="{_esc(identifier.value)}"/>'
         for identifier in (patient.identifier or [])
     )
     name = ""
     if patient.name:
         human_name = patient.name[0]
-        family = f"<family>{human_name.family}</family>" if human_name.family else ""
-        given = "".join(f"<given>{g}</given>" for g in (human_name.given or []))
+        family = f"<family>{_esc(human_name.family)}</family>" if human_name.family else ""
+        given = "".join(f"<given>{_esc(g)}</given>" for g in (human_name.given or []))
         name = f"<name>{given}{family}</name>"
     gender = ""
     if patient.gender:
@@ -157,17 +180,17 @@ def _build_patient_role(patient) -> str:
     addr = ""
     if patient.address:
         address = patient.address[0]
-        lines = "".join(f"<streetAddressLine>{line}</streetAddressLine>" for line in (address.line or []))
-        city = f"<city>{address.city}</city>" if address.city else ""
-        state = f"<state>{address.state}</state>" if address.state else ""
-        postal_code = f"<postalCode>{address.postalCode}</postalCode>" if address.postalCode else ""
-        country = f"<country>{address.country}</country>" if address.country else ""
+        lines = "".join(f"<streetAddressLine>{_esc(line)}</streetAddressLine>" for line in (address.line or []))
+        city = f"<city>{_esc(address.city)}</city>" if address.city else ""
+        state = f"<state>{_esc(address.state)}</state>" if address.state else ""
+        postal_code = f"<postalCode>{_esc(address.postalCode)}</postalCode>" if address.postalCode else ""
+        country = f"<country>{_esc(address.country)}</country>" if address.country else ""
         addr = f"<addr>{lines}{city}{state}{postal_code}{country}</addr>"
     telecom = ""
     if patient.telecom:
         contact_point = patient.telecom[0]
         scheme = "tel" if contact_point.system == "phone" else "mailto" if contact_point.system == "email" else "tel"
-        telecom = f'<telecom value="{scheme}:{contact_point.value}"/>'
+        telecom = f'<telecom value="{_esc(f"{scheme}:{contact_point.value}")}"/>'
 
     return (
         f'<recordTarget><patientRole>{ids}{addr}{telecom}'
@@ -180,7 +203,7 @@ def _build_component_of(encounter) -> str:
     if encounter is None:
         return ""
     ids = "".join(
-        f'<id root="{_reverse_identifier_root(identifier)}" extension="{identifier.value}"/>'
+        f'<id root="{_reverse_identifier_root(identifier)}" extension="{_esc(identifier.value)}"/>'
         for identifier in (encounter.identifier or [])
     )
     class_code = "AMB"
@@ -238,8 +261,8 @@ def _build_cd_attrs(coding) -> str:
     coding_system_not_just_code`)."""
     code_system = _reverse_code_system(coding.system)
     code_system_attr = f' codeSystem="{code_system}"' if code_system else ""
-    display = f' displayName="{coding.display}"' if coding.display else ""
-    return f'code="{coding.code}"{code_system_attr}{display}'
+    display = f' displayName="{_esc(coding.display)}"' if coding.display else ""
+    return f'code="{_esc(coding.code)}"{code_system_attr}{display}'
 
 
 def _build_problem_entry(condition, act_template_id: str = CONCERN_ACT_TEMPLATE_ID) -> str:
@@ -338,10 +361,10 @@ def _build_dosage_elements(request) -> str:
     if dosage.doseAndRate:
         dose_and_rate = dosage.doseAndRate[0]
         if dose_and_rate.doseQuantity is not None:
-            unit = f' unit="{dose_and_rate.doseQuantity.unit}"' if dose_and_rate.doseQuantity.unit else ""
+            unit = f' unit="{_esc(dose_and_rate.doseQuantity.unit)}"' if dose_and_rate.doseQuantity.unit else ""
             dose_quantity = f'<doseQuantity value="{dose_and_rate.doseQuantity.value}"{unit}/>'
         if dose_and_rate.rateQuantity is not None:
-            unit = f' unit="{dose_and_rate.rateQuantity.unit}"' if dose_and_rate.rateQuantity.unit else ""
+            unit = f' unit="{_esc(dose_and_rate.rateQuantity.unit)}"' if dose_and_rate.rateQuantity.unit else ""
             rate_quantity = f'<rateQuantity value="{dose_and_rate.rateQuantity.value}"{unit}/>'
 
     effective_time = ""
@@ -357,7 +380,7 @@ def _build_dosage_elements(request) -> str:
         free_text_sig = (
             '<entryRelationship typeCode="COMP"><substanceAdministration classCode="SBADM" moodCode="EVN">'
             f'<templateId root="{FREE_TEXT_SIG_TEMPLATE_ID}"/>'
-            f"<text>{dosage.patientInstruction}</text>"
+            f"<text>{_esc(dosage.patientInstruction)}</text>"
             "</substanceAdministration></entryRelationship>"
         )
 
@@ -560,7 +583,7 @@ def _build_immunization_entry(immunization) -> str:
         immunization.vaccineCode.coding[0] if immunization.vaccineCode and immunization.vaccineCode.coding else None
     )
     consumable_code = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
-    lot_number = f"<lotNumberText>{immunization.lotNumber}</lotNumberText>" if immunization.lotNumber else ""
+    lot_number = f"<lotNumberText>{_esc(immunization.lotNumber)}</lotNumberText>" if immunization.lotNumber else ""
 
     act_status = _IMMUNIZATION_STATUS_TO_ACT_STATUS.get(immunization.status, _DEFAULT_IMMUNIZATION_ACT_STATUS)
     negation_attr = ' negationInd="true"' if immunization.status == "not-done" else ""
@@ -582,7 +605,7 @@ def _build_immunization_entry(immunization) -> str:
 
     dose_quantity = ""
     if immunization.doseQuantity is not None:
-        unit = f' unit="{immunization.doseQuantity.unit}"' if immunization.doseQuantity.unit else ""
+        unit = f' unit="{_esc(immunization.doseQuantity.unit)}"' if immunization.doseQuantity.unit else ""
         dose_quantity = f'<doseQuantity value="{immunization.doseQuantity.value}"{unit}/>'
 
     return (
@@ -627,7 +650,7 @@ def _build_vital_sign_observation_element(observation) -> str:
     )
     value = ""
     if observation.valueQuantity is not None:
-        unit = f' unit="{observation.valueQuantity.unit}"' if observation.valueQuantity.unit else ""
+        unit = f' unit="{_esc(observation.valueQuantity.unit)}"' if observation.valueQuantity.unit else ""
         value = f'<value xsi:type="PQ" value="{observation.valueQuantity.value}"{unit}/>'
     interpretation = ""
     if observation.interpretation and observation.interpretation[0].coding:
@@ -709,14 +732,14 @@ def _build_result_value_element(observation) -> str:
     regardless of whether the original was PQ or REAL - the choice is
     provably inert for round-trip correctness, not a corner cut."""
     if observation.valueQuantity is not None:
-        unit = f' unit="{observation.valueQuantity.unit}"' if observation.valueQuantity.unit else ""
+        unit = f' unit="{_esc(observation.valueQuantity.unit)}"' if observation.valueQuantity.unit else ""
         return f'<value xsi:type="PQ" value="{observation.valueQuantity.value}"{unit}/>'
     if observation.valueCodeableConcept is not None and observation.valueCodeableConcept.coding:
         return f'<value xsi:type="CD" {_build_cd_attrs(observation.valueCodeableConcept.coding[0])}/>'
     if observation.valueInteger is not None:
         return f'<value xsi:type="INT" value="{observation.valueInteger}"/>'
     if observation.valueString is not None:
-        return f'<value xsi:type="ST">{observation.valueString}</value>'
+        return f'<value xsi:type="ST">{_esc(observation.valueString)}</value>'
     return ""
 
 
@@ -724,8 +747,8 @@ def _build_reference_range_element(observation) -> str:
     if not observation.referenceRange:
         return ""
     reference_range = observation.referenceRange[0]
-    low = f'<low value="{reference_range.low.value}" unit="{reference_range.low.unit or ""}"/>' if reference_range.low else ""
-    high = f'<high value="{reference_range.high.value}" unit="{reference_range.high.unit or ""}"/>' if reference_range.high else ""
+    low = f'<low value="{reference_range.low.value}" unit="{_esc(reference_range.low.unit or "")}"/>' if reference_range.low else ""
+    high = f'<high value="{reference_range.high.value}" unit="{_esc(reference_range.high.unit or "")}"/>' if reference_range.high else ""
     if not low and not high:
         return ""
     return (
@@ -834,8 +857,8 @@ def _reverse_generic_identifier(identifier) -> str:
         return f'<id root="{root}"/>'
     if identifier.system and identifier.system.startswith("urn:oid:"):
         root = identifier.system[len("urn:oid:") :]
-        return f'<id root="{root}" extension="{identifier.value}"/>'
-    return f'<id extension="{identifier.value or ""}"/>'
+        return f'<id root="{root}" extension="{_esc(identifier.value)}"/>'
+    return f'<id extension="{_esc(identifier.value or "")}"/>'
 
 
 def _build_procedure_entry(procedure) -> str:
@@ -934,7 +957,7 @@ def build_sectioned_document(
     diagnostic_reports = find_resources(bundle, "DiagnosticReport")
     procedures = find_resources(bundle, "Procedure")
 
-    document_id = bundle.identifier.value if bundle.identifier else "TT000"
+    document_id = _esc(bundle.identifier.value) if bundle.identifier else "TT000"
     document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
     effective_time = format_hl7_ts(bundle.timestamp) if bundle.timestamp else ""
 

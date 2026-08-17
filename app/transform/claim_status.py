@@ -59,6 +59,7 @@ from app.transform.edi_common import (
     build_person_nm1,
     build_trailer_segments,
     envelope_datetime,
+    sanitize_x12_text,
 )
 
 # Reverse of app.edi.claim_status.STC_CATEGORY_PREFIX_TO_TASK_STATUS -
@@ -199,7 +200,7 @@ class _BaseClaimStatusBuilder(MessageBuilder):
         )
 
         now = envelope_datetime(bundle.timestamp)
-        bht_reference = bundle.identifier.value if bundle.identifier else "REF00000001"
+        bht_reference = sanitize_x12_text(bundle.identifier.value) if bundle.identifier and bundle.identifier.value else "REF00000001"
 
         envelope_segments = build_envelope_segments(now)
         st_to_hl_segments = [

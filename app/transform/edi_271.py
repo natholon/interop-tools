@@ -50,6 +50,7 @@ from app.transform.edi_common import (
     envelope_datetime,
     resolve_payer_and_provider,
     resolve_subscriber_and_dependent,
+    sanitize_x12_text,
 )
 
 # Reverse of eligibility_271.py's own _EB01_EXCLUDED_MAP (module-private
@@ -76,7 +77,7 @@ def _build_eb(item) -> str:
         coding = item.category.coding[0]
         if coding.system == SERVICE_TYPE_CODE_SYSTEM:
             code = coding.code or ""
-    description = item.description or ""
+    description = sanitize_x12_text(item.description) if item.description else ""
     network = ""
     if item.network and item.network.text:
         network = _NETWORK_TEXT_TO_EB12.get(item.network.text, "")
@@ -99,7 +100,7 @@ class Edi271Builder(MessageBuilder):
         subscriber, dependent = resolve_subscriber_and_dependent(bundle, patients)
 
         now = envelope_datetime(bundle.timestamp)
-        bht_reference = bundle.identifier.value if bundle.identifier else "REF00000001"
+        bht_reference = sanitize_x12_text(bundle.identifier.value) if bundle.identifier and bundle.identifier.value else "REF00000001"
 
         envelope_segments = build_envelope_segments(now)
 

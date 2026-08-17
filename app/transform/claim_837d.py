@@ -111,6 +111,7 @@ from app.transform.edi_common import (
     org_or_person_nm1,
     resolve_by_reference,
     resolve_subscriber_and_dependent,
+    sanitize_x12_text,
 )
 
 VERSION = "005010X224A2"
@@ -177,7 +178,10 @@ def _build_sv3_segment(item) -> str:
     (see CLAUDE.md's own testing guidance)."""
     fields = [""] * 11
     fields[0] = _reverse_procedure_composite(item)  # SV3-01
-    fields[1] = str(item.unitPrice.value) if item.unitPrice else "0.00"  # SV3-02
+    # :.2f, not str(Decimal) - see remittance_835.py's own
+    # _build_bpr_segment comment for why str() is vulnerable to
+    # trailing-zero loss once a Bundle has round-tripped through JSON.
+    fields[1] = f"{item.unitPrice.value:.2f}" if item.unitPrice else "0.00"  # SV3-02
     fields[5] = str(item.quantity.value) if item.quantity else "1"  # SV3-06
     pointers = (item.diagnosisSequence or [])[:_MAX_DIAGNOSIS_POINTERS]
     if pointers:
@@ -208,8 +212,11 @@ def _resolve_pos_code(claim) -> str:
 
 
 def _build_clm_segment(claim) -> str:
-    claim_id = claim.identifier[0].value if claim.identifier else "0000000000"
-    total = str(claim.total.value) if claim.total else "0.00"
+    claim_id = sanitize_x12_text(claim.identifier[0].value) if claim.identifier and claim.identifier[0].value else "0000000000"
+    # :.2f, not str(Decimal) - see remittance_835.py's own _build_bpr_segment
+    # comment for why str() is vulnerable to trailing-zero loss once a
+    # Bundle has round-tripped through JSON.
+    total = f"{claim.total.value:.2f}" if claim.total else "0.00"
     pos_code = _resolve_pos_code(claim)
     location_composite = f"{pos_code}:B:1" if pos_code else ""
     fields = [claim_id, total, "", "", location_composite, "Y", "A", "Y", "I"]
@@ -240,7 +247,7 @@ class Edi837dBuilder(MessageBuilder):
             rendering_provider = resolve_by_reference(bundle, claim.careTeam[0].provider)
 
         now = envelope_datetime(bundle.timestamp)
-        bht_reference = bundle.identifier.value if bundle.identifier else "REF00000001"
+        bht_reference = sanitize_x12_text(bundle.identifier.value) if bundle.identifier and bundle.identifier.value else "REF00000001"
 
         envelope_segments = build_envelope_segments(now)
         st_to_hl_segments = [

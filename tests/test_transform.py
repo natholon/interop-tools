@@ -3,6 +3,9 @@ from pathlib import Path
 import pytest
 from fhir.resources.R4B.appointment import Appointment
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
+from fhir.resources.R4B.claim import Claim, ClaimInsurance
+from fhir.resources.R4B.condition import Condition
+from fhir.resources.R4B.coverage import Coverage
 from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 from fhir.resources.R4B.documentreference import DocumentReference
 from fhir.resources.R4B.organization import Organization
@@ -1575,3 +1578,148 @@ def test_mdm_trigger_round_trips_and_preserves_document_type(trigger):
     original_doc = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference")
     doc = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference")
     assert doc.masterIdentifier.value == original_doc.masterIdentifier.value
+
+
+# Regression coverage for three real bugs an adversarial code-review pass
+# caught in app/transform/ (this package had never had one, unlike the
+# forward-direction code, which has repeatedly caught bugs this way) - none
+# of the 200-300 seed fuzz sweeps every slice above was verified against
+# would ever catch these, since the synthetic generators never happen to
+# produce a name/display containing an XML special character or an X12
+# reserved delimiter, and never happen to produce a JSON-round-tripped
+# Decimal with a lost trailing zero.
+
+
+def test_ccd_round_trip_escapes_xml_special_characters_in_free_text():
+    # A Coding.display containing a literal "&" is extremely plausible for
+    # real clinical text ("Diseases of the ear & mastoid process") - before
+    # this fix, cda_ccd.py built XML via raw f-strings with no escaping at
+    # all, so this produced unparseable XML (CdaParseError: not well-formed)
+    # on the very next forward pass, silently breaking /api/transform for
+    # any Bundle containing such a display. A patient name containing "&"/
+    # "<"/">" hit the identical gap in <family>/<given> text content.
+    patient = Patient(id="p1", name=[{"family": "O'Brien & Sons", "given": ["Pat<ricia>"]}])
+    condition = Condition(
+        id="c1",
+        subject={"reference": "urn:uuid:p1"},
+        code={"coding": [{"system": "http://snomed.info/sct", "code": "J209", "display": "Diseases of the ear & mastoid process"}]},
+    )
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [
+        BundleEntry(fullUrl="urn:uuid:p1", resource=patient),
+        BundleEntry(fullUrl="urn:uuid:c1", resource=condition),
+    ]
+
+    message_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    assert "&amp;" in message_text
+    assert "&lt;" in message_text and "&gt;" in message_text
+
+    # The real assertion: this must actually re-parse, not just contain the
+    # right escape sequences - a naive fix could still be self-inconsistent.
+    round_tripped_bundle = convert_cda_to_bundle(message_text)
+    rt_condition = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Condition")
+    assert rt_condition.code.coding[0].display == "Diseases of the ear & mastoid process"
+    rt_patient = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Patient")
+    assert rt_patient.name[0].family == "O'Brien & Sons"
+    assert rt_patient.name[0].given == ["Pat<ricia>"]
+
+
+def test_edi_837p_sanitizes_x12_reserved_characters_in_organization_name():
+    # An Organization.name containing a literal "*" is plausible (compound
+    # business names, abbreviations). Before this fix, edi_common.py's
+    # build_org_nm1 wrote it raw into NM1, splitting NM103 into two
+    # elements and silently shifting every later positional field (the id
+    # qualifier/value) out of place with no error raised anywhere - a
+    # regenerated segment that parses into a materially different Bundle
+    # than the one that produced it.
+    billing = Organization(id="org1", name="Smith*Jones Medical Group")
+    payer = Organization(id="org2", name="Acme Insurance")
+    patient = Patient(id="p1", name=[{"family": "Doe", "given": ["Jane"]}])
+    coverage = Coverage(
+        id="cov1",
+        status="active",
+        beneficiary={"reference": "urn:uuid:p1"},
+        payor=[{"reference": "urn:uuid:org2"}],
+    )
+    claim = Claim(
+        id="claim1",
+        status="active",
+        use="claim",
+        type={"text": "professional"},
+        patient={"reference": "urn:uuid:p1"},
+        created="2026-01-01",
+        provider={"reference": "urn:uuid:org1"},
+        priority={"text": "normal"},
+        insurance=[ClaimInsurance(sequence=1, focal=True, coverage={"reference": "urn:uuid:cov1"})],
+    )
+    claim.insurer = {"reference": "urn:uuid:org2"}
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [
+        BundleEntry(fullUrl="urn:uuid:org1", resource=billing),
+        BundleEntry(fullUrl="urn:uuid:org2", resource=payer),
+        BundleEntry(fullUrl="urn:uuid:p1", resource=patient),
+        BundleEntry(fullUrl="urn:uuid:cov1", resource=coverage),
+        BundleEntry(fullUrl="urn:uuid:claim1", resource=claim),
+    ]
+
+    message_text = build_message_from_bundle(bundle, "EDI", "837P", "")
+    nm1_billing_segment = next(s for s in message_text.split("~") if s.startswith("NM1*85"))
+    # Exactly 5 elements (NM1/85/2/name/nothing-else, no id qualifier/value
+    # on this fixture) - a stray "*" inside the name would produce 6.
+    assert nm1_billing_segment.split("*") == ["NM1", "85", "2", "Smith Jones Medical Group"]
+
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    rt_billing = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Organization" and "Smith" in (e.resource.name or ""))
+    assert rt_billing.name == "Smith Jones Medical Group"
+
+
+def test_edi_837p_preserves_trailing_zero_in_money_via_fixed_precision():
+    # fhir.resources' own JSON (de)serialization silently drops a trailing
+    # zero: Decimal("100.10") serializes to the bare JSON number 100.1,
+    # which re-parses as Decimal("100.1") - reachable through the
+    # documented Convert -> "Use Bundle above" -> Transform UI flow (and
+    # the equivalent /api/convert -> /api/transform API flow) via
+    # app/routes/convert.py's own json.loads()->Bundle.model_validate()
+    # path. str(Decimal) would then silently emit "100.1" where the
+    # original CLM02 was "100.10" - :.2f is immune, since it always
+    # re-quantizes to 2 places regardless of the Decimal's own current
+    # precision.
+    import json
+
+    billing = Organization(id="org1", name="Billing Group")
+    payer = Organization(id="org2", name="Acme Insurance")
+    patient = Patient(id="p1", name=[{"family": "Doe", "given": ["Jane"]}])
+    coverage = Coverage(
+        id="cov1", status="active", beneficiary={"reference": "urn:uuid:p1"}, payor=[{"reference": "urn:uuid:org2"}]
+    )
+    claim = Claim(
+        id="claim1",
+        status="active",
+        use="claim",
+        type={"text": "professional"},
+        patient={"reference": "urn:uuid:p1"},
+        created="2026-01-01",
+        provider={"reference": "urn:uuid:org1"},
+        priority={"text": "normal"},
+        total={"value": "100.10", "currency": "USD"},
+        insurance=[ClaimInsurance(sequence=1, focal=True, coverage={"reference": "urn:uuid:cov1"})],
+    )
+    claim.insurer = {"reference": "urn:uuid:org2"}
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [
+        BundleEntry(fullUrl="urn:uuid:org1", resource=billing),
+        BundleEntry(fullUrl="urn:uuid:org2", resource=payer),
+        BundleEntry(fullUrl="urn:uuid:p1", resource=patient),
+        BundleEntry(fullUrl="urn:uuid:cov1", resource=coverage),
+        BundleEntry(fullUrl="urn:uuid:claim1", resource=claim),
+    ]
+
+    # Simulate the real JSON round trip a Bundle takes through /api/convert's
+    # own response and /api/transform's own bundle_json input.
+    round_tripped_json = json.loads(bundle.model_dump_json())
+    assert round_tripped_json["entry"][4]["resource"]["total"]["value"] == 100.1  # the precision loss itself
+    bundle_after_json = Bundle.model_validate(round_tripped_json)
+
+    message_text = build_message_from_bundle(bundle_after_json, "EDI", "837P", "")
+    clm_segment = next(s for s in message_text.split("~") if s.startswith("CLM*"))
+    assert "100.10" in clm_segment

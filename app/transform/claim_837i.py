@@ -66,6 +66,7 @@ from app.transform.edi_common import (
     org_or_person_nm1,
     resolve_by_reference,
     resolve_subscriber_and_dependent,
+    sanitize_x12_text,
 )
 
 VERSION = "005010X223A2"
@@ -102,10 +103,13 @@ def _resolve_revenue_code(item) -> str:
 
 
 def _build_sv2_segment(item) -> str:
+    # :.2f, not str(Decimal) - see remittance_835.py's own
+    # _build_bpr_segment comment for why str() is vulnerable to
+    # trailing-zero loss once a Bundle has round-tripped through JSON.
     fields = [
         _resolve_revenue_code(item),
         _reverse_procedure_composite(item),
-        str(item.unitPrice.value) if item.unitPrice else "0.00",
+        f"{item.unitPrice.value:.2f}" if item.unitPrice else "0.00",
         "UN",
         str(item.quantity.value) if item.quantity else "1",
     ]
@@ -145,8 +149,8 @@ def _build_cl1_segment(claim) -> str:
 
 
 def _build_clm_segment(claim) -> str:
-    claim_id = claim.identifier[0].value if claim.identifier else "0000000000"
-    total = str(claim.total.value) if claim.total else "0.00"
+    claim_id = sanitize_x12_text(claim.identifier[0].value) if claim.identifier and claim.identifier[0].value else "0000000000"
+    total = f"{claim.total.value:.2f}" if claim.total else "0.00"
     fields = [claim_id, total, "", "", "", "Y", "A", "Y", "Y"]
     return "CLM*" + "*".join(fields) + "~"
 
@@ -175,7 +179,7 @@ class Edi837iBuilder(MessageBuilder):
             attending_provider = resolve_by_reference(bundle, claim.careTeam[0].provider)
 
         now = envelope_datetime(bundle.timestamp)
-        bht_reference = bundle.identifier.value if bundle.identifier else "REF00000001"
+        bht_reference = sanitize_x12_text(bundle.identifier.value) if bundle.identifier and bundle.identifier.value else "REF00000001"
 
         envelope_segments = build_envelope_segments(now)
         st_to_hl_segments = [

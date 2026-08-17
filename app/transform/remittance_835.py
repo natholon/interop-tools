@@ -45,7 +45,13 @@ from app.edi.remittance_835 import CLP_STATUS_SYSTEM, N1_ID_FALLBACK_SYSTEM
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
 from app.transform.common import find_resource
-from app.transform.edi_common import DEFAULT_ST_CONTROL, build_envelope_segments, build_trailer_segments, envelope_datetime
+from app.transform.edi_common import (
+    DEFAULT_ST_CONTROL,
+    build_envelope_segments,
+    build_trailer_segments,
+    envelope_datetime,
+    sanitize_x12_text,
+)
 
 # Reverse of app.edi.common.NM1_ID_QUALIFIER_SYSTEM, inverted directly -
 # the identical code list N103/NM108 both use (see app.edi.remittance_835's
@@ -72,7 +78,7 @@ def _reverse_n1_qualifier(identifier) -> str:
 
 
 def _build_n1_segment(entity_code: str, organization) -> str:
-    name = organization.name or "UNKNOWN"
+    name = sanitize_x12_text(organization.name) or "UNKNOWN"
     identifier = organization.identifier[0] if organization.identifier else None
     if identifier and identifier.value:
         # N103/N104 (id qualifier/value) - N1's own shape has no
@@ -80,30 +86,41 @@ def _build_n1_segment(entity_code: str, organization) -> str:
         # built directly rather than reusing edi_common.py's NM1-scoped
         # build_org_nm1/build_person_nm1.
         qualifier = _reverse_n1_qualifier(identifier)
-        return f"N1*{entity_code}*{name}*{qualifier}*{identifier.value}~"
+        return f"N1*{entity_code}*{name}*{qualifier}*{sanitize_x12_text(identifier.value)}~"
     return f"N1*{entity_code}*{name}~"
 
 
 def _build_bpr_segment(payment_reconciliation) -> str:
-    amount = payment_reconciliation.paymentAmount.value if payment_reconciliation.paymentAmount else "0.00"
+    # Formatted to a fixed 2 decimal places, not str(Decimal) - X12 money
+    # elements are conventionally 2-decimal, and Decimal's own str() is
+    # vulnerable to trailing-zero loss whenever the Bundle has passed
+    # through fhir.resources' own JSON (de)serialization first (e.g. the
+    # documented Convert -> "Use Bundle above" -> Transform UI flow):
+    # Decimal("100.10") serializes to the bare JSON number 100.1, which
+    # re-parses as Decimal("100.1") - str() would then silently emit
+    # "100.1" instead of the original "100.10". :.2f is immune to this,
+    # since it always re-quantizes to 2 places regardless of the Decimal's
+    # own current precision.
+    amount = f"{payment_reconciliation.paymentAmount.value:.2f}" if payment_reconciliation.paymentAmount else "0.00"
     date = format_x12_date(payment_reconciliation.paymentDate) if payment_reconciliation.paymentDate else ""
     # BPR01 ("I" - Remittance Information Only)/BPR03 ("C" - Checks)/
     # BPR04 ("NON" - Non-Payment Data, the safest disclosed default since
     # this app has no source field indicating a real payment method) have
     # no FHIR-side home - fixed, disclosed placeholders, same precedent as
     # every earlier "no source field" gap in this app.
-    fields = ["I", str(amount), "C", "NON", "", "", "", "", "", "", "", "", "", "", "", date]
+    fields = ["I", amount, "C", "NON", "", "", "", "", "", "", "", "", "", "", "", date]
     return "BPR*" + "*".join(fields) + "~"
 
 
 def _build_clp_segment(detail) -> str:
-    claim_id = detail.identifier.value if detail.identifier else ""
+    claim_id = sanitize_x12_text(detail.identifier.value) if detail.identifier and detail.identifier.value else ""
     status_code = ""
     if detail.type and detail.type.coding:
         for coding in detail.type.coding:
             if coding.system == CLP_STATUS_SYSTEM and coding.code:
                 status_code = coding.code
-    paid_amount = str(detail.amount.value) if detail.amount else "0.00"
+    # See _build_bpr_segment's own comment above for why :.2f, not str().
+    paid_amount = f"{detail.amount.value:.2f}" if detail.amount else "0.00"
     # CLP03 (charge amount) has no FHIR-side home - mirrors CLP04's own
     # paid amount as the closest available real number, disclosed rather
     # than fabricated. CLP05-07 (patient responsibility/filing indicator/
@@ -145,7 +162,7 @@ class Edi835Builder(MessageBuilder):
         if payee is None:
             raise MappingError("Bundle has no resolvable payee Organization - cannot build an 835 message")
 
-        trace_number = bundle.identifier.value if bundle.identifier else "0000000000"
+        trace_number = sanitize_x12_text(bundle.identifier.value) if bundle.identifier and bundle.identifier.value else "0000000000"
         now = envelope_datetime(bundle.timestamp)
 
         envelope_segments = build_envelope_segments(now)
