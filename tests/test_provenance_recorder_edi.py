@@ -6,10 +6,11 @@ its own parsing/dispatch layer, the same "own file per format" discipline
 test_provenance_recorder_cda.py already established.
 
 Scope so far: 270 (Eligibility Inquiry), 271 (Eligibility Response), 276
-(Claim Status Request), 277 (Claim Status Response), and 278 (Health Care
-Services Review - Request for Review and Response) - see
-app/provenance/dispatch.py's own _INSTRUMENTED_TRANSACTION_SETS for why
-every other EDI family still reports unsupported=True."""
+(Claim Status Request), 277 (Claim Status Response), 278 (Health Care
+Services Review - Request for Review and Response), and 835 (Health Care
+Claim Payment/Advice) - see app/provenance/dispatch.py's own
+_INSTRUMENTED_TRANSACTION_SETS for why every other EDI family still
+reports unsupported=True."""
 
 import itertools
 import uuid
@@ -42,12 +43,12 @@ def _build_bundle(fixture_name: str, recorder=None):
     return builder.build_bundle(transaction_set, interchange.delimiters, recorder=recorder)
 
 
-# 270/271/276/277/278's own real fixtures, plus a handful of already-
-# shipped fixtures from other, still-uninstrumented EDI families - included
-# specifically to prove the no-op `recorder=None` additions to those 3
-# remaining sibling builder files (and the "free" Bundle.identifier/
-# .timestamp facts every one of them now gets via the shared
-# assemble_bundle) don't alter their own output either.
+# 270/271/276/277/278/835's own real fixtures, plus a fixture from the
+# remaining still-uninstrumented EDI family (837P) - included specifically
+# to prove the no-op `recorder=None` additions to the 2 remaining sibling
+# builder files (837I, 837D) and the "free" Bundle.identifier/.timestamp
+# facts they now get via the shared assemble_bundle don't alter their own
+# output either.
 _EDI_FIXTURES = [
     "edi_270_basic.x12",
     "edi_270_no_dependent.x12",
@@ -62,6 +63,7 @@ _EDI_FIXTURES = [
     "edi_278_response_certified.x12",
     "edi_278_response_denied.x12",
     "edi_835_basic.x12",
+    "edi_835_multi_claim.x12",
     "edi_837p_basic.x12",
 ]
 
@@ -459,13 +461,79 @@ def test_edi_277_error_status_records_failed_status():
     assert status_entry.source_value == "E1"
 
 
-def test_edi_835_non_instrumented_family_with_no_bht_gets_zero_facts():
-    # 835 has no BHT segment at all (see app/edi/remittance_835.py's own
-    # recorder docstring) - unlike every other still-uninstrumented family,
-    # it doesn't even get free Bundle-level facts, since its own bundle
-    # assembly never threads recorder into anything.
+def test_edi_835_basic_crosswalk_matches_known_field_values():
+    # edi_835_basic.x12 has no BHT segment at all (see
+    # app/edi/remittance_835.py's own module docstring) - Bundle.identifier
+    # comes from TRN02 instead, and there is no Bundle.timestamp fact at
+    # all (835 carries no full date+time field anywhere).
     recorder = ProvenanceRecorder(source_format="EDI")
     bundle = _build_bundle("edi_835_basic.x12", recorder=recorder)
-    assert len(bundle.entry) > 0
     entries = resolve_bundle_paths(bundle, recorder)
-    assert entries == []
+    by_path = {e.fhir_path: e for e in entries}
+
+    payer = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Organization" and e.resource.name == "ACME HEALTH PLAN")
+    payer_index = next(i for i, e in enumerate(bundle.entry) if e.resource is payer)
+    payer_name = by_path[f"Bundle.entry[{payer_index}].resource.name"]
+    assert payer_name.source_location == edi_location("N1", 2)
+    payer_id = by_path[f"Bundle.entry[{payer_index}].resource.identifier[0].value"]
+    assert payer_id.value == "PAYERID001"
+    assert payer_id.source_location == edi_location("N1", 4)
+
+    payment_reconciliation = next(
+        e.resource for e in bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation"
+    )
+    pr_index = next(i for i, e in enumerate(bundle.entry) if e.resource is payment_reconciliation)
+
+    status_entry = by_path[f"Bundle.entry[{pr_index}].resource.status"]
+    assert status_entry.derivation == "inferred"
+    assert status_entry.value == "active"
+
+    # BPR16 produces two independent facts (created and paymentDate), the
+    # same "one source field, two FHIR destinations" case SIU's AIP-3 and
+    # MDM's TXA-9 already established.
+    created_entry = by_path[f"Bundle.entry[{pr_index}].resource.created"]
+    payment_date_entry = by_path[f"Bundle.entry[{pr_index}].resource.paymentDate"]
+    assert created_entry.value == payment_date_entry.value == "2026-08-12"
+    assert created_entry.source_location == payment_date_entry.source_location == edi_location("BPR", 16)
+
+    payment_amount_entry = by_path[f"Bundle.entry[{pr_index}].resource.paymentAmount.value"]
+    assert payment_amount_entry.value == "150.00"
+    assert payment_amount_entry.source_location == edi_location("BPR", 2)
+
+    detail_type_entry = by_path[f"Bundle.entry[{pr_index}].resource.detail[0].type.coding[0].code"]
+    assert detail_type_entry.source_location == edi_location("CLP", 2)
+    detail_id_entry = by_path[f"Bundle.entry[{pr_index}].resource.detail[0].identifier.value"]
+    assert detail_id_entry.value == "PCN12345"
+    assert detail_id_entry.source_location == edi_location("CLP", 1)
+    detail_amount_entry = by_path[f"Bundle.entry[{pr_index}].resource.detail[0].amount.value"]
+    assert detail_amount_entry.value == "150.00"
+    assert detail_amount_entry.source_location == edi_location("CLP", 4)
+
+    bundle_identifier_entry = by_path["Bundle.identifier.value"]
+    assert bundle_identifier_entry.value == "1512345678"
+    assert bundle_identifier_entry.source_location == edi_location("TRN", 2)
+
+    assert "Bundle.timestamp" not in by_path
+
+
+def test_edi_835_multi_claim_records_independently_indexed_details():
+    # edi_835_multi_claim.x12's own two CLP groups (one paid, one denied
+    # with a $0.00 CLP04) must resolve to their own, independently-indexed
+    # detail[] facts - a $0.00 paid amount is still a real, present value,
+    # not skipped the way an empty/unresolvable one would be.
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_835_multi_claim.x12", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    payment_reconciliation = next(
+        e.resource for e in bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation"
+    )
+    pr_index = next(i for i, e in enumerate(bundle.entry) if e.resource is payment_reconciliation)
+
+    detail0_id = by_path[f"Bundle.entry[{pr_index}].resource.detail[0].identifier.value"]
+    assert detail0_id.value == "PCN22222"
+    detail1_id = by_path[f"Bundle.entry[{pr_index}].resource.detail[1].identifier.value"]
+    assert detail1_id.value == "PCN33333"
+    detail1_amount = by_path[f"Bundle.entry[{pr_index}].resource.detail[1].amount.value"]
+    assert detail1_amount.value == "0.00"

@@ -106,6 +106,16 @@ def test_api_data_specification_278_type_is_now_instrumented():
     assert len(report["entries"]) > 0
 
 
+def test_api_data_specification_835_type_is_now_instrumented():
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("edi_835_basic.x12")})
+    assert response.status_code == 200
+    report = response.json()["report"]
+    assert report["unsupported"] is False
+    assert report["source_format"] == "EDI"
+    assert report["trigger_event"] == "835"
+    assert len(report["entries"]) > 0
+
+
 def test_api_data_specification_276_type_is_now_instrumented():
     response = client.post("/api/data-specification", json={"hl7_text": read_fixture("edi_276_basic.x12")})
     assert response.status_code == 200

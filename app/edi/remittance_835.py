@@ -87,6 +87,7 @@ from app.edi.common import resolve_id_qualifier_system
 from app.edi.parser import Delimiters, Segment, TransactionSet, element, find_segment, parse_decimal
 from app.fhir_models.builders import parse_hl7_date
 from app.hl7.errors import MappingError, MissingSegmentError
+from app.provenance.location import edi_location
 
 TRANSACTION_SET_ID = "835"
 
@@ -112,20 +113,25 @@ def _find_n1(segments: list[Segment], entity_code: str) -> Segment | None:
     return None
 
 
-def _build_n1_identifier(n1: Segment) -> Identifier | None:
+def _build_n1_identifier(n1: Segment, resource_id: str | None = None, recorder=None) -> Identifier | None:
     qualifier = element(n1, 3).strip().upper()
     value = element(n1, 4)
     if not value:
         return None
+    if recorder and resource_id:
+        recorder.record(resource_id, "identifier[0].value", edi_location("N1", 4), value)
     return Identifier(system=resolve_id_qualifier_system(qualifier, N1_ID_FALLBACK_SYSTEM), value=value)
 
 
-def _build_organization_from_n1(n1: Segment) -> Organization:
-    organization = Organization(id=str(uuid.uuid4()))
+def _build_organization_from_n1(n1: Segment, recorder=None) -> Organization:
+    organization_id = str(uuid.uuid4())
+    organization = Organization(id=organization_id)
     name = element(n1, 2)
     if name:
         organization.name = name
-    identifier = _build_n1_identifier(n1)
+        if recorder:
+            recorder.record(organization_id, "name", edi_location("N1", 2), name)
+    identifier = _build_n1_identifier(n1, resource_id=organization_id, recorder=recorder)
     if identifier:
         organization.identifier = [identifier]
     return organization
@@ -138,32 +144,48 @@ def _parse_money(raw: str) -> Money | None:
     return Money(value=value, currency="USD")
 
 
-def _build_detail(clp: Segment) -> PaymentReconciliationDetail:
+def _build_detail(clp: Segment, index: int, resource_id: str | None = None, recorder=None) -> PaymentReconciliationDetail:
     status_code = element(clp, 2)
-    detail_type = (
-        CodeableConcept(coding=[Coding(system=CLP_STATUS_SYSTEM, code=status_code)])
-        if status_code
-        else CodeableConcept(text="Claim Payment")
-    )
+    detail_path = f"detail[{index}]"
+    if status_code:
+        detail_type = CodeableConcept(coding=[Coding(system=CLP_STATUS_SYSTEM, code=status_code)])
+        if recorder and resource_id:
+            recorder.record(resource_id, f"{detail_path}.type.coding[0].code", edi_location("CLP", 2), status_code)
+    else:
+        detail_type = CodeableConcept(text="Claim Payment")
+        if recorder and resource_id:
+            recorder.record_inferred(
+                resource_id,
+                f"{detail_path}.type.text",
+                "This claim's own CLP02 (Claim Status Code) is absent - PaymentReconciliationDetail.type defaults to a generic placeholder text.",
+                "Claim Payment",
+            )
     detail = PaymentReconciliationDetail(type=detail_type)
 
     claim_id = element(clp, 1)
     if claim_id:
         detail.identifier = Identifier(value=claim_id)
+        if recorder and resource_id:
+            recorder.record(resource_id, f"{detail_path}.identifier.value", edi_location("CLP", 1), claim_id)
 
-    paid_amount = _parse_money(element(clp, 4))
+    claim_paid_raw = element(clp, 4)
+    paid_amount = _parse_money(claim_paid_raw)
     if paid_amount is not None:
         detail.amount = paid_amount
+        if recorder and resource_id:
+            recorder.record(resource_id, f"{detail_path}.amount.value", edi_location("CLP", 4), claim_paid_raw)
 
     return detail
 
 
-def _assemble_835_bundle(trace_number: str, *resources: Resource) -> Bundle:
+def _assemble_835_bundle(trace_number: str, *resources: Resource, recorder=None) -> Bundle:
     """The 835-specific equivalent of app.edi.common.assemble_bundle - not
     reused, since 835 has no BHT segment to derive Bundle.identifier/
     .timestamp from (see the module docstring)."""
     bundle = Bundle(id=str(uuid.uuid4()), type="collection")
     bundle.identifier = Identifier(system=TRN_IDENTIFIER_SYSTEM, value=trace_number)
+    if recorder:
+        recorder.record(bundle.id, "identifier.value", edi_location("TRN", 2), trace_number)
     bundle.entry = [BundleEntry(fullUrl=f"urn:uuid:{resource.id}", resource=resource) for resource in resources]
     return bundle
 
@@ -172,11 +194,6 @@ class Edi835Builder(EdiTransactionBuilder):
     transaction_set_id = TRANSACTION_SET_ID
 
     def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters, recorder=None) -> Bundle:
-        # recorder is accepted (see app/provenance/) but not yet acted on -
-        # 835 isn't instrumented yet (this phase's scope is 270/271 only),
-        # and unlike every sibling family it has no BHT segment to feed the
-        # shared assemble_bundle with, so it doesn't even get free
-        # Bundle-level facts the way the BHT-based families do.
         segments = transaction_set.segments
 
         bpr = find_segment(segments, "BPR")
@@ -202,27 +219,30 @@ class Edi835Builder(EdiTransactionBuilder):
         if payee_n1 is None:
             raise MissingSegmentError(f"{self.transaction_set_id} transaction set is missing its 1000B N1*PE (payee) segment")
 
-        payer = _build_organization_from_n1(payer_n1)
-        payee = _build_organization_from_n1(payee_n1)
+        payer = _build_organization_from_n1(payer_n1, recorder=recorder)
+        payee = _build_organization_from_n1(payee_n1, recorder=recorder)
 
         # BPR is present but its own required values not resolving is a
         # business-rule failure, not an absent-segment one - MappingError,
         # not MissingSegmentError, matching every sibling builder's own
         # "segment present, required field doesn't resolve" precedent
         # (e.g. eligibility_270.py's BHT04-unresolvable check).
-        payment_amount = _parse_money(element(bpr, 2))
+        bpr02_raw = element(bpr, 2)
+        payment_amount = _parse_money(bpr02_raw)
         if payment_amount is None:
             raise MappingError(f"{self.transaction_set_id} transaction set's BPR segment has no resolvable payment amount (BPR02)")
 
         # BPR16 is date-only (see module docstring for why this is safe for
         # PaymentReconciliation.created/.paymentDate but would NOT be safe
         # for Bundle.timestamp).
-        payment_date = parse_hl7_date(element(bpr, 16))
+        bpr16_raw = element(bpr, 16)
+        payment_date = parse_hl7_date(bpr16_raw)
         if payment_date is None:
             raise MappingError(f"{self.transaction_set_id} transaction set's BPR segment has no resolvable payment date (BPR16)")
 
+        payment_reconciliation_id = str(uuid.uuid4())
         payment_reconciliation = PaymentReconciliation(
-            id=str(uuid.uuid4()),
+            id=payment_reconciliation_id,
             status="active",
             created=payment_date,
             paymentDate=payment_date,
@@ -245,10 +265,31 @@ class Edi835Builder(EdiTransactionBuilder):
         # "successfully processed" as a transaction (unlike 271/278's
         # outcome, which comes from a real source field - AAA/HCR
         # respectively), so there is nothing to map it from.
+        if recorder:
+            recorder.record_inferred(
+                payment_reconciliation_id,
+                "status",
+                "Every PaymentReconciliation this app builds from an 835 transaction set has status=\"active\" - not read from any X12 field.",
+                "active",
+            )
+            recorder.record(payment_reconciliation_id, "created", edi_location("BPR", 16), payment_date, source_value=bpr16_raw)
+            recorder.record(
+                payment_reconciliation_id, "paymentDate", edi_location("BPR", 16), payment_date, source_value=bpr16_raw
+            )
+            recorder.record(
+                payment_reconciliation_id,
+                "paymentAmount.value",
+                edi_location("BPR", 2),
+                bpr02_raw,
+            )
 
-        details = [_build_detail(clp) for clp in segments if clp[0] == "CLP"]
+        clp_segments = [seg for seg in segments if seg[0] == "CLP"]
+        details = [
+            _build_detail(clp, i, resource_id=payment_reconciliation_id, recorder=recorder)
+            for i, clp in enumerate(clp_segments)
+        ]
         if details:
             payment_reconciliation.detail = details
 
         resources: list[Resource] = [payer, payee, payment_reconciliation]
-        return _assemble_835_bundle(trace_number, *resources)
+        return _assemble_835_bundle(trace_number, *resources, recorder=recorder)
