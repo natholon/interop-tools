@@ -386,6 +386,26 @@ def test_api_transform_builds_oru_r01_message():
     assert "OBX" in message_text
 
 
+def test_index_transform_target_dropdown_includes_mdm_t02():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "HL7 MDM^T02" in response.text
+
+
+def test_api_transform_builds_mdm_t02_message():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("mdm_t02_basic.hl7")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": bundle_json, "target_format": "HL7", "target_type": "MDM", "target_trigger": "T02"},
+    )
+    assert response.status_code == 200
+    message_text = response.json()["message_text"]
+    assert "||MDM^T02|" in message_text
+    assert "TXA" in message_text
+
+
 def test_index_transform_target_dropdown_includes_ccd_without_stray_caret():
     # A target with no real trigger-event concept must render as "CDA CCD",
     # not "CDA CCD^" - see _transform_target_options' own docstring.

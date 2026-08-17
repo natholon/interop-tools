@@ -4,6 +4,7 @@ import pytest
 from fhir.resources.R4B.appointment import Appointment
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
 from fhir.resources.R4B.diagnosticreport import DiagnosticReport
+from fhir.resources.R4B.documentreference import DocumentReference
 from fhir.resources.R4B.organization import Organization
 from fhir.resources.R4B.patient import Patient
 
@@ -39,6 +40,10 @@ def test_list_supported_targets_includes_all_five_oru_triggers():
     targets = list_supported_targets()
     for trigger in ("R01", "R30", "R31", "R32", "R40"):
         assert ("HL7", "ORU", trigger) in targets
+
+
+def test_list_supported_targets_includes_mdm_t02():
+    assert ("HL7", "MDM", "T02") in list_supported_targets()
 
 
 def test_list_supported_targets_includes_ccd():
@@ -541,3 +546,78 @@ def test_oru_r01_missing_diagnostic_report_raises_mapping_error():
     bundle.entry = [BundleEntry(fullUrl="urn:uuid:p1", resource=patient)]
     with pytest.raises(MappingError):
         build_message_from_bundle(bundle, "HL7", "ORU", "R01")
+
+
+def test_mdm_t02_round_trip_preserves_document_fields():
+    forward_text = (FIXTURES / "mdm_t02_basic.hl7").read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+
+    message_text = build_message_from_bundle(bundle, "HL7", "MDM", "T02")
+    assert "||MDM^T02|" in message_text
+
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    original_doc = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference")
+    doc = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference")
+
+    assert doc.type.coding[0].code == original_doc.type.coding[0].code
+    assert doc.masterIdentifier.value == original_doc.masterIdentifier.value
+    assert doc.date == original_doc.date
+    assert doc.description == original_doc.description
+    assert doc.securityLabel[0].coding[0].code == original_doc.securityLabel[0].coding[0].code
+
+    originator = next(
+        e.resource
+        for e in round_tripped_bundle.entry
+        if e.resource.get_resource_type() == "Practitioner" and e.resource.name[0].family == "Chen"
+    )
+    assert originator.name[0].given == ["Wei"]
+    authenticator = next(
+        e.resource
+        for e in round_tripped_bundle.entry
+        if e.resource.get_resource_type() == "Practitioner" and e.resource.name[0].family == "Alvarez"
+    )
+    assert authenticator.name[0].given == ["Rosa"]
+
+
+def test_mdm_t02_round_trip_preserves_document_body():
+    forward_text = (FIXTURES / "mdm_t02_basic.hl7").read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+
+    message_text = build_message_from_bundle(bundle, "HL7", "MDM", "T02")
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+
+    original_binary = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Binary")
+    binary = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Binary")
+    assert binary.data == original_binary.data
+
+
+def test_mdm_t02_same_author_authenticator_dedups_practitioner_on_round_trip():
+    forward_text = (FIXTURES / "mdm_t02_same_author_authenticator.hl7").read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+    assert len([e for e in bundle.entry if e.resource.get_resource_type() == "Practitioner"]) == 1
+
+    message_text = build_message_from_bundle(bundle, "HL7", "MDM", "T02")
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    assert len([e for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Practitioner"]) == 1
+
+    original_doc = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference")
+    doc = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference")
+    assert doc.identifier[0].value == original_doc.identifier[0].value
+
+
+def test_mdm_t02_missing_patient_raises_mapping_error():
+    doc = DocumentReference(
+        id="d1", status="current", content=[{"attachment": {}}], subject={"reference": "urn:uuid:p1"}
+    )
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:d1", resource=doc)]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "HL7", "MDM", "T02")
+
+
+def test_mdm_t02_missing_document_reference_raises_mapping_error():
+    patient = Patient(id="p1", name=[{"family": "Solo"}])
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:p1", resource=patient)]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "HL7", "MDM", "T02")

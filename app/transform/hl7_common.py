@@ -8,7 +8,15 @@ and reverse sides. `build_msh` generalizes the shared MSH-shape (sending/
 receiving application placeholders, MSH-7 from Bundle.timestamp, MSH-10
 control id) across message types, parameterized by the caller's own
 `message_type`/`trigger_event` strings (`"ADT"`/`"A01"`, `"SIU"`/`"S12"`,
-...)."""
+...). `CLASS_TO_PATIENT_CLASS` (promoted from `hl7_adt.py`'s own private
+copy) and `build_minimal_pv1` (promoted from `hl7_oru.py`'s own private
+`_build_pv1`) were both extracted here once `app/transform/hl7_mdm.py`
+became a third real consumer of the identical "PV1-2 class code +
+PV1-19 visit identifier only" reversal that `app.mappings.common.
+build_minimal_encounter` itself reads on the forward side - ORU and MDM's
+own minimal, lifecycle-free Encounter shape, distinct from `hl7_adt.py`'s
+own full ADT-shaped PV1 builder (which additionally reverses PV1-3/6/7/
+36/44/45, none of which a minimal Encounter ever populates)."""
 
 from datetime import datetime, timezone
 
@@ -20,6 +28,11 @@ from app.transform.common import format_hl7_date, format_hl7_ts
 
 # Reverse of app/fhir_models/builders.py::_GENDER_MAP.
 GENDER_TO_HL7_SEX = {"male": "M", "female": "F", "other": "O"}
+
+# Reverse of app/mappings/common.py::_PATIENT_CLASS_MAP - "O" (outpatient/
+# ambulatory) is the fallback on the forward side, so it's also the safest
+# default here for an Encounter.class code this table doesn't recognize.
+CLASS_TO_PATIENT_CLASS = {"IMP": "I", "AMB": "O", "EMER": "E", "PRENC": "P"}
 
 DEFAULT_SENDING_APP = "interop-tools"
 DEFAULT_SENDING_FACILITY = "INTEROP"
@@ -107,3 +120,20 @@ def build_pid(patient) -> str:
             fields[13] = phone
 
     return segment("PID", fields, 13)
+
+
+def build_minimal_pv1(encounter) -> str | None:
+    """The minimal PV1 shape app.mappings.common.build_minimal_encounter
+    itself reads: class code + visit identifier only, not the full ADT-
+    shaped PV1 app/transform/hl7_adt.py's own PV1 builder reverses."""
+    if encounter is None:
+        return None
+    fields: dict[int, str] = {1: "1"}
+    class_code = encounter.class_fhir.code if encounter.class_fhir else None
+    if class_code:
+        fields[2] = CLASS_TO_PATIENT_CLASS.get(class_code, "O")
+    if encounter.identifier:
+        visit_number = encounter.identifier[0].value
+        if visit_number:
+            fields[19] = visit_number
+    return segment("PV1", fields, 19)

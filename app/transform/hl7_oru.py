@@ -50,7 +50,7 @@ from app.generators.base import segment
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
 from app.transform.common import find_resource, find_resources, format_hl7_ts
-from app.transform.hl7_common import build_msh, build_pid, reverse_cwe
+from app.transform.hl7_common import build_minimal_pv1, build_msh, build_pid, reverse_cwe
 
 # Reverse of app/mappings/oru.py::_RESULT_STATUS_MAP - "D" is the disclosed
 # representative for "entered-in-error" (that FHIR status also maps back
@@ -71,24 +71,6 @@ def _reverse_status(status: str | None) -> str:
     if not status:
         return _DEFAULT_RESULT_CODE
     return _STATUS_TO_RESULT_CODE.get(status, _DEFAULT_RESULT_CODE)
-
-
-def _build_pv1(encounter) -> str | None:
-    """The minimal PV1 shape app.mappings.common.build_minimal_encounter
-    itself reads: class code + visit identifier only, not the full ADT-
-    shaped PV1 app/transform/hl7_adt.py's own _build_pv1 builds."""
-    if encounter is None:
-        return None
-    fields: dict[int, str] = {1: "1"}
-    class_code = encounter.class_fhir.code if encounter.class_fhir else None
-    if class_code:
-        reverse_class = {"IMP": "I", "AMB": "O", "EMER": "E", "PRENC": "P"}
-        fields[2] = reverse_class.get(class_code, "O")
-    if encounter.identifier:
-        visit_number = encounter.identifier[0].value
-        if visit_number:
-            fields[19] = visit_number
-    return segment("PV1", fields, 19)
 
 
 def _build_obx_value(observation) -> tuple[str, str, str]:
@@ -178,7 +160,7 @@ class _BaseOruBuilder(MessageBuilder):
         practitioners_by_id = {p.id: p for p in find_resources(bundle, "Practitioner")}
 
         msh, _msh_dt = build_msh(bundle, "ORU", self.trigger_event)
-        pv1 = _build_pv1(encounter)
+        pv1 = build_minimal_pv1(encounter)
         pid = build_pid(patient)
 
         segments = [msh]

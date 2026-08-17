@@ -19,6 +19,7 @@ from app.transform.hl7_adt import (
     AdtA05Builder,
     AdtA08Builder,
 )
+from app.transform.hl7_mdm import MdmT02Builder
 from app.transform.hl7_oru import OruR01Builder, OruR30Builder, OruR31Builder, OruR32Builder, OruR40Builder
 from app.transform.hl7_siu import SiuS12Builder
 
@@ -35,6 +36,7 @@ _BUILDERS: dict[tuple[str, str, str], MessageBuilder] = {
     ("HL7", "ORU", "R31"): OruR31Builder(),
     ("HL7", "ORU", "R32"): OruR32Builder(),
     ("HL7", "ORU", "R40"): OruR40Builder(),
+    ("HL7", "MDM", "T02"): MdmT02Builder(),
     ("CDA", "CCD", ""): CcdReverseBuilder(),
     ("EDI", "270", ""): Edi270Builder(),
     ("EDI", "271", ""): Edi271Builder(),

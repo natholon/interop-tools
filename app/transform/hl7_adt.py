@@ -57,12 +57,7 @@ from app.generators.base import segment
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
 from app.transform.common import find_resource, format_hl7_ts
-from app.transform.hl7_common import build_msh, build_pid
-
-# Reverse of app/mappings/common.py::_PATIENT_CLASS_MAP - "AMB" is the
-# fallback on the forward side, so it's also the safest default here for
-# an Encounter.class code this table doesn't recognize.
-_CLASS_TO_PATIENT_CLASS = {"IMP": "I", "AMB": "O", "EMER": "E", "PRENC": "P"}
+from app.transform.hl7_common import CLASS_TO_PATIENT_CLASS, build_msh, build_pid
 
 
 def _build_pv1(encounter) -> str:
@@ -71,7 +66,7 @@ def _build_pv1(encounter) -> str:
         return segment("PV1", fields, 45)
 
     if encounter.class_fhir and encounter.class_fhir.code:
-        fields[2] = _CLASS_TO_PATIENT_CLASS.get(encounter.class_fhir.code, "O")
+        fields[2] = CLASS_TO_PATIENT_CLASS.get(encounter.class_fhir.code, "O")
 
     if encounter.location:
         # A02's own prior-location entry carries status="completed" (see
