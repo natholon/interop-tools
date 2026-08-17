@@ -39,6 +39,9 @@ from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.common import CD_FALLBACK_SYSTEM, OID_TO_FHIR_SYSTEM, RECOGNIZED_ENCOUNTER_CLASSES
 from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID
 from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
+from app.cda.results import ORGANIZER_TEMPLATE_ID as RESULTS_ORGANIZER_TEMPLATE_ID
+from app.cda.results import OBSERVATION_TEMPLATE_ID as RESULTS_OBSERVATION_TEMPLATE_ID
+from app.cda.results import SECTION_TEMPLATE_ID as RESULTS_SECTION_TEMPLATE_ID
 from app.cda.vitals import ORGANIZER_TEMPLATE_ID as VITALS_ORGANIZER_TEMPLATE_ID
 from app.cda.vitals import OBSERVATION_TEMPLATE_ID as VITALS_OBSERVATION_TEMPLATE_ID
 from app.cda.vitals import PANEL_CODE as VITALS_PANEL_CODE
@@ -639,6 +642,122 @@ def _build_vitals_section(observations) -> str:
     )
 
 
+# Reverse of app.cda.results.STATUS_MAP - genuinely many-to-one on the
+# forward side ("registered" alone has three source candidates: active/
+# held/suspended). Reversed to one disclosed representative per target
+# value - "active" for "registered" (a freshly-registered, not-yet-
+# actioned order is the more natural real-world default than "held"/
+# "suspended"), "cancelled" for "cancelled" (an exact, unambiguous match),
+# "completed" for "final" - rather than whatever a naive dict-comprehension
+# inversion's key-ordering would pick arbitrarily, the same deliberate-
+# disclosure discipline app.transform.hl7_mdm's own status reversal
+# already established. "unknown" (the forward side's own fallback for an
+# unrecognized/absent statusCode) has no real source to recover either,
+# so it shares the same "active" default.
+_RESULT_STATUS_TO_ACT_STATUS = {"registered": "active", "cancelled": "cancelled", "final": "completed"}
+_DEFAULT_RESULT_ACT_STATUS = "active"
+
+
+def _build_result_value_element(observation) -> str:
+    """Reverses whichever Observation.value[x] choice
+    app.cda.results._build_observation_value populated. **A genuine
+    non-issue, not a gap**: PQ and REAL both parse identically on the
+    forward side (both branches call the identical build_quantity_from_pq
+    with no REAL-specific behavior), so this always emits xsi:type="PQ"
+    regardless of whether the original was PQ or REAL - the choice is
+    provably inert for round-trip correctness, not a corner cut."""
+    if observation.valueQuantity is not None:
+        unit = f' unit="{observation.valueQuantity.unit}"' if observation.valueQuantity.unit else ""
+        return f'<value xsi:type="PQ" value="{observation.valueQuantity.value}"{unit}/>'
+    if observation.valueCodeableConcept is not None and observation.valueCodeableConcept.coding:
+        return f'<value xsi:type="CD" {_build_cd_attrs(observation.valueCodeableConcept.coding[0])}/>'
+    if observation.valueInteger is not None:
+        return f'<value xsi:type="INT" value="{observation.valueInteger}"/>'
+    if observation.valueString is not None:
+        return f'<value xsi:type="ST">{observation.valueString}</value>'
+    return ""
+
+
+def _build_reference_range_element(observation) -> str:
+    if not observation.referenceRange:
+        return ""
+    reference_range = observation.referenceRange[0]
+    low = f'<low value="{reference_range.low.value}" unit="{reference_range.low.unit or ""}"/>' if reference_range.low else ""
+    high = f'<high value="{reference_range.high.value}" unit="{reference_range.high.unit or ""}"/>' if reference_range.high else ""
+    if not low and not high:
+        return ""
+    return (
+        '<referenceRange><observationRange><value xsi:type="IVL_PQ">'
+        f"{low}{high}"
+        "</value></observationRange></referenceRange>"
+    )
+
+
+def _build_result_observation_element(observation) -> str:
+    coding = observation.code.coding[0] if observation.code and observation.code.coding else None
+    code_element = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
+    act_status = _RESULT_STATUS_TO_ACT_STATUS.get(observation.status, _DEFAULT_RESULT_ACT_STATUS)
+    effective_time = (
+        f'<effectiveTime value="{format_hl7_ts(observation.effectiveDateTime)}"/>'
+        if observation.effectiveDateTime
+        else ""
+    )
+    value = _build_result_value_element(observation)
+    interpretation = ""
+    if observation.interpretation and observation.interpretation[0].coding:
+        interpretation = f"<interpretationCode {_build_cd_attrs(observation.interpretation[0].coding[0])}/>"
+    method = ""
+    if observation.method and observation.method.coding:
+        method = f"<methodCode {_build_cd_attrs(observation.method.coding[0])}/>"
+    body_site = ""
+    if observation.bodySite and observation.bodySite.coding:
+        body_site = f"<targetSiteCode {_build_cd_attrs(observation.bodySite.coding[0])}/>"
+    reference_range = _build_reference_range_element(observation)
+
+    return (
+        '<component><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{RESULTS_OBSERVATION_TEMPLATE_ID}"/>'
+        f'<statusCode code="{act_status}"/>'
+        f"{code_element}{effective_time}{value}{interpretation}{method}{body_site}{reference_range}"
+        "</observation></component>"
+    )
+
+
+def _build_result_organizer(report, observations_by_id: dict) -> str:
+    result_ids = [ref.reference.removeprefix("urn:uuid:") for ref in (report.result or [])]
+    member_elements = "".join(
+        _build_result_observation_element(observations_by_id[result_id])
+        for result_id in result_ids
+        if result_id in observations_by_id
+    )
+    if not member_elements:
+        return ""
+    coding = report.code.coding[0] if report.code and report.code.coding else None
+    organizer_code = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
+    act_status = _RESULT_STATUS_TO_ACT_STATUS.get(report.status, _DEFAULT_RESULT_ACT_STATUS)
+    effective_time = (
+        f'<effectiveTime value="{format_hl7_ts(report.effectiveDateTime)}"/>' if report.effectiveDateTime else ""
+    )
+    return (
+        f'<entry typeCode="DRIV"><organizer classCode="BATTERY" moodCode="EVN">'
+        f'<templateId root="{RESULTS_ORGANIZER_TEMPLATE_ID}"/>'
+        f"{organizer_code}"
+        f'<statusCode code="{act_status}"/>{effective_time}{member_elements}'
+        "</organizer></entry>"
+    )
+
+
+def _build_results_section(reports, observations_by_id: dict) -> str:
+    entries = "".join(entry for report in reports if (entry := _build_result_organizer(report, observations_by_id)))
+    if not entries:
+        return ""
+    return (
+        f'<component><section><templateId root="{RESULTS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="30954-2" codeSystem="2.16.840.1.113883.6.1" displayName="Relevant diagnostic tests and/or laboratory data"/>'
+        f"<title>Results</title>{entries}</section></component>"
+    )
+
+
 class CcdReverseBuilder(MessageBuilder):
     def build_message(self, bundle: Bundle) -> str:
         patient = find_resource(bundle, "Patient")
@@ -650,6 +769,7 @@ class CcdReverseBuilder(MessageBuilder):
         allergies = find_resources(bundle, "AllergyIntolerance")
         immunizations = find_resources(bundle, "Immunization")
         observations = find_resources(bundle, "Observation")
+        diagnostic_reports = find_resources(bundle, "DiagnosticReport")
 
         document_id = bundle.identifier.value if bundle.identifier else "TT000"
         document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
@@ -660,9 +780,11 @@ class CcdReverseBuilder(MessageBuilder):
         allergies_section = _build_allergies_section(allergies)
         immunizations_section = _build_immunizations_section(immunizations)
         vitals_section = _build_vitals_section(observations)
+        observations_by_id = {o.id: o for o in observations}
+        results_section = _build_results_section(diagnostic_reports, observations_by_id)
         sections = (
             f"{problems_section}{medications_section}{allergies_section}"
-            f"{immunizations_section}{vitals_section}"
+            f"{immunizations_section}{vitals_section}{results_section}"
         )
         body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 

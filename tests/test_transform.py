@@ -507,6 +507,45 @@ def test_ccd_round_trip_preserves_vital_signs_panel_and_members():
             assert member.interpretation[0].coding[0].code == original.interpretation[0].coding[0].code
 
 
+def test_ccd_round_trip_preserves_result_report_and_observations():
+    forward_xml = (FIXTURES / "ccd_results_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original_report = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "DiagnosticReport")
+    assert len(original_report.result) == 2
+
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    report = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DiagnosticReport")
+    assert report.code.coding[0].code == original_report.code.coding[0].code
+    assert report.status == original_report.status
+    assert len(report.result) == 2
+
+    original_observations = sorted(
+        (e.resource for e in bundle.entry if e.resource.get_resource_type() == "Observation"),
+        key=lambda o: o.code.coding[0].code,
+    )
+    observations = sorted(
+        (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Observation"),
+        key=lambda o: o.code.coding[0].code,
+    )
+    assert len(observations) == 2
+
+    # One PQ-valued observation with a referenceRange, one ST-valued
+    # free-text observation - exercising two of _build_observation_value's
+    # own xsi:type branches in the same fixture.
+    pq_original = next(o for o in original_observations if o.valueQuantity is not None)
+    pq = next(o for o in observations if o.valueQuantity is not None)
+    assert float(pq.valueQuantity.value) == float(pq_original.valueQuantity.value)
+    assert pq.valueQuantity.unit == pq_original.valueQuantity.unit
+    assert pq.interpretation[0].coding[0].code == pq_original.interpretation[0].coding[0].code
+    assert float(pq.referenceRange[0].low.value) == float(pq_original.referenceRange[0].low.value)
+    assert float(pq.referenceRange[0].high.value) == float(pq_original.referenceRange[0].high.value)
+
+    st_original = next(o for o in original_observations if o.valueString is not None)
+    st = next(o for o in observations if o.valueString is not None)
+    assert st.valueString == st_original.valueString
+
+
 def test_ccd_missing_patient_raises_mapping_error():
     empty_bundle = Bundle(id="test", type="collection")
     with pytest.raises(MappingError):
