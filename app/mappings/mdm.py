@@ -230,7 +230,12 @@ class BaseMdmMapper(MessageMapper):
 
     message_type = "MDM"
 
-    def to_bundle(self, message) -> Bundle:
+    def to_bundle(self, message, recorder=None) -> Bundle:
+        # `recorder` (see app/provenance/) is accepted but not yet acted on -
+        # MDM's own resource-specific fields (DocumentReference/Binary) aren't
+        # instrumented yet (Phase 0 scope is ADT only), but build_patient's/
+        # assemble_bundle's own PID/MSH fields are instrumented "for free"
+        # since this type shares those functions with every other type.
         msh = require_segment(message, "MSH")
         pid = require_segment(message, "PID")
         txa = require_segment(message, "TXA")
@@ -241,7 +246,7 @@ class BaseMdmMapper(MessageMapper):
         except MissingSegmentError:
             pv1 = None
 
-        patient = build_patient(pid)
+        patient = build_patient(pid, recorder=recorder)
         encounter = build_minimal_encounter(pv1, patient.id) if pv1 is not None else None
         encounter_id = encounter.id if encounter is not None else None
 
@@ -256,7 +261,7 @@ class BaseMdmMapper(MessageMapper):
             + ([binary] if binary is not None else [])
             + extra_resources
         )
-        return assemble_bundle(msh, patient, *resources_in_order)
+        return assemble_bundle(msh, patient, *resources_in_order, recorder=recorder)
 
 
 class MdmT02Mapper(BaseMdmMapper):

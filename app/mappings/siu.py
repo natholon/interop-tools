@@ -244,7 +244,13 @@ class BaseSiuMapper(MessageMapper):
     def build_appointment(self, sch, tq1_segments, nte_segments, ais_segments, participants) -> Appointment:
         ...
 
-    def to_bundle(self, message: hl7.Message) -> Bundle:
+    def to_bundle(self, message: hl7.Message, recorder=None) -> Bundle:
+        # `recorder` (see app/provenance/) is accepted but not yet acted on -
+        # SIU's own resource-specific fields (Appointment/Practitioner/
+        # Location/Device) aren't instrumented yet (Phase 0 scope is ADT
+        # only), but build_patient's/assemble_bundle's own PID/MSH fields
+        # are instrumented "for free" since this type shares those
+        # functions with every other type.
         msh = require_segment(message, "MSH")
         sch = require_segment(message, "SCH")
         pid = require_segment(message, "PID")
@@ -255,7 +261,7 @@ class BaseSiuMapper(MessageMapper):
         ail_segments = optional_segments(message, "AIL")
         aip_segments = optional_segments(message, "AIP")
 
-        patient = build_patient(pid)
+        patient = build_patient(pid, recorder=recorder)
         participants, extra_resources = _build_participants(patient, aip_segments, ail_segments, aig_segments)
 
         appointment = self.build_appointment(sch, tq1_segments, nte_segments, ais_segments, participants)
@@ -265,7 +271,7 @@ class BaseSiuMapper(MessageMapper):
         if created:
             appointment.created = created
 
-        return assemble_bundle(msh, patient, appointment, *extra_resources)
+        return assemble_bundle(msh, patient, appointment, *extra_resources, recorder=recorder)
 
 
 class _BookedSiuMapper(BaseSiuMapper):

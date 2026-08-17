@@ -20,39 +20,53 @@ from app.fhir_models.builders import (
     parse_hl7_datetime,
 )
 from app.hl7.parser import component_str, field_repetitions, field_str
+from app.provenance.location import hl7_location
 
 _ENCOUNTER_CLASS_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ActCode"
 _PATIENT_CLASS_MAP = {"I": "IMP", "O": "AMB", "E": "EMER", "P": "PRENC"}
 
 
-def build_patient(pid) -> Patient:
+def build_patient(pid, recorder=None) -> Patient:
     """PID -> Patient. Shared by every HL7 message type; PID is mapped
-    identically regardless of message type or trigger event."""
+    identically regardless of message type or trigger event. `recorder`
+    is optional (see app/provenance/recorder.py) - every existing caller
+    keeps working unchanged when it's omitted."""
     patient_id = str(uuid.uuid4())
     identifiers = []
-    for repetition in field_repetitions(pid, 3):
+    for idx, repetition in enumerate(field_repetitions(pid, 3)):
         value = component_str(repetition, 1)
         if not value:
             continue
         system = component_str(repetition, 4) or "urn:interop-tools:patient-id"
         identifiers.append(Identifier(system=system, value=value))
+        if recorder:
+            recorder.record(
+                patient_id,
+                f"identifier[{len(identifiers) - 1}].value",
+                hl7_location("PID", 3, repetition=idx, component=1),
+                value,
+            )
 
     patient = Patient(id=patient_id)
     if identifiers:
         patient.identifier = identifiers
-    names = build_human_names(pid)
+    names = build_human_names(pid, resource_id=patient_id, recorder=recorder)
     if names:
         patient.name = names
     birth_date = parse_hl7_date(field_str(pid, 7))
     if birth_date:
         patient.birthDate = birth_date
+        if recorder:
+            recorder.record(patient_id, "birthDate", hl7_location("PID", 7), birth_date, source_value=field_str(pid, 7))
     sex = field_str(pid, 8)
     if sex:
         patient.gender = hl7_sex_to_fhir_gender(sex)
-    addresses = build_addresses(pid)
+        if recorder:
+            recorder.record(patient_id, "gender", hl7_location("PID", 8), patient.gender, source_value=sex)
+    addresses = build_addresses(pid, resource_id=patient_id, recorder=recorder)
     if addresses:
         patient.address = addresses
-    telecom = build_phone_telecom(pid)
+    telecom = build_phone_telecom(pid, resource_id=patient_id, recorder=recorder)
     if telecom:
         patient.telecom = [telecom]
     return patient
@@ -172,17 +186,24 @@ def build_reference_with_optional_display(resource_id: str, display: str) -> Ref
     return Reference(reference=f"urn:uuid:{resource_id}")
 
 
-def assemble_bundle(msh, patient: Patient, *resources: Resource) -> Bundle:
+def assemble_bundle(msh, patient: Patient, *resources: Resource, recorder=None) -> Bundle:
     """Wrap a Patient plus any number of additional resources (an Encounter,
     an Appointment, ...) into a Bundle, with MSH-derived metadata. Shared by
-    every message type's mapper."""
+    every message type's mapper. `recorder` is optional; when given,
+    MSH-10/MSH-7 are recorded against `bundle.id` itself (not any entry's
+    resource - see app/provenance/resolver.py's own bundle.id special case),
+    since these two fields live on the Bundle, not on any resource within it."""
     bundle = Bundle(id=str(uuid.uuid4()), type="collection")
     control_id = field_str(msh, 10)
     if control_id:
         bundle.identifier = Identifier(system="urn:interop-tools:message-control-id", value=control_id)
+        if recorder:
+            recorder.record(bundle.id, "identifier.value", hl7_location("MSH", 10), control_id)
     message_timestamp = parse_hl7_datetime(field_str(msh, 7))
     if message_timestamp:
         bundle.timestamp = message_timestamp
+        if recorder:
+            recorder.record(bundle.id, "timestamp", hl7_location("MSH", 7), message_timestamp, source_value=field_str(msh, 7))
     bundle.entry = [BundleEntry(fullUrl=f"urn:uuid:{patient.id}", resource=patient)]
     bundle.entry.extend(BundleEntry(fullUrl=f"urn:uuid:{resource.id}", resource=resource) for resource in resources)
     return bundle

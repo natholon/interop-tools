@@ -16,10 +16,11 @@ A healthcare interoperability toolkit - transformation, FHIR conversion, validat
 - **Bidirectional transformation (FHIR Bundle → source-format text)** — the reverse of every conversion pillar above, at full family-level breadth: every HL7v2 trigger event this app converts *to* FHIR (all ADT/SIU/ORU/MDM triggers, including all three cancel triggers) is also a reverse target; all three C-CDA document types convert back out, with Hospital Discharge Diagnosis reversing via its own real category marker (Discharge Medications is a disclosed, permanent exception - the forward mapping leaves no FHIR-side signal to reverse); and every X12 EDI transaction-set family above, including all three 837 variants, round-trips back to X12 text.
 - A synthetic test-data **generator** covering every combination above, with realistic field-level randomization (required fields always populated, optional fields randomly included or omitted), selectable from a dropdown in the web UI or via the JSON API.
 - A message **validator**, independent of conversion — checks any message or document (supported for conversion or not) and returns a report of `error`/`warning`/`info` findings, each pointing at the offending location, covering structural correctness (required fields, well-formed values) as well as healthcare data-quality plausibility (a birth date in the future, a discharge before an admit, an appointment ending before it starts, a lab value outside its own reference range).
+- **Data Specification** — a field-level provenance crosswalk on its own page, showing exactly which source field (e.g. `PID-5`) produced which FHIR R4 field (e.g. `Patient.name[0].family`) for an actual converted message, including an honest explanation for fields with no single source field to point at (a trigger-event-driven status, internal UUID wiring). Currently instrumented for HL7v2 ADT (all 9 triggers) - every other message type/format converts normally but discloses that field-level detail isn't implemented for it yet, rather than showing an incomplete picture as if it were complete.
 
-Conversion, generation, validation, deduplication, and bidirectional transformation are all available for every input format, through the same web UI and JSON API.
+Conversion, generation, validation, deduplication, and bidirectional transformation are all available for every input format, through the same web UI and JSON API; the Data Specification crosswalk is available wherever it's been instrumented so far (see above).
 
-**Planned next:** History and Physical's own IG-required narrative sections (Reason for Visit, History of Present Illness, Physical Exam, etc.) are the one disclosed gap remaining - they carry no structured entries recognized by this app's section-dispatch infrastructure, and mapping them properly would need a full FHIR Composition, a deliberately out-of-scope redesign for now.
+**Planned next:** extending the Data Specification crosswalk to every other message type/format (HL7v2 SIU/ORU/MDM, then C-CDA, then X12 EDI), the same one-type-at-a-time way every other pillar reached full breadth. History and Physical's own IG-required narrative sections (Reason for Visit, History of Present Illness, Physical Exam, etc.) remain a separate, disclosed gap - they carry no structured entries recognized by this app's section-dispatch infrastructure, and mapping them properly would need a full FHIR Composition, a deliberately out-of-scope redesign for now.
 
 ## Reference sources
 
@@ -66,8 +67,9 @@ curl "http://127.0.0.1:8000/api/generate?message_type=ADT&trigger_event=A01"
 curl "http://127.0.0.1:8000/api/generate?message_type=CDA&trigger_event=CCD"
 curl "http://127.0.0.1:8000/api/generate?message_type=EDI&trigger_event=837P"
 curl -X POST http://127.0.0.1:8000/api/transform -H "Content-Type: application/json" -d '{\"bundle_json\": \"{...}\", \"target_format\": \"HL7\", \"target_type\": \"ADT\", \"target_trigger\": \"A01\"}'
+curl -X POST http://127.0.0.1:8000/api/data-specification -H "Content-Type: application/json" -d '{\"hl7_text\": \"MSH|...\"}'
 ```
-Pass `&seed=<int>` to `/api/generate` for a reproducible message instead of a fresh random one. `/api/transform` takes a FHIR Bundle back the other way, to any of the targets `/api/convert` can produce - see [CLAUDE.md](CLAUDE.md) for the full list.
+Pass `&seed=<int>` to `/api/generate` for a reproducible message instead of a fresh random one. `/api/transform` takes a FHIR Bundle back the other way, to any of the targets `/api/convert` can produce - see [CLAUDE.md](CLAUDE.md) for the full list. `/api/data-specification` (also reachable via the **Data Specification** page/nav link in the UI) returns both the converted Bundle and a field-level crosswalk report for it.
 
 ## Running tests
 

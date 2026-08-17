@@ -1,0 +1,116 @@
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from app.main import app
+
+FIXTURES = Path(__file__).parent / "fixtures"
+client = TestClient(app)
+
+
+def read_fixture(name: str) -> str:
+    return (FIXTURES / name).read_text()
+
+
+def test_data_specification_page_renders():
+    response = client.get("/data-specification")
+    assert response.status_code == 200
+    assert "crosswalk-form" in response.text
+    assert "hl7_text" in response.text
+
+
+def test_index_page_has_nav_linking_to_data_specification():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'href="/data-specification"' in response.text
+
+
+def test_data_specification_page_has_nav_linking_back_to_index():
+    response = client.get("/data-specification")
+    assert response.status_code == 200
+    assert 'href="/"' in response.text
+
+
+def test_api_data_specification_adt_a01_returns_supported_report_with_entries():
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bundle"]["resourceType"] == "Bundle"
+    report = body["report"]
+    assert report["unsupported"] is False
+    assert report["message_type"] == "ADT"
+    assert report["trigger_event"] == "A01"
+    assert report["source_format"] == "HL7v2"
+    assert len(report["entries"]) > 0
+
+    family_entry = next(e for e in report["entries"] if e["fhir_path"] == "Bundle.entry[0].resource.name[0].family")
+    assert family_entry["value"] == "Doe"
+    assert family_entry["source_location"] == "PID-5[0].1"
+    assert family_entry["derivation"] == "direct"
+
+    status_entry = next(e for e in report["entries"] if e["fhir_path"] == "Bundle.entry[1].resource.status")
+    assert status_entry["derivation"] == "inferred"
+    # exclude_none=True on the JSON response omits null fields entirely
+    # rather than serializing them as null.
+    assert "source_location" not in status_entry
+    assert status_entry["reason"]
+
+
+def test_api_data_specification_edi_input_converts_but_is_unsupported():
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("edi_270_basic.x12")})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bundle"]["resourceType"] == "Bundle"
+    report = body["report"]
+    assert report["unsupported"] is True
+    assert report["source_format"] == "EDI"
+    assert report["entries"] == []
+    assert "X12 EDI" in report["unsupported_reason"]
+
+
+def test_api_data_specification_cda_input_converts_but_is_unsupported():
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("ccd_basic.xml")})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bundle"]["resourceType"] == "Bundle"
+    report = body["report"]
+    assert report["unsupported"] is True
+    assert report["source_format"] == "CDA"
+    assert report["entries"] == []
+
+
+def test_api_data_specification_non_adt_hl7_type_converts_but_is_unsupported():
+    # SIU's own to_bundle() already threads a recorder into build_patient/
+    # assemble_bundle (shared with ADT), so it produces a few real PID/MSH
+    # facts despite its own Appointment fields having no instrumentation at
+    # all - unsupported must still be True (see app/provenance/dispatch.py's
+    # own _INSTRUMENTED_MESSAGE_TYPES), and those partial facts should still
+    # be visible, not silently dropped.
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("siu_s12_basic.hl7")})
+    assert response.status_code == 200
+    report = response.json()["report"]
+    assert report["unsupported"] is True
+    assert report["source_format"] == "HL7v2"
+    assert len(report["entries"]) > 0
+    assert "SIU^S12" in report["unsupported_reason"]
+
+
+def test_api_data_specification_malformed_input_returns_400():
+    response = client.post("/api/data-specification", json={"hl7_text": "not a real message"})
+    assert response.status_code == 400
+    assert response.json()["error"]["category"] == "Parse error"
+
+
+def test_data_specification_form_post_no_js_fallback_renders_result():
+    response = client.post(
+        "/data-specification",
+        data={"hl7_text": read_fixture("adt_a01_basic.hl7")},
+    )
+    assert response.status_code == 200
+    assert "Doe" in response.text
+
+
+def test_data_specification_form_post_no_js_fallback_renders_error():
+    response = client.post("/data-specification", data={"hl7_text": "not a real message"})
+    assert response.status_code == 200
+    assert "Parse error" in response.text

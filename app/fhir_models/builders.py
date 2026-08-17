@@ -7,6 +7,7 @@ from fhir.resources.R4B.contactpoint import ContactPoint
 from fhir.resources.R4B.humanname import HumanName
 
 from app.hl7.parser import component_str, field_repetitions, field_str
+from app.provenance.location import hl7_location
 
 _GENDER_MAP = {"M": "male", "F": "female", "O": "other"}
 # Public (not module-private) - app/transform/hl7_siu.py reuses this as
@@ -56,56 +57,107 @@ def parse_hl7_datetime(ts_field: str) -> str | None:
     return f"{year}-{month}-{day}T{hour}:{minute}:{second}{tz}"
 
 
-def build_human_names(pid_segment) -> list[HumanName]:
-    """Build Patient.name from all repetitions of PID-5 (XPN)."""
+def build_human_names(pid_segment, resource_id: str | None = None, recorder=None) -> list[HumanName]:
+    """Build Patient.name from all repetitions of PID-5 (XPN). `resource_id`/
+    `recorder` are optional (see app/provenance/recorder.py) - when given,
+    each written field is recorded against its own real PID-5 repetition/
+    component, tracking which of components 2/3 actually survived into
+    `given` (an empty middle name, say, would otherwise desync the `given[i]`
+    array index from its own component number)."""
     names = []
     for i, repetition in enumerate(field_repetitions(pid_segment, 5)):
         family = component_str(repetition, 1)
-        given_parts = [part for part in (component_str(repetition, 2), component_str(repetition, 3)) if part]
+        given_candidates = [(2, component_str(repetition, 2)), (3, component_str(repetition, 3))]
+        given_parts = [(component, value) for component, value in given_candidates if value]
         if not family and not given_parts:
             continue
         name = HumanName(use="official" if i == 0 else "old")
+        name_index = len(names)
         if family:
             name.family = family
+            if recorder:
+                recorder.record(
+                    resource_id, f"name[{name_index}].family", hl7_location("PID", 5, repetition=i, component=1), family
+                )
         if given_parts:
-            name.given = given_parts
+            name.given = [value for _, value in given_parts]
+            if recorder:
+                for given_index, (component, value) in enumerate(given_parts):
+                    recorder.record(
+                        resource_id,
+                        f"name[{name_index}].given[{given_index}]",
+                        hl7_location("PID", 5, repetition=i, component=component),
+                        value,
+                    )
         names.append(name)
     return names
 
 
-def build_addresses(pid_segment) -> list[Address]:
+def build_addresses(pid_segment, resource_id: str | None = None, recorder=None) -> list[Address]:
     """Build Patient.address from all repetitions of PID-11 (XAD)."""
     addresses = []
-    for repetition in field_repetitions(pid_segment, 11):
-        line1 = component_str(repetition, 1)
-        line2 = component_str(repetition, 2)
+    for i, repetition in enumerate(field_repetitions(pid_segment, 11)):
+        line_candidates = [(1, component_str(repetition, 1)), (2, component_str(repetition, 2))]
+        line_parts = [(component, value) for component, value in line_candidates if value]
         city = component_str(repetition, 3)
         state = component_str(repetition, 4)
         postal_code = component_str(repetition, 5)
         country = component_str(repetition, 6)
-        lines = [part for part in (line1, line2) if part]
-        if not any([lines, city, state, postal_code, country]):
+        if not any([line_parts, city, state, postal_code, country]):
             continue
         address = Address()
-        if lines:
-            address.line = lines
+        address_index = len(addresses)
+        if line_parts:
+            address.line = [value for _, value in line_parts]
+            if recorder:
+                for line_index, (component, value) in enumerate(line_parts):
+                    recorder.record(
+                        resource_id,
+                        f"address[{address_index}].line[{line_index}]",
+                        hl7_location("PID", 11, repetition=i, component=component),
+                        value,
+                    )
         if city:
             address.city = city
+            if recorder:
+                recorder.record(
+                    resource_id, f"address[{address_index}].city", hl7_location("PID", 11, repetition=i, component=3), city
+                )
         if state:
             address.state = state
+            if recorder:
+                recorder.record(
+                    resource_id, f"address[{address_index}].state", hl7_location("PID", 11, repetition=i, component=4), state
+                )
         if postal_code:
             address.postalCode = postal_code
+            if recorder:
+                recorder.record(
+                    resource_id,
+                    f"address[{address_index}].postalCode",
+                    hl7_location("PID", 11, repetition=i, component=5),
+                    postal_code,
+                )
         if country:
             address.country = country
+            if recorder:
+                recorder.record(
+                    resource_id,
+                    f"address[{address_index}].country",
+                    hl7_location("PID", 11, repetition=i, component=6),
+                    country,
+                )
         addresses.append(address)
     return addresses
 
 
-def build_phone_telecom(pid_segment) -> ContactPoint | None:
+def build_phone_telecom(pid_segment, resource_id: str | None = None, recorder=None) -> ContactPoint | None:
     """Build a single Patient.telecom entry from PID-13 (home phone, XTN)."""
     phone = field_str(pid_segment, 13)
     if not phone:
         return None
+    if recorder:
+        recorder.record(resource_id, "telecom[0].value", hl7_location("PID", 13), phone)
     return ContactPoint(system="phone", use="home", value=phone)
 
 

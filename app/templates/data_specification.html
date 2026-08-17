@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Data Specification | interop-tools{% endblock %}
+{% block content %}
+<h2 class="section-heading">Data Specification</h2>
+<p class="page-intro">Paste (or generate) a message and see exactly which source field produced each FHIR R4 field in the resulting Bundle.</p>
+<form id="crosswalk-form" method="post" action="/data-specification" enctype="multipart/form-data">
+    <div class="field">
+        <div class="field-label-row">
+            <label for="hl7_text">Raw HL7v2 message, C-CDA XML document, or X12 EDI interchange</label>
+        </div>
+        <textarea id="hl7_text" name="hl7_text" rows="14" spellcheck="false" placeholder="MSH|^~\&amp;|... or &lt;ClinicalDocument xmlns=&quot;urn:hl7-org:v3&quot;&gt;... or ISA*00*...">{{ hl7_text or "" }}</textarea>
+    </div>
+    <div class="field">
+        <label for="hl7_file">Or upload a file (overrides pasted text)</label>
+        <input type="file" id="hl7_file" name="hl7_file" accept=".hl7,.txt,.xml">
+    </div>
+    <div class="field">
+        <label for="message-type-select">Sample message type</label>
+        <select id="message-type-select">
+            {% for group_label, items in supported_types %}
+            <optgroup label="{{ group_label }}">
+                {% for msg_type, trigger, label in items %}
+                <option value="{{ msg_type }}|{{ trigger }}">{{ label }}</option>
+                {% endfor %}
+            </optgroup>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="actions">
+        <button type="button" id="crosswalk-generate-sample" data-busy-text="Generating&hellip;">
+            <span class="btn-label">Generate sample</span>
+        </button>
+        <button type="submit" class="btn-primary" data-busy-text="Building crosswalk&hellip;">
+            <span class="btn-label">Build crosswalk</span>
+        </button>
+    </div>
+</form>
+
+<section id="crosswalk-error-pane" class="panel error-panel" role="alert" {% if not crosswalk_error %}hidden{% endif %}>
+    {% if crosswalk_error %}
+    <strong>{{ crosswalk_error.category }}</strong>
+    <pre>{{ crosswalk_error.message }}</pre>
+    {% endif %}
+</section>
+
+<section id="crosswalk-output-pane" class="panel output-panel" aria-live="polite" {% if not crosswalk_result %}hidden{% endif %}>
+    <div class="panel-head">
+        <h2>Crosswalk</h2>
+    </div>
+    <div id="crosswalk-unsupported-banner" class="unsupported-banner" hidden></div>
+    <div id="crosswalk-table-wrapper" class="table-wrapper" hidden>
+        <table id="crosswalk-table">
+            <thead>
+                <tr>
+                    <th>Source Location</th>
+                    <th>FHIR Path</th>
+                    <th>Source Value</th>
+                    <th>FHIR Value</th>
+                </tr>
+            </thead>
+            <tbody id="crosswalk-table-body"></tbody>
+        </table>
+    </div>
+    <pre id="crosswalk-raw-json" {% if not crosswalk_result %}hidden{% endif %}><code>{{ crosswalk_result or "" }}</code></pre>
+</section>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script src="/static/data_specification.js"></script>
+{% endblock %}

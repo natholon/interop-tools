@@ -6,44 +6,17 @@ from fastapi.templating import Jinja2Templates
 from fhir.resources.R4B.bundle import Bundle
 from pydantic import BaseModel, ValidationError
 
-from app.cda.errors import CdaParseError
 from app.dedup import deduplicate_bundle
-from app.edi.errors import EdiParseError
 from app.generators.registry import generate as generate_sample
-from app.generators.registry import list_supported_types
-from app.hl7.errors import Hl7ParseError, MappingError, MissingSegmentError
+from app.hl7.errors import MappingError
 from app.pipeline import convert_to_bundle, validate_any
+from app.routes.dropdowns import grouped_supported_types
+from app.routes.errors import ERROR_STATUS, VALIDATION_ERROR_STATUS, resolve_raw_text
 from app.transform.pipeline import build_message_from_bundle
 from app.transform.registry import list_supported_targets
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
-
-# Human-readable group labels for the sample-type dropdown's <optgroup>s,
-# keyed by the same message_type code list_supported_types() already
-# returns - a flat ~40-entry <select> across three formats is hard to scan,
-# so the dropdown groups by format/message-type instead. Falls back to the
-# raw code for any future message_type this map hasn't been updated for
-# yet, so a new generator never silently disappears from the dropdown.
-_TYPE_GROUP_LABELS = {
-    "ADT": "HL7v2 — ADT (Admit / Discharge / Transfer)",
-    "SIU": "HL7v2 — SIU (Scheduling)",
-    "ORU": "HL7v2 — ORU (Observation Results)",
-    "MDM": "HL7v2 — MDM (Document Management)",
-    "CDA": "C-CDA",
-    "EDI": "X12 EDI",
-}
-
-
-def _grouped_supported_types() -> list[tuple[str, list[tuple[str, str, str]]]]:
-    """Groups list_supported_types()'s flat (message_type, trigger, label)
-    tuples by message_type, preserving each group's own insertion order -
-    used to render the sample-type dropdown as <optgroup>s instead of one
-    long flat list."""
-    groups: dict[str, list[tuple[str, str, str]]] = {}
-    for msg_type, trigger, label in list_supported_types():
-        groups.setdefault(msg_type, []).append((msg_type, trigger, label))
-    return [(_TYPE_GROUP_LABELS.get(msg_type, msg_type), items) for msg_type, items in groups.items()]
 
 
 def _transform_target_options() -> list[tuple[str, str, str, str]]:
@@ -67,25 +40,6 @@ def _transform_target_options() -> list[tuple[str, str, str, str]]:
         for target_format, target_type, target_trigger in list_supported_targets()
     ]
 
-_ERROR_STATUS = {
-    Hl7ParseError: ("Parse error", 400),
-    CdaParseError: ("Parse error", 400),
-    EdiParseError: ("Parse error", 400),
-    MissingSegmentError: ("Missing segment", 400),
-    MappingError: ("Mapping error", 422),
-    ValidationError: ("FHIR validation error", 422),
-}
-
-# validate_any() only ever raises a parse-level error - every other failure
-# mode is caught inside validate_document()/validate_message()/
-# validate_interchange() and turned into a finding instead.
-_VALIDATION_ERROR_STATUS = {
-    Hl7ParseError: ("Parse error", 400),
-    CdaParseError: ("Parse error", 400),
-    EdiParseError: ("Parse error", 400),
-    MissingSegmentError: ("Missing segment", 400),
-}
-
 
 class ConvertResult(BaseModel):
     bundle_json: str | None = None
@@ -102,20 +56,11 @@ class ValidationResult(BaseModel):
     status_code: int = 200
 
 
-async def _resolve_raw_text(hl7_text: str, hl7_file: UploadFile | None) -> str:
-    raw_text = hl7_text
-    if hl7_file is not None and hl7_file.filename:
-        content = await hl7_file.read()
-        if content:
-            raw_text = content.decode("utf-8", errors="replace")
-    return raw_text
-
-
 def _run_conversion(raw_text: str, deduplicate: bool = False) -> ConvertResult:
     try:
         bundle = convert_to_bundle(raw_text)
-    except tuple(_ERROR_STATUS) as exc:
-        category, status_code = _ERROR_STATUS[type(exc)]
+    except tuple(ERROR_STATUS) as exc:
+        category, status_code = ERROR_STATUS[type(exc)]
         return ConvertResult(error_category=category, error_message=str(exc), status_code=status_code)
 
     dedup_summary = None
@@ -138,8 +83,8 @@ def _run_conversion(raw_text: str, deduplicate: bool = False) -> ConvertResult:
 def _run_validation(raw_text: str) -> ValidationResult:
     try:
         report = validate_any(raw_text)
-    except tuple(_VALIDATION_ERROR_STATUS) as exc:
-        category, status_code = _VALIDATION_ERROR_STATUS[type(exc)]
+    except tuple(VALIDATION_ERROR_STATUS) as exc:
+        category, status_code = VALIDATION_ERROR_STATUS[type(exc)]
         return ValidationResult(error_category=category, error_message=str(exc), status_code=status_code)
     return ValidationResult(report_json=report.model_dump_json(indent=2, exclude_none=True))
 
@@ -179,7 +124,7 @@ def _default_context() -> dict:
         "error": None,
         "validation_result": None,
         "validation_error": None,
-        "supported_types": _grouped_supported_types(),
+        "supported_types": grouped_supported_types(),
         "transform_bundle_json": "",
         "transform_target": "",
         "transform_target_options": _transform_target_options(),
@@ -200,7 +145,7 @@ async def convert_form(
     hl7_file: UploadFile | None = File(None),
     deduplicate: str | None = Form(None),
 ):
-    raw_text = await _resolve_raw_text(hl7_text, hl7_file)
+    raw_text = await resolve_raw_text(hl7_text, hl7_file)
 
     outcome = _run_conversion(raw_text, deduplicate=deduplicate is not None)
     error = (
@@ -226,7 +171,7 @@ async def validate_form(
     hl7_text: str = Form(""),
     hl7_file: UploadFile | None = File(None),
 ):
-    raw_text = await _resolve_raw_text(hl7_text, hl7_file)
+    raw_text = await resolve_raw_text(hl7_text, hl7_file)
 
     outcome = _run_validation(raw_text)
     validation_error = (

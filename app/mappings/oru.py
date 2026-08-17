@@ -193,10 +193,16 @@ class BaseOruMapper(MessageMapper):
 
     message_type = "ORU"
 
-    def to_bundle(self, message) -> Bundle:
+    def to_bundle(self, message, recorder=None) -> Bundle:
+        # `recorder` (see app/provenance/) is accepted but not yet acted on -
+        # ORU's own resource-specific fields (DiagnosticReport/Observation)
+        # aren't instrumented yet (Phase 0 scope is ADT only), but
+        # build_patient's/assemble_bundle's own PID/MSH fields are
+        # instrumented "for free" since this type shares those functions
+        # with every other type.
         msh = require_segment(message, "MSH")
         pid = require_segment(message, "PID")
-        patient = build_patient(pid)
+        patient = build_patient(pid, recorder=recorder)
 
         encounter = None
         try:
@@ -224,7 +230,7 @@ class BaseOruMapper(MessageMapper):
             diagnostic_reports.append(build_diagnostic_report(obr, patient.id, encounter_id, observation_ids))
 
         resources_in_order = ([encounter] if encounter is not None else []) + diagnostic_reports + extra_resources
-        return assemble_bundle(msh, patient, *resources_in_order)
+        return assemble_bundle(msh, patient, *resources_in_order, recorder=recorder)
 
 
 class OruR01Mapper(BaseOruMapper):

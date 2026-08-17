@@ -11,6 +11,10 @@
         <h1>interop-tools</h1>
         <p class="subtitle">HL7v2 / C-CDA / X12 EDI &harr; FHIR conversion, validation, deduplication &amp; test-data generation</p>
     </header>
+    <nav class="site-nav">
+        <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">Convert / Validate / Transform</a>
+        <a href="/data-specification" class="{{ 'active' if request.url.path == '/data-specification' else '' }}">Data Specification</a>
+    </nav>
     <main>
         {% block content %}{% endblock %}
     </main>

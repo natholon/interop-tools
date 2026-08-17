@@ -26,12 +26,13 @@ from app.mappings.common import (
     person_display,
     resolve_encounter_class,
 )
+from app.provenance.location import hl7_location
 
 _PARTICIPATION_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"
 _DISCHARGE_DISPOSITION_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0112"
 
 
-def _drop_evn2_period_start_fallback(encounter: Encounter, pv1) -> None:
+def _drop_evn2_period_start_fallback(encounter: Encounter, pv1, recorder=None) -> None:
     """build_encounter_core falls back to EVN-2 for period.start whenever
     PV1-44 is absent - correct for admission-lifecycle triggers (A01/A02/
     A04/A05/A08) where EVN-2 genuinely is the encounter's own event time,
@@ -40,12 +41,27 @@ def _drop_evn2_period_start_fallback(encounter: Encounter, pv1) -> None:
     the (cancelled) encounter, so the fallback would mislabel the
     cancel-event time as an admission start. Resets period.start to PV1-44
     only, dropping the EVN-2 fallback; clears period entirely if nothing is
-    left in it."""
+    left in it.
+
+    `recorder` corrects (not duplicates) whatever build_encounter_core
+    already recorded for period.start, since this function runs strictly
+    after it and can change or remove that field's real value - see
+    app/provenance/recorder.py's own module docstring for why `record()`
+    is last-write-wins rather than append-only, precisely for this case."""
     if encounter.period is None:
         return
     encounter.period.start = parse_hl7_datetime(field_str(pv1, 44))
+    if recorder:
+        if encounter.period.start:
+            recorder.record(
+                encounter.id, "period.start", hl7_location("PV1", 44), encounter.period.start, source_value=field_str(pv1, 44)
+            )
+        else:
+            recorder.forget(encounter.id, "period.start")
     if encounter.period.start is None and encounter.period.end is None:
         encounter.period = None
+        if recorder:
+            recorder.forget_prefix(encounter.id, "period.")
 
 
 def discharge_datetime(pv1, evn) -> str | None:
@@ -58,24 +74,40 @@ def discharge_datetime(pv1, evn) -> str | None:
     return None
 
 
-def build_encounter_core(pv1, evn, patient_id: str, status: str) -> Encounter:
+def build_encounter_core(pv1, evn, patient_id: str, status: str, status_reason: str, recorder=None) -> Encounter:
     """Shared PV1/EVN -> Encounter mapping: class, identifier, current location,
-    attending participant, and admit/discharge period. `status` is supplied by
-    the caller since it depends on which trigger event is being mapped."""
+    attending participant, and admit/discharge period. `status`/`status_reason`
+    are supplied by the caller since both depend on which trigger event is
+    being mapped - `status` is never read directly from a field's own value
+    for any ADT trigger (even A08's "presence of PV1-45" check is about
+    whether the field is populated, not what it says), so it's always
+    recorded as `derivation="inferred"`, with each trigger supplying its
+    own specific `status_reason` string."""
+    encounter_id = str(uuid.uuid4())
+    encounter_class = resolve_encounter_class(pv1)
     encounter = Encounter(
-        id=str(uuid.uuid4()),
+        id=encounter_id,
         status=status,
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
-        class_fhir=resolve_encounter_class(pv1),
+        class_fhir=encounter_class,
     )
+    if recorder:
+        recorder.record_inferred(encounter_id, "status", status_reason, status)
+        recorder.record(encounter_id, "class.code", hl7_location("PV1", 2), encounter_class.code, source_value=field_str(pv1, 2))
 
     visit_identifier = build_visit_identifier(pv1)
     if visit_identifier:
         encounter.identifier = [visit_identifier]
+        if recorder:
+            recorder.record(encounter_id, "identifier[0].value", hl7_location("PV1", 19), visit_identifier.value)
 
     current_location_display = location_display(pv1, 3)
     if current_location_display:
         encounter.location = [EncounterLocation(location=Reference(display=current_location_display))]
+        if recorder:
+            recorder.record(
+                encounter_id, "location[0].location.display", hl7_location("PV1", 3), current_location_display
+            )
 
     attending_display = person_display(pv1, 7)
     if attending_display:
@@ -85,17 +117,29 @@ def build_encounter_core(pv1, evn, patient_id: str, status: str) -> Encounter:
                 individual=Reference(display=attending_display),
             )
         ]
+        if recorder:
+            recorder.record(
+                encounter_id, "participant[0].individual.display", hl7_location("PV1", 7), attending_display
+            )
 
     period_start = parse_hl7_datetime(field_str(pv1, 44))
+    period_start_location = hl7_location("PV1", 44)
+    period_start_raw = field_str(pv1, 44)
     if not period_start and evn is not None:
         period_start = parse_hl7_datetime(field_str(evn, 2))
+        period_start_location = hl7_location("EVN", 2)
+        period_start_raw = field_str(evn, 2)
     period_end = parse_hl7_datetime(field_str(pv1, 45))
     if period_start or period_end:
         period = Period()
         if period_start:
             period.start = period_start
+            if recorder:
+                recorder.record(encounter_id, "period.start", period_start_location, period_start, source_value=period_start_raw)
         if period_end:
             period.end = period_end
+            if recorder:
+                recorder.record(encounter_id, "period.end", hl7_location("PV1", 45), period_end, source_value=field_str(pv1, 45))
         encounter.period = period
 
     return encounter
@@ -110,10 +154,10 @@ class BaseAdtMapper(MessageMapper):
     message_type = "ADT"
 
     @abstractmethod
-    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
+    def build_encounter(self, pv1, evn, patient_id: str, recorder=None) -> Encounter:
         ...
 
-    def to_bundle(self, message: hl7.Message) -> Bundle:
+    def to_bundle(self, message: hl7.Message, recorder=None) -> Bundle:
         msh = require_segment(message, "MSH")
         pid = require_segment(message, "PID")
         pv1 = require_segment(message, "PV1")
@@ -122,9 +166,9 @@ class BaseAdtMapper(MessageMapper):
         except MissingSegmentError:
             evn = None
 
-        patient = build_patient(pid)
-        encounter = self.build_encounter(pv1, evn, patient.id)
-        return assemble_bundle(msh, patient, encounter)
+        patient = build_patient(pid, recorder=recorder)
+        encounter = self.build_encounter(pv1, evn, patient.id, recorder=recorder)
+        return assemble_bundle(msh, patient, encounter, recorder=recorder)
 
 
 class AdtA01Mapper(BaseAdtMapper):
@@ -132,8 +176,15 @@ class AdtA01Mapper(BaseAdtMapper):
 
     trigger_event = "A01"
 
-    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
-        return build_encounter_core(pv1, evn, patient_id, status="in-progress")
+    def build_encounter(self, pv1, evn, patient_id: str, recorder=None) -> Encounter:
+        return build_encounter_core(
+            pv1,
+            evn,
+            patient_id,
+            status="in-progress",
+            status_reason="ADT^A01 (Admit/visit notification) always maps to status=in-progress; not read from any PV1 field.",
+            recorder=recorder,
+        )
 
 
 class AdtA04Mapper(BaseAdtMapper):
@@ -143,8 +194,15 @@ class AdtA04Mapper(BaseAdtMapper):
 
     trigger_event = "A04"
 
-    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
-        return build_encounter_core(pv1, evn, patient_id, status="in-progress")
+    def build_encounter(self, pv1, evn, patient_id: str, recorder=None) -> Encounter:
+        return build_encounter_core(
+            pv1,
+            evn,
+            patient_id,
+            status="in-progress",
+            status_reason="ADT^A04 (Register) always maps to status=in-progress, the same as A01; not read from any PV1 field.",
+            recorder=recorder,
+        )
 
 
 class AdtA02Mapper(BaseAdtMapper):
@@ -153,8 +211,15 @@ class AdtA02Mapper(BaseAdtMapper):
 
     trigger_event = "A02"
 
-    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
-        encounter = build_encounter_core(pv1, evn, patient_id, status="in-progress")
+    def build_encounter(self, pv1, evn, patient_id: str, recorder=None) -> Encounter:
+        encounter = build_encounter_core(
+            pv1,
+            evn,
+            patient_id,
+            status="in-progress",
+            status_reason="ADT^A02 (Transfer) always maps to status=in-progress; not read from any PV1 field.",
+            recorder=recorder,
+        )
         prior_display = location_display(pv1, 6)
         if prior_display:
             prior_location = EncounterLocation(location=Reference(display=prior_display), status="completed")
@@ -162,8 +227,19 @@ class AdtA02Mapper(BaseAdtMapper):
                 for loc in encounter.location:
                     loc.status = "active"
                 encounter.location = [prior_location, *encounter.location]
+                if recorder:
+                    # Inserting at index 0 shifts the current location (already
+                    # recorded by build_encounter_core at location[0]) to
+                    # location[1] - re-record both at their new indices rather
+                    # than leaving a stale location[0] fact pointing at PV1-3.
+                    recorder.record(encounter.id, "location[0].location.display", hl7_location("PV1", 6), prior_display)
+                    recorder.record(
+                        encounter.id, "location[1].location.display", hl7_location("PV1", 3), location_display(pv1, 3)
+                    )
             else:
                 encounter.location = [prior_location]
+                if recorder:
+                    recorder.record(encounter.id, "location[0].location.display", hl7_location("PV1", 6), prior_display)
         return encounter
 
 
@@ -174,15 +250,33 @@ class AdtA03Mapper(BaseAdtMapper):
 
     trigger_event = "A03"
 
-    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
+    def build_encounter(self, pv1, evn, patient_id: str, recorder=None) -> Encounter:
         discharge_dt = discharge_datetime(pv1, evn)
         if not discharge_dt:
             raise MappingError("ADT^A03 (discharge) requires a discharge date/time (PV1-45 or EVN-2)")
 
-        encounter = build_encounter_core(pv1, evn, patient_id, status="finished")
+        encounter = build_encounter_core(
+            pv1,
+            evn,
+            patient_id,
+            status="finished",
+            status_reason="ADT^A03 (Discharge) always maps to status=finished; not read from any PV1 field.",
+            recorder=recorder,
+        )
         period = encounter.period or Period()
         period.end = discharge_dt
         encounter.period = period
+        if recorder:
+            # discharge_datetime() prefers PV1-45, falling back to EVN-2 - re-derive
+            # which one actually fired (the function itself doesn't say) so the
+            # correction below points at the real source, not always PV1-45.
+            pv1_45_raw = field_str(pv1, 45)
+            if pv1_45_raw:
+                recorder.record(encounter.id, "period.end", hl7_location("PV1", 45), discharge_dt, source_value=pv1_45_raw)
+            elif evn is not None:
+                recorder.record(
+                    encounter.id, "period.end", hl7_location("EVN", 2), discharge_dt, source_value=field_str(evn, 2)
+                )
 
         disposition_code = field_str(pv1, 36)
         if disposition_code:
@@ -191,6 +285,13 @@ class AdtA03Mapper(BaseAdtMapper):
                     coding=[Coding(system=_DISCHARGE_DISPOSITION_SYSTEM, code=disposition_code)]
                 )
             )
+            if recorder:
+                recorder.record(
+                    encounter.id,
+                    "hospitalization.dischargeDisposition.coding[0].code",
+                    hl7_location("PV1", 36),
+                    disposition_code,
+                )
         return encounter
 
 
@@ -201,9 +302,16 @@ class AdtA08Mapper(BaseAdtMapper):
 
     trigger_event = "A08"
 
-    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
+    def build_encounter(self, pv1, evn, patient_id: str, recorder=None) -> Encounter:
         status = "finished" if field_str(pv1, 45) else "in-progress"
-        return build_encounter_core(pv1, evn, patient_id, status=status)
+        return build_encounter_core(
+            pv1,
+            evn,
+            patient_id,
+            status=status,
+            status_reason="Inferred from whether PV1-45 (discharge date/time) is present, not its value: finished if present, in-progress otherwise.",
+            recorder=recorder,
+        )
 
 
 class AdtA05Mapper(BaseAdtMapper):
@@ -212,8 +320,15 @@ class AdtA05Mapper(BaseAdtMapper):
 
     trigger_event = "A05"
 
-    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
-        return build_encounter_core(pv1, evn, patient_id, status="planned")
+    def build_encounter(self, pv1, evn, patient_id: str, recorder=None) -> Encounter:
+        return build_encounter_core(
+            pv1,
+            evn,
+            patient_id,
+            status="planned",
+            status_reason="ADT^A05 (Pre-admit) always maps to status=planned; not read from any PV1 field.",
+            recorder=recorder,
+        )
 
 
 class AdtA11Mapper(BaseAdtMapper):
@@ -230,9 +345,16 @@ class AdtA11Mapper(BaseAdtMapper):
 
     trigger_event = "A11"
 
-    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
-        encounter = build_encounter_core(pv1, evn, patient_id, status="entered-in-error")
-        _drop_evn2_period_start_fallback(encounter, pv1)
+    def build_encounter(self, pv1, evn, patient_id: str, recorder=None) -> Encounter:
+        encounter = build_encounter_core(
+            pv1,
+            evn,
+            patient_id,
+            status="entered-in-error",
+            status_reason="ADT^A11 (Cancel Admit) always maps to status=entered-in-error, a deliberate choice to make a backed-out admission visible; not read from any PV1 field.",
+            recorder=recorder,
+        )
+        _drop_evn2_period_start_fallback(encounter, pv1, recorder=recorder)
         return encounter
 
 
@@ -245,9 +367,16 @@ class AdtA38Mapper(BaseAdtMapper):
 
     trigger_event = "A38"
 
-    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
-        encounter = build_encounter_core(pv1, evn, patient_id, status="entered-in-error")
-        _drop_evn2_period_start_fallback(encounter, pv1)
+    def build_encounter(self, pv1, evn, patient_id: str, recorder=None) -> Encounter:
+        encounter = build_encounter_core(
+            pv1,
+            evn,
+            patient_id,
+            status="entered-in-error",
+            status_reason="ADT^A38 (Cancel Pre-Admit) always maps to status=entered-in-error, the same rationale as A11; not read from any PV1 field.",
+            recorder=recorder,
+        )
+        _drop_evn2_period_start_fallback(encounter, pv1, recorder=recorder)
         return encounter
 
 
@@ -265,9 +394,16 @@ class AdtA13Mapper(BaseAdtMapper):
 
     trigger_event = "A13"
 
-    def build_encounter(self, pv1, evn, patient_id: str) -> Encounter:
-        encounter = build_encounter_core(pv1, evn, patient_id, status="entered-in-error")
-        _drop_evn2_period_start_fallback(encounter, pv1)
+    def build_encounter(self, pv1, evn, patient_id: str, recorder=None) -> Encounter:
+        encounter = build_encounter_core(
+            pv1,
+            evn,
+            patient_id,
+            status="entered-in-error",
+            status_reason="ADT^A13 (Cancel Discharge) always maps to status=entered-in-error, the same rationale as A11; not read from any PV1 field.",
+            recorder=recorder,
+        )
+        _drop_evn2_period_start_fallback(encounter, pv1, recorder=recorder)
         disposition_code = field_str(pv1, 36)
         if disposition_code:
             encounter.hospitalization = EncounterHospitalization(
@@ -275,4 +411,11 @@ class AdtA13Mapper(BaseAdtMapper):
                     coding=[Coding(system=_DISCHARGE_DISPOSITION_SYSTEM, code=disposition_code)]
                 )
             )
+            if recorder:
+                recorder.record(
+                    encounter.id,
+                    "hospitalization.dischargeDisposition.coding[0].code",
+                    hl7_location("PV1", 36),
+                    disposition_code,
+                )
         return encounter
