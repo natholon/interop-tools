@@ -345,6 +345,27 @@ def test_api_transform_builds_siu_s12_message():
     assert "AIP" in message_text
 
 
+def test_index_transform_target_dropdown_includes_oru_r01():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "HL7 ORU^R01" in response.text
+
+
+def test_api_transform_builds_oru_r01_message():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("oru_r01_basic.hl7")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": bundle_json, "target_format": "HL7", "target_type": "ORU", "target_trigger": "R01"},
+    )
+    assert response.status_code == 200
+    message_text = response.json()["message_text"]
+    assert "||ORU^R01|" in message_text
+    assert "OBR" in message_text
+    assert "OBX" in message_text
+
+
 def test_index_transform_target_dropdown_includes_ccd_without_stray_caret():
     # A target with no real trigger-event concept must render as "CDA CCD",
     # not "CDA CCD^" - see _transform_target_options' own docstring.

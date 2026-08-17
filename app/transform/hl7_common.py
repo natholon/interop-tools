@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from fhir.resources.R4B.bundle import Bundle
 
+from app.fhir_models.builders import CWE_FALLBACK_SYSTEM
 from app.generators.base import segment
 from app.transform.common import format_hl7_date, format_hl7_ts
 
@@ -43,6 +44,23 @@ def build_msh(bundle: Bundle, message_type: str, trigger_event: str) -> tuple[st
         f"{control_id}|P|2.5"
     )
     return text, dt
+
+
+def reverse_cwe(concept) -> str:
+    """The reverse of app.fhir_models.builders.build_codeable_concept_from_cwe
+    - code=component 1, display=component 2, system=component 3 (omitted
+    when the source coding's system is CWE_FALLBACK_SYSTEM, since that
+    value only ever exists because component 3 was itself absent on the
+    forward side). Promoted here (originally module-private in
+    app/transform/hl7_siu.py) once app/transform/hl7_oru.py became a
+    second real consumer of the identical reversal."""
+    if not concept or not concept.coding:
+        return ""
+    coding = concept.coding[0]
+    code = coding.code or ""
+    display = coding.display or ""
+    system = "" if coding.system == CWE_FALLBACK_SYSTEM else (coding.system or "")
+    return f"{code}^{display}^{system}"
 
 
 def build_pid(patient) -> str:

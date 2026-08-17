@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from fhir.resources.R4B.appointment import Appointment
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
+from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 from fhir.resources.R4B.organization import Organization
 from fhir.resources.R4B.patient import Patient
 
@@ -28,6 +29,10 @@ def test_list_supported_targets_includes_all_six_adt_triggers():
 
 def test_list_supported_targets_includes_siu_s12():
     assert ("HL7", "SIU", "S12") in list_supported_targets()
+
+
+def test_list_supported_targets_includes_oru_r01():
+    assert ("HL7", "ORU", "R01") in list_supported_targets()
 
 
 def test_list_supported_targets_includes_ccd():
@@ -437,3 +442,70 @@ def test_siu_s12_missing_appointment_raises_mapping_error():
     bundle.entry = [BundleEntry(fullUrl="urn:uuid:p1", resource=patient)]
     with pytest.raises(MappingError):
         build_message_from_bundle(bundle, "HL7", "SIU", "S12")
+
+
+def test_oru_r01_round_trip_preserves_report_and_observation_grouping():
+    forward_text = (FIXTURES / "oru_r01_basic.hl7").read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+
+    message_text = build_message_from_bundle(bundle, "HL7", "ORU", "R01")
+    assert "||ORU^R01|" in message_text
+
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+    reports = sorted(
+        (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DiagnosticReport"),
+        key=lambda r: r.code.coding[0].code,
+    )
+    assert [r.code.coding[0].code for r in reports] == ["CBC", "GLU"]
+    cbc_report = reports[0]
+    assert cbc_report.status == "final"
+    assert len(cbc_report.result) == 2
+
+    glu_report = reports[1]
+    assert glu_report.status == "preliminary"
+    assert len(glu_report.result) == 1
+
+
+def test_oru_r01_round_trip_preserves_observation_values_and_performer():
+    forward_text = (FIXTURES / "oru_r01_basic.hl7").read_text()
+    bundle = convert_hl7_to_bundle(forward_text)
+
+    message_text = build_message_from_bundle(bundle, "HL7", "ORU", "R01")
+    round_tripped_bundle = convert_hl7_to_bundle(message_text)
+
+    observations = {
+        e.resource.code.coding[0].code: e.resource
+        for e in round_tripped_bundle.entry
+        if e.resource.get_resource_type() == "Observation"
+    }
+    wbc = observations["WBC"]
+    assert float(wbc.valueQuantity.value) == 7.2
+    assert wbc.valueQuantity.unit == "10*3/uL"
+    assert wbc.interpretation[0].coding[0].code == "N"
+    assert wbc.performer is not None
+
+    glucose = observations["GLUCOSE"]
+    assert float(glucose.valueQuantity.value) == 95.0
+    assert glucose.referenceRange[0].text == "70-100"
+
+    practitioner = next(
+        e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Practitioner"
+    )
+    assert practitioner.name[0].family == "Rivera"
+    assert practitioner.name[0].given == ["Ana"]
+
+
+def test_oru_r01_missing_patient_raises_mapping_error():
+    report = DiagnosticReport(id="r1", status="final", code={"coding": [{"code": "X"}]})
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:r1", resource=report)]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "HL7", "ORU", "R01")
+
+
+def test_oru_r01_missing_diagnostic_report_raises_mapping_error():
+    patient = Patient(id="p1", name=[{"family": "Solo"}])
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [BundleEntry(fullUrl="urn:uuid:p1", resource=patient)]
+    with pytest.raises(MappingError):
+        build_message_from_bundle(bundle, "HL7", "ORU", "R01")

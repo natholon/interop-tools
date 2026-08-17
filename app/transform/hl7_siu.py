@@ -43,24 +43,13 @@ there's nothing on the FHIR side this builder would need it for."""
 
 from fhir.resources.R4B.bundle import Bundle
 
-from app.fhir_models.builders import CWE_FALLBACK_SYSTEM
 from app.generators.base import segment
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
 from app.transform.common import find_resource, format_hl7_ts
-from app.transform.hl7_common import build_msh, build_pid
+from app.transform.hl7_common import build_msh, build_pid, reverse_cwe
 
 _AIG_LOCATION_ID_SYSTEM = "urn:interop-tools:location-id"
-
-
-def _reverse_cwe(concept) -> str:
-    if not concept or not concept.coding:
-        return ""
-    coding = concept.coding[0]
-    code = coding.code or ""
-    display = coding.display or ""
-    system = "" if coding.system == CWE_FALLBACK_SYSTEM else (coding.system or "")
-    return f"{code}^{display}^{system}"
 
 
 def _build_sch(appointment) -> str:
@@ -71,10 +60,10 @@ def _build_sch(appointment) -> str:
         elif identifier.system == "urn:interop-tools:filler-appointment-id" and identifier.value:
             fields[2] = identifier.value
 
-    reason = _reverse_cwe(appointment.reasonCode[0] if appointment.reasonCode else None)
+    reason = reverse_cwe(appointment.reasonCode[0] if appointment.reasonCode else None)
     if reason:
         fields[7] = reason
-    appointment_type = _reverse_cwe(appointment.appointmentType)
+    appointment_type = reverse_cwe(appointment.appointmentType)
     if appointment_type:
         fields[8] = appointment_type
     if appointment.minutesDuration is not None:
@@ -107,7 +96,7 @@ def _build_ais_segments(appointment) -> list[str]:
     return [
         segment("AIS", {1: str(i + 1), 3: cwe}, 3)
         for i, service_type in enumerate(appointment.serviceType or [])
-        if (cwe := _reverse_cwe(service_type))
+        if (cwe := reverse_cwe(service_type))
     ]
 
 
@@ -129,7 +118,7 @@ def _build_aig(index: int, resource, resource_type: str) -> str:
         identifier = resource.identifier[0].value if resource.identifier else ""
         name = resource.deviceName[0].name if resource.deviceName else ""
         fields[3] = f"{identifier}^{name}"
-        aig4 = _reverse_cwe(resource.type)
+        aig4 = reverse_cwe(resource.type)
         if aig4:
             fields[4] = aig4
     else:  # Location (AIG's own location-type branch)
