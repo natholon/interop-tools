@@ -11,9 +11,10 @@ from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, find_nested_observation, parse_partial_ts
+from app.cda.common import build_codeable_concept_from_cd, effective_time_location, find_nested_observation, parse_partial_ts
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
 from app.cda.problems import STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS as _PROBLEM_STATUS_MAP
+from app.provenance.location import xpath_location
 
 # Public (not module-private) - reused by app/cda/generator.py and
 # app/cda/validation.py, same pattern as app/cda/problems.py's constants.
@@ -85,25 +86,56 @@ SEVERITY_MAP = {
     "24484000": "severe",
 }
 
+# The Allergy-Intolerance Observation itself - reached via the Concern
+# Act's own entryRelationship[SUBJ], the identical outer-Act shape
+# Problems' own build_condition already established (unlike Medications'
+# plain substanceAdministration, which has no such wrapper).
+_ENTRY_BASE = "act/entryRelationship[SUBJ]/observation"
+_ALLERGEN_LOCATION = xpath_location(_ENTRY_BASE, "participant[CSM]", "participantRole", "playingEntity", "code")
+_STATUS_OBSERVATION_LOCATION = xpath_location(_ENTRY_BASE, "entryRelationship[REFR]", "observation", "value", "@code")
+_VALUE_LOCATION = xpath_location(_ENTRY_BASE, "value", "@code")
+_CRITICALITY_LOCATION = xpath_location(_ENTRY_BASE, "entryRelationship[SUBJ]", "observation", "value", "@code")
+_RECORDED_DATE_LOCATION = xpath_location(_ENTRY_BASE, "author", "time", "@value")
+_EFFECTIVE_TIME_BASE = xpath_location(_ENTRY_BASE, "effectiveTime")
+
+
+def _reaction_base(index: int) -> str:
+    """The nested Reaction Observation's own relative path, for the i-th
+    (0-based) entryRelationship[MFST] found - since an allergy entry can
+    carry more than one reaction, a bare "entryRelationship[MFST]" alone
+    would record the identical, ambiguous location for every reaction,
+    the same collision risk 837I's own multi-HI-segment diagnoses already
+    hit - disambiguated here proactively, the same "apply the fix
+    everywhere the identical hazard structurally exists" precedent 837D's
+    own diagnosis loop already established, even though neither real
+    fixture currently carries more than one reaction to exercise it."""
+    return xpath_location(_ENTRY_BASE, f"entryRelationship[MFST][{index}]", "observation")
+
 
 def _value_code(element) -> str | None:
     value_element = find_child(element, "value") if element is not None else None
     return value_element.get("code") if value_element is not None else None
 
 
-def _resolve_clinical_status(allergy_observation) -> CodeableConcept:
+def _resolve_clinical_status(allergy_observation) -> tuple[CodeableConcept, str | None]:
+    """Returns the resolved CodeableConcept alongside the source location
+    that produced it - None for the disclosed fixed-default branch, the
+    same "report which branch really fired" discipline
+    app/mappings/adt.py's PV1-44-vs-EVN-2 resolution and
+    app/cda/problems.py's own two-vocabulary clinicalStatus resolution
+    already established."""
     status_observation = find_nested_observation(allergy_observation, "REFR", ALLERGY_STATUS_OBSERVATION_TEMPLATE_ID)
     value_code = _value_code(status_observation)
     mapped = CLINICAL_STATUS_MAP.get(value_code) if value_code else None
     if mapped:
-        return CodeableConcept(coding=[Coding(system=_CLINICAL_STATUS_SYSTEM, code=mapped)])
+        return CodeableConcept(coding=[Coding(system=_CLINICAL_STATUS_SYSTEM, code=mapped)]), _STATUS_OBSERVATION_LOCATION
     # Per the IG's own CCDA-FHIR Allergy.csv: "entryRelationship (Allergy
     # Status absent) -> clinicalStatus: fixed value 'active'". Unlike
     # Problems (which falls back to the Concern Act's own statusCode), the
     # IG marks the Allergy Concern Act's statusCode/effectiveTime "not
     # supported" entirely - there's no second vocabulary to fall back to
     # here, only this disclosed fixed default.
-    return CodeableConcept(coding=[Coding(system=_CLINICAL_STATUS_SYSTEM, code="active")])
+    return CodeableConcept(coding=[Coding(system=_CLINICAL_STATUS_SYSTEM, code="active")]), None
 
 
 def _resolve_criticality(allergy_observation) -> str | None:
@@ -114,7 +146,13 @@ def _resolve_criticality(allergy_observation) -> str | None:
     return CRITICALITY_MAP.get(value_code) if value_code else None
 
 
-def _build_reaction(reaction_observation) -> AllergyIntoleranceReaction | None:
+def _build_reaction(
+    reaction_observation,
+    index: int,
+    resource_id: str | None = None,
+    relative_path: str | None = None,
+    recorder=None,
+) -> AllergyIntoleranceReaction | None:
     manifestation = build_codeable_concept_from_cd(find_child(reaction_observation, "value"))
     if manifestation is None:
         # manifestation is FHIR-required on AllergyIntoleranceReaction -
@@ -124,30 +162,63 @@ def _build_reaction(reaction_observation) -> AllergyIntoleranceReaction | None:
         return None
 
     reaction = AllergyIntoleranceReaction(manifestation=[manifestation])
+    reaction_base = _reaction_base(index)
+    if recorder and resource_id and relative_path:
+        coding = manifestation.coding[0]
+        recorder.record(resource_id, f"{relative_path}.manifestation[0].coding[0].code", f"{reaction_base}/value/@code", coding.code)
+        if coding.display:
+            recorder.record(
+                resource_id, f"{relative_path}.manifestation[0].coding[0].display", f"{reaction_base}/value/@displayName", coding.display
+            )
 
-    onset, _ = ivl_ts_bounds(find_child(reaction_observation, "effectiveTime"))
+    effective_time = find_child(reaction_observation, "effectiveTime")
+    onset, _ = ivl_ts_bounds(effective_time)
     onset_dt = parse_partial_ts(onset)
     if onset_dt:
         reaction.onset = onset_dt
+        if recorder and resource_id and relative_path:
+            recorder.record(
+                resource_id,
+                f"{relative_path}.onset",
+                effective_time_location(f"{reaction_base}/effectiveTime", effective_time, "low"),
+                onset_dt,
+            )
 
     severity_observation = find_nested_observation(reaction_observation, "SUBJ", SEVERITY_OBSERVATION_TEMPLATE_ID)
     severity_code = _value_code(severity_observation)
     severity = SEVERITY_MAP.get(severity_code) if severity_code else None
     if severity:
         reaction.severity = severity
+        if recorder and resource_id and relative_path:
+            recorder.record(
+                resource_id,
+                f"{relative_path}.severity",
+                xpath_location(reaction_base, "entryRelationship[SUBJ]", "observation", "value", "@code"),
+                severity,
+            )
 
     return reaction
 
 
-def _build_reactions(allergy_observation) -> list[AllergyIntoleranceReaction]:
+def _build_reactions(
+    allergy_observation, resource_id: str | None = None, recorder=None
+) -> list[AllergyIntoleranceReaction]:
     reactions = []
+    index = 0
     for relationship in find_all(allergy_observation, "entryRelationship"):
         if relationship.get("typeCode") != "MFST":
             continue
         reaction_observation = find_child(relationship, "observation")
         if reaction_observation is None or not has_template_id(reaction_observation, REACTION_OBSERVATION_TEMPLATE_ID):
             continue
-        reaction = _build_reaction(reaction_observation)
+        reaction = _build_reaction(
+            reaction_observation,
+            index,
+            resource_id=resource_id,
+            relative_path=f"reaction[{len(reactions)}]",
+            recorder=recorder,
+        )
+        index += 1
         if reaction is not None:
             reactions.append(reaction)
     return reactions
@@ -180,7 +251,7 @@ def _resolve_allergen_code(allergy_observation, negated: bool) -> CodeableConcep
     return CodeableConcept(text="No known allergies") if negated else None
 
 
-def _build_allergy_intolerance(allergy_observation, patient_id: str) -> AllergyIntolerance | None:
+def _build_allergy_intolerance(allergy_observation, patient_id: str, recorder=None) -> AllergyIntolerance | None:
     negated = allergy_observation.get("negationInd") == "true"
     code = _resolve_allergen_code(allergy_observation, negated)
     if code is None:
@@ -190,38 +261,77 @@ def _build_allergy_intolerance(allergy_observation, patient_id: str) -> AllergyI
         # convention rather than emitting an empty resource.
         return None
 
+    allergy_id = str(uuid.uuid4())
+    clinical_status, status_location = _resolve_clinical_status(allergy_observation)
     allergy = AllergyIntolerance(
-        id=str(uuid.uuid4()),
+        id=allergy_id,
         patient=Reference(reference=f"urn:uuid:{patient_id}"),
         code=code,
-        clinicalStatus=_resolve_clinical_status(allergy_observation),
+        clinicalStatus=clinical_status,
     )
+
+    if recorder:
+        if code.coding:
+            # The asserted, non-negated case - a real coded allergen.
+            recorder.record(allergy_id, "code.coding[0].code", f"{_ALLERGEN_LOCATION}/@code", code.coding[0].code)
+            if code.coding[0].display:
+                recorder.record(allergy_id, "code.coding[0].display", f"{_ALLERGEN_LOCATION}/@displayName", code.coding[0].display)
+        else:
+            # negated=True - a locally-constructed text pattern per the
+            # IG's own disclosed "No known allergy to X"/"No known
+            # allergies" wording, not read from a single source field.
+            recorder.record_inferred(
+                allergy_id,
+                "code.text",
+                "negationInd=\"true\" - no coded allergen was asserted, so code.text is built from the IG's own disclosed fixed text pattern rather than copied from a single source field.",
+                code.text,
+            )
+        if status_location:
+            recorder.record(allergy_id, "clinicalStatus.coding[0].code", status_location, clinical_status.coding[0].code)
+        else:
+            recorder.record_inferred(
+                allergy_id,
+                "clinicalStatus.coding[0].code",
+                'No Status Observation was present or resolvable - the IG\'s own CCDA-FHIR Allergy.csv fixes clinicalStatus to "active" in this case, since the Allergy Concern Act\'s own statusCode/effectiveTime are marked "not supported" for this section.',
+                clinical_status.coding[0].code,
+            )
 
     value_code = _value_code(allergy_observation)
     if value_code:
         allergy_type = TYPE_MAP.get(value_code)
         if allergy_type:
             allergy.type = allergy_type
+            if recorder:
+                recorder.record(allergy_id, "type", _VALUE_LOCATION, allergy_type)
         category = CATEGORY_MAP.get(value_code)
         if category:
             allergy.category = [category]
+            if recorder:
+                recorder.record(allergy_id, "category[0]", _VALUE_LOCATION, category)
 
-    onset, _ = ivl_ts_bounds(find_child(allergy_observation, "effectiveTime"))
+    effective_time = find_child(allergy_observation, "effectiveTime")
+    onset, _ = ivl_ts_bounds(effective_time)
     onset_dt = parse_partial_ts(onset)
     if onset_dt:
         allergy.onsetDateTime = onset_dt
+        if recorder:
+            recorder.record(allergy_id, "onsetDateTime", effective_time_location(_EFFECTIVE_TIME_BASE, effective_time, "low"), onset_dt)
 
     author_element = find_child(allergy_observation, "author")
     recorded_time_element = find_child(author_element, "time") if author_element is not None else None
     recorded_dt = parse_partial_ts(ts_value(recorded_time_element)) if recorded_time_element is not None else None
     if recorded_dt:
         allergy.recordedDate = recorded_dt
+        if recorder:
+            recorder.record(allergy_id, "recordedDate", _RECORDED_DATE_LOCATION, recorded_dt)
 
     criticality = _resolve_criticality(allergy_observation)
     if criticality:
         allergy.criticality = criticality
+        if recorder:
+            recorder.record(allergy_id, "criticality", _CRITICALITY_LOCATION, criticality)
 
-    reactions = _build_reactions(allergy_observation)
+    reactions = _build_reactions(allergy_observation, resource_id=allergy_id, recorder=recorder)
     if reactions:
         allergy.reaction = reactions
 
@@ -230,12 +340,7 @@ def _build_allergy_intolerance(allergy_observation, patient_id: str) -> AllergyI
 
 def build_allergy_intolerances(section, patient_id: str, recorder=None) -> list[AllergyIntolerance]:
     """One AllergyIntolerance per Allergy-Intolerance Observation entry in
-    the section - a section can (and commonly does) have multiple entries.
-
-    `recorder` is accepted (see app/provenance/) but not yet acted on - see
-    app/cda/medications.py::build_medication_requests' own docstring for
-    why every SECTION_BUILDERS entry accepts it uniformly regardless of
-    whether its own section is instrumented yet."""
+    the section - a section can (and commonly does) have multiple entries."""
     allergies = []
     for entry in find_all(section, "entry"):
         act = find_child(entry, "act")
@@ -247,7 +352,7 @@ def build_allergy_intolerances(section, patient_id: str, recorder=None) -> list[
             observation = find_child(relationship, "observation")
             if observation is None or not has_template_id(observation, ALLERGY_OBSERVATION_TEMPLATE_ID):
                 continue
-            allergy = _build_allergy_intolerance(observation, patient_id)
+            allergy = _build_allergy_intolerance(observation, patient_id, recorder=recorder)
             if allergy is not None:
                 allergies.append(allergy)
     return allergies

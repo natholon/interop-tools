@@ -5,10 +5,10 @@ own parsing/dispatch layer, the same "own file per format" discipline
 test_cda_validation.py already established relative to the HL7v2
 test_validation_*.py files.
 
-This slice's own scope: the document header (Patient + optional Encounter)
-and the Problems section - see app/provenance/dispatch.py's own
+Scope so far: the document header (Patient + optional Encounter), Problems,
+Medications, and Allergies - see app/provenance/dispatch.py's own
 _CDA_UNSUPPORTED_REASON for why no CDA document type is "fully
-instrumented" yet despite these two pieces producing real facts."""
+instrumented" yet despite these pieces producing real facts."""
 
 import itertools
 import uuid
@@ -41,11 +41,11 @@ def _build_bundle(fixture_name: str, recorder=None):
 
 
 # A representative fixture per document type this slice's own header +
-# Problems instrumentation touches, plus a few fixtures whose own section
-# (Medications/Allergies/Vitals/Results/Procedures/Immunizations) is NOT
-# instrumented yet - included specifically to prove the "accept recorder,
-# no-op" additions to those 8 other SECTION_BUILDERS entries don't alter
-# their own output either.
+# Problems + Medications + Allergies instrumentation touches, plus a few
+# fixtures whose own section (Vitals/Results/Procedures/Immunizations) is
+# NOT instrumented yet - included specifically to prove the "accept
+# recorder, no-op" additions to those 6 other SECTION_BUILDERS entries
+# don't alter their own output either.
 _CDA_FIXTURES = [
     "ccd_basic.xml",
     "ccd_minimal.xml",
@@ -58,6 +58,7 @@ _CDA_FIXTURES = [
     "ccd_medications_basic.xml",
     "ccd_medications_negated.xml",
     "ccd_allergies_basic.xml",
+    "ccd_allergies_no_known.xml",
     "ccd_vitals_basic.xml",
     "ccd_results_basic.xml",
     "ccd_procedures_basic.xml",
@@ -336,6 +337,78 @@ def test_ccd_medications_negated_produces_no_medication_request_facts():
 
     entries = resolve_bundle_paths(bundle, recorder)
     assert not any("medicationCodeableConcept" in e.fhir_path or "dosageInstruction" in e.fhir_path for e in entries)
+
+
+def test_ccd_allergies_basic_crosswalk_matches_known_field_values():
+    # ccd_allergies_basic.xml's own single, fully-populated entry exercises
+    # every field this section maps in one fixture - allergen, type,
+    # category, a real (not fixed-default) clinicalStatus via a Status
+    # Observation, criticality, onset, recordedDate, and one reaction with
+    # its own manifestation+severity - the same fixture test_ccd_mapping.py
+    # itself asserts against.
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("ccd_allergies_basic.xml", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    allergy_index = next(i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "AllergyIntolerance")
+    prefix = f"Bundle.entry[{allergy_index}].resource"
+
+    code_entry = by_path[f"{prefix}.code.coding[0].code"]
+    assert code_entry.value == "102263004"
+    assert code_entry.derivation == "direct"
+    assert code_entry.source_location == xpath_location(
+        "act", "entryRelationship[SUBJ]", "observation", "participant[CSM]", "participantRole", "playingEntity", "code", "@code"
+    )
+
+    status_entry = by_path[f"{prefix}.clinicalStatus.coding[0].code"]
+    assert status_entry.value == "active"
+    assert status_entry.derivation == "direct"  # a real Status Observation resolved it, not the fixed default
+
+    type_entry = by_path[f"{prefix}.type"]
+    assert type_entry.value == "allergy"
+    category_entry = by_path[f"{prefix}.category[0]"]
+    assert category_entry.value == "food"
+    # type and category are both sourced from the identical <value> element
+    # - the "one source field, two FHIR destinations" case this app has
+    # established repeatedly (e.g. SIU's AIP-3, MDM's TXA-9).
+    assert type_entry.source_location == category_entry.source_location
+
+    criticality_entry = by_path[f"{prefix}.criticality"]
+    assert criticality_entry.value == "high"
+
+    reaction_manifestation = by_path[f"{prefix}.reaction[0].manifestation[0].coding[0].code"]
+    assert reaction_manifestation.value == "247472004"
+    reaction_severity = by_path[f"{prefix}.reaction[0].severity"]
+    assert reaction_severity.value == "moderate"
+    # The reaction's own nested location is genuinely deeper than (and
+    # distinct from) the allergen's own.
+    assert reaction_manifestation.source_location != code_entry.source_location
+
+
+def test_ccd_allergies_no_known_records_inferred_negation_text_and_status():
+    # ccd_allergies_no_known.xml's fully-unresolvable-allergen negation
+    # case - no Status Observation and no coded allergen at all - so
+    # code.text and clinicalStatus both fall back to the IG's own disclosed
+    # fixed defaults, recorded as inferred rather than direct.
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("ccd_allergies_no_known.xml", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    allergy_index = next(i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "AllergyIntolerance")
+    prefix = f"Bundle.entry[{allergy_index}].resource"
+
+    code_entry = by_path[f"{prefix}.code.text"]
+    assert code_entry.value == "No known allergies"
+    assert code_entry.derivation == "inferred"
+    assert code_entry.source_location is None
+
+    status_entry = by_path[f"{prefix}.clinicalStatus.coding[0].code"]
+    assert status_entry.value == "active"
+    assert status_entry.derivation == "inferred"
+
+    assert f"{prefix}.code.coding[0].code" not in by_path
 
 
 def test_discharge_medications_reuses_medications_own_recorder_instrumentation():
