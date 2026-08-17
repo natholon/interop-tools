@@ -85,6 +85,7 @@ from app.edi.parser import (
     group_by_leader,
 )
 from app.hl7.errors import MissingSegmentError
+from app.provenance.location import edi_location
 
 _HL_PAYER = "20"
 _HL_RECEIVER = "21"
@@ -215,26 +216,54 @@ def resolve_claim_status_loops(segments: list[Segment], transaction_set_id: str)
     )
 
 
-def _build_status_concept(stc: Segment, delimiters: Delimiters) -> CodeableConcept | None:
+def _build_status_concept(
+    stc: Segment, delimiters: Delimiters, resource_id: str | None = None, recorder=None
+) -> CodeableConcept | None:
     stc01 = element(stc, 1)
     category_code = component(stc01, delimiters, 1)
     status_code = component(stc01, delimiters, 2)
     codings = []
     if category_code:
         codings.append(Coding(system=STC_CATEGORY_SYSTEM, code=category_code))
+        if recorder and resource_id:
+            recorder.record(
+                resource_id,
+                f"businessStatus.coding[{len(codings) - 1}].code",
+                edi_location("STC", 1, component=1),
+                category_code,
+            )
     if status_code:
         codings.append(Coding(system=STC_STATUS_SYSTEM, code=status_code))
+        if recorder and resource_id:
+            recorder.record(
+                resource_id,
+                f"businessStatus.coding[{len(codings) - 1}].code",
+                edi_location("STC", 1, component=2),
+                status_code,
+            )
     if not codings:
         return None
     return CodeableConcept(coding=codings)
 
 
-def _resolve_task_status(stc: Segment | None, delimiters: Delimiters) -> str:
+def _resolve_task_status(
+    stc: Segment | None, delimiters: Delimiters, resource_id: str | None = None, recorder=None
+) -> str:
     if stc is None:
+        if recorder and resource_id:
+            recorder.record_inferred(
+                resource_id,
+                "status",
+                'This claim-status group has no STC segment - Task.status defaults to "completed", the most common real-world outcome.',
+                _DEFAULT_TASK_STATUS,
+            )
         return _DEFAULT_TASK_STATUS
     category_code = component(element(stc, 1), delimiters, 1)
     prefix = category_code[:1].upper() if category_code else ""
-    return STC_CATEGORY_PREFIX_TO_TASK_STATUS.get(prefix, _DEFAULT_TASK_STATUS)
+    status = STC_CATEGORY_PREFIX_TO_TASK_STATUS.get(prefix, _DEFAULT_TASK_STATUS)
+    if recorder and resource_id:
+        recorder.record(resource_id, "status", edi_location("STC", 1, component=1), status, source_value=category_code)
+    return status
 
 
 def _build_tasks_for_patient_loop(
@@ -245,6 +274,7 @@ def _build_tasks_for_patient_loop(
     delimiters: Delimiters,
     include_status: bool,
     authored_on: str | None,
+    recorder=None,
 ) -> list[Task]:
     """One Task per TRN-led claim-status group within `patient_loop`'s own
     member segments. `include_status` is False for 276 (request - no STC
@@ -252,8 +282,9 @@ def _build_tasks_for_patient_loop(
     tasks: list[Task] = []
     trn_groups = group_by_leader(patient_loop.member_segments, "TRN", ["REF", "STC", "DTP", "SVC"])
     for trn, members in trn_groups:
+        task_id = str(uuid.uuid4())
         task = Task(
-            id=str(uuid.uuid4()),
+            id=task_id,
             status="requested",
             intent="order",
             code=CodeableConcept(text="Claim Status"),
@@ -261,20 +292,47 @@ def _build_tasks_for_patient_loop(
             owner=Reference(reference=f"urn:uuid:{payer.id}"),
             requester=Reference(reference=f"urn:uuid:{provider.id}"),
         )
+        if recorder:
+            recorder.record_inferred(
+                task_id,
+                "intent",
+                "Every Task this app builds from a 276/277 transaction set has intent=\"order\" - a claim-status check is fundamentally a tracked order/request, not read from any X12 field.",
+                "order",
+            )
+            recorder.record_inferred(
+                task_id,
+                "code.text",
+                'Task.code is a fixed, disclosed literal ("Claim Status") for every Task this app builds from a 276/277 transaction set - not read from any X12 field.',
+                "Claim Status",
+            )
         if authored_on:
             task.authoredOn = authored_on
+            if recorder:
+                recorder.record(
+                    task_id, "authoredOn", f"{edi_location('BHT', 4)}+{edi_location('BHT', 5)}", authored_on
+                )
 
         trace_number = element(trn, 2)
         if trace_number:
             task.identifier = [Identifier(system=TRACE_NUMBER_SYSTEM, value=trace_number)]
+            if recorder:
+                recorder.record(task_id, "identifier[0].value", edi_location("TRN", 2), trace_number)
 
         if include_status:
             stc = find_segment(members, "STC")
-            task.status = _resolve_task_status(stc, delimiters)
+            task.status = _resolve_task_status(stc, delimiters, resource_id=task_id, recorder=recorder)
             if stc is not None:
-                status_concept = _build_status_concept(stc, delimiters)
+                status_concept = _build_status_concept(stc, delimiters, resource_id=task_id, recorder=recorder)
                 if status_concept is not None:
                     task.businessStatus = status_concept
+        else:
+            if recorder:
+                recorder.record_inferred(
+                    task_id,
+                    "status",
+                    '276 requests carry no STC segment at all (STC is response-only, per this module\'s own docstring) - Task.status always starts, and stays, "requested".',
+                    "requested",
+                )
 
         tasks.append(task)
     return tasks
@@ -292,37 +350,38 @@ class _BaseClaimStatusBuilder(EdiTransactionBuilder):
     include_status: bool
 
     def build_bundle(self, transaction_set: TransactionSet, delimiters: Delimiters, recorder=None) -> Bundle:
-        # recorder is accepted (see app/provenance/) but not yet acted on -
-        # 276/277 aren't instrumented yet (this phase's scope is 270/271
-        # only) - Bundle.identifier/.timestamp still get recorded "for
-        # free" via the shared assemble_bundle call below, the same "every
-        # family accepts recorder even before its own slice ships"
-        # precedent every earlier format/family established.
         bht = find_segment(transaction_set.segments, "BHT")
         if bht is None:
             raise MissingSegmentError(f"{self.transaction_set_id} transaction set is missing its BHT segment")
 
         loops = resolve_claim_status_loops(transaction_set.segments, self.transaction_set_id)
 
-        payer = build_organization_from_nm1(loops.payer_nm1)
+        payer = build_organization_from_nm1(loops.payer_nm1, recorder=recorder)
         receiver: Resource = (
-            build_practitioner_from_nm1(loops.receiver_nm1)
+            build_practitioner_from_nm1(loops.receiver_nm1, recorder=recorder)
             if is_person_entity(loops.receiver_nm1)
-            else build_organization_from_nm1(loops.receiver_nm1)
+            else build_organization_from_nm1(loops.receiver_nm1, recorder=recorder)
         )
         provider: Resource = (
-            build_practitioner_from_nm1(loops.provider_nm1)
+            build_practitioner_from_nm1(loops.provider_nm1, recorder=recorder)
             if is_person_entity(loops.provider_nm1)
-            else build_organization_from_nm1(loops.provider_nm1)
+            else build_organization_from_nm1(loops.provider_nm1, recorder=recorder)
         )
         subscriber_dmg = find_segment(loops.subscriber_loop.member_segments, "DMG")
-        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, subscriber_dmg)
+        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, subscriber_dmg, recorder=recorder)
 
         authored_on = parse_x12_datetime(element(bht, 4), element(bht, 5))
 
         resources: list[Resource] = [payer, receiver, provider, subscriber]
         tasks = _build_tasks_for_patient_loop(
-            loops.subscriber_loop, subscriber, payer, provider, delimiters, self.include_status, authored_on
+            loops.subscriber_loop,
+            subscriber,
+            payer,
+            provider,
+            delimiters,
+            self.include_status,
+            authored_on,
+            recorder=recorder,
         )
 
         if loops.dependent_loop is not None:
@@ -330,11 +389,18 @@ class _BaseClaimStatusBuilder(EdiTransactionBuilder):
             # NM1 whenever it returns a non-None dependent_loop.
             dependent_nm1 = find_segment(loops.dependent_loop.member_segments, "NM1")
             dependent_dmg = find_segment(loops.dependent_loop.member_segments, "DMG")
-            dependent = build_patient_from_nm1_dmg(dependent_nm1, dependent_dmg)
+            dependent = build_patient_from_nm1_dmg(dependent_nm1, dependent_dmg, recorder=recorder)
             resources.append(dependent)
             tasks.extend(
                 _build_tasks_for_patient_loop(
-                    loops.dependent_loop, dependent, payer, provider, delimiters, self.include_status, authored_on
+                    loops.dependent_loop,
+                    dependent,
+                    payer,
+                    provider,
+                    delimiters,
+                    self.include_status,
+                    authored_on,
+                    recorder=recorder,
                 )
             )
 

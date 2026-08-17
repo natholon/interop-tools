@@ -5,9 +5,10 @@ text with self-describing delimiters, not HL7v2 pipe-delimited or XML) with
 its own parsing/dispatch layer, the same "own file per format" discipline
 test_provenance_recorder_cda.py already established.
 
-This slice's own scope: 270 (Eligibility Inquiry) and 271 (Eligibility
-Response) - see app/provenance/dispatch.py's own _INSTRUMENTED_TRANSACTION_
-SETS for why every other EDI family still reports unsupported=True."""
+Scope so far: 270 (Eligibility Inquiry), 271 (Eligibility Response), 276
+(Claim Status Request), and 277 (Claim Status Response) - see
+app/provenance/dispatch.py's own _INSTRUMENTED_TRANSACTION_SETS for why
+every other EDI family still reports unsupported=True."""
 
 import itertools
 import uuid
@@ -40,18 +41,21 @@ def _build_bundle(fixture_name: str, recorder=None):
     return builder.build_bundle(transaction_set, interchange.delimiters, recorder=recorder)
 
 
-# 270/271's own real fixtures, plus a handful of already-shipped fixtures
-# from other, still-uninstrumented EDI families - included specifically to
-# prove the no-op `recorder=None` additions to those 6 sibling builder
-# files (and the "free" Bundle.identifier/.timestamp facts every one of
-# them now gets via the shared assemble_bundle) don't alter their own
-# output either.
+# 270/271/276/277's own real fixtures, plus a handful of already-shipped
+# fixtures from other, still-uninstrumented EDI families - included
+# specifically to prove the no-op `recorder=None` additions to those 4
+# remaining sibling builder files (and the "free" Bundle.identifier/
+# .timestamp facts every one of them now gets via the shared
+# assemble_bundle) don't alter their own output either.
 _EDI_FIXTURES = [
     "edi_270_basic.x12",
     "edi_270_no_dependent.x12",
     "edi_271_basic.x12",
     "edi_271_rejected.x12",
     "edi_276_basic.x12",
+    "edi_276_no_dependent.x12",
+    "edi_277_basic.x12",
+    "edi_277_error_status.x12",
     "edi_278_request_basic.x12",
     "edi_835_basic.x12",
     "edi_837p_basic.x12",
@@ -234,18 +238,96 @@ def test_edi_270_no_dependent_records_only_subscriber_facts():
     assert family_facts[0].value == "SMITH"
 
 
-def test_edi_276_non_instrumented_family_still_gets_free_bundle_level_facts():
-    # 276 isn't instrumented this slice (see app/edi/claim_status.py's own
+def test_edi_278_non_instrumented_family_still_gets_free_bundle_level_facts():
+    # 278 isn't instrumented this slice (see app/edi/prior_auth.py's own
     # recorder docstring), but the shared assemble_bundle() still records
     # Bundle.identifier/.timestamp "for free" via the BHT segment every EDI
     # family shares - the identical "some real facts, still not fully
     # instrumented" shape ORU/MDM's own recorder already exhibited before
     # their own slices shipped.
     recorder = ProvenanceRecorder(source_format="EDI")
-    bundle = _build_bundle("edi_276_basic.x12", recorder=recorder)
+    bundle = _build_bundle("edi_278_request_basic.x12", recorder=recorder)
     entries = resolve_bundle_paths(bundle, recorder)
     assert len(entries) > 0
     assert all(e.fhir_path.startswith("Bundle.identifier") or e.fhir_path.startswith("Bundle.timestamp") for e in entries)
+
+
+def test_edi_276_basic_crosswalk_matches_known_field_values():
+    # edi_276_basic.x12 carries a subscriber and a dependent, each with
+    # their own TRN-led claim-status Task - 276 has no STC at all (request-
+    # only), so both Tasks' own status must be the inferred "requested"
+    # default, never STC-derived.
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_276_basic.x12", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    tasks = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Task"]
+    assert len(tasks) == 2
+    for i, entry in enumerate(bundle.entry):
+        if entry.resource.get_resource_type() != "Task":
+            continue
+        status_entry = by_path[f"Bundle.entry[{i}].resource.status"]
+        assert status_entry.derivation == "inferred"
+        assert status_entry.value == "requested"
+        intent_entry = by_path[f"Bundle.entry[{i}].resource.intent"]
+        assert intent_entry.derivation == "inferred"
+        assert intent_entry.value == "order"
+        code_entry = by_path[f"Bundle.entry[{i}].resource.code.text"]
+        assert code_entry.value == "Claim Status"
+        authored_entry = by_path[f"Bundle.entry[{i}].resource.authoredOn"]
+        assert authored_entry.source_location == f"{edi_location('BHT', 4)}+{edi_location('BHT', 5)}"
+        assert f"Bundle.entry[{i}].resource.businessStatus.coding[0].code" not in by_path
+
+    trace_values = {
+        by_path[f"Bundle.entry[{i}].resource.identifier[0].value"].value
+        for i, e in enumerate(bundle.entry)
+        if e.resource.get_resource_type() == "Task"
+    }
+    assert trace_values == {"TRACE0001", "TRACE0002"}
+
+
+def test_edi_277_basic_records_direct_status_and_business_status():
+    # edi_277_basic.x12's own two STC-populated Tasks must resolve
+    # status/businessStatus directly from STC01's category:status
+    # composite, not the inferred 276-style default.
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_277_basic.x12", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    finalized_task = next(t for t in bundle.entry if t.resource.get_resource_type() == "Task" and t.resource.status == "completed")
+    finalized_index = next(i for i, e in enumerate(bundle.entry) if e.resource is finalized_task.resource)
+
+    status_entry = by_path[f"Bundle.entry[{finalized_index}].resource.status"]
+    assert status_entry.derivation == "direct"
+    assert status_entry.source_location == edi_location("STC", 1, component=1)
+    assert status_entry.source_value == "F1"
+
+    category_entry = by_path[f"Bundle.entry[{finalized_index}].resource.businessStatus.coding[0].code"]
+    assert category_entry.value == "F1"
+    assert category_entry.source_location == edi_location("STC", 1, component=1)
+    status_code_entry = by_path[f"Bundle.entry[{finalized_index}].resource.businessStatus.coding[1].code"]
+    assert status_code_entry.value == "1"
+    assert status_code_entry.source_location == edi_location("STC", 1, component=2)
+
+
+def test_edi_277_error_status_records_failed_status():
+    # edi_277_error_status.x12's own "E1" category must resolve to
+    # Task.status="failed", the STC_CATEGORY_PREFIX_TO_TASK_STATUS mapping's
+    # own "E" entry, confirmed direct (not the completed/inferred default).
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_277_error_status.x12", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    task = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Task")
+    task_index = next(i for i, e in enumerate(bundle.entry) if e.resource is task)
+
+    status_entry = by_path[f"Bundle.entry[{task_index}].resource.status"]
+    assert status_entry.value == "failed"
+    assert status_entry.derivation == "direct"
+    assert status_entry.source_value == "E1"
 
 
 def test_edi_835_non_instrumented_family_with_no_bht_gets_zero_facts():

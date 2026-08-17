@@ -34,7 +34,7 @@ from app.provenance.resolver import resolve_bundle_paths
 # proof the architecture generalizes to a delimited-text format with no
 # XML/pipe-delimited structure to lean on - see CLAUDE.md's own Data
 # Specification section for the edi_location() design notes.
-_INSTRUMENTED_TRANSACTION_SETS = {"270", "271"}
+_INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277"}
 # C-CDA is only PARTIALLY instrumented (document header + the Problems
 # section, and - for free, via a shared entry-level builder, see
 # app/cda/hospital_discharge_diagnosis.py - Discharge Summary's own
