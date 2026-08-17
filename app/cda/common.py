@@ -19,6 +19,7 @@ from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.identifier import Identifier
 from fhir.resources.R4B.patient import Patient
 from fhir.resources.R4B.period import Period
+from fhir.resources.R4B.quantity import Quantity
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.resource import Resource
 
@@ -129,7 +130,37 @@ def find_nested_observation(parent, type_code: str, template_id: str):
     return None
 
 
-def _build_identifier(id_element, fallback_system: str) -> Identifier | None:
+def build_quantity_from_pq(element) -> Quantity | None:
+    """A PQ-shaped element (@value/@unit directly on the element, e.g.
+    doseQuantity, Vital Sign Observation/value, Result Observation/value)
+    -> Quantity. An IVL_PQ range (low/high children instead of a bare
+    @value) is left unmapped rather than guessed at - not this function's
+    job to disambiguate which bound a caller wants when a range is given
+    instead of a fixed value. Deliberately value+unit only, no system/code
+    - the official C-CDA on FHIR IG's own worked examples for both
+    Medications' doseQuantity and Vital Signs/Results' own value stop at
+    unit too, not adding a UCUM system/code, so this matches rather than
+    over-building. Promoted here once app/cda/medications.py's
+    _resolve_pq and app/cda/immunizations.py's _resolve_dose_quantity
+    were found to be byte-for-byte identical, with vitals.py/results.py
+    becoming a third and fourth real consumer of the same shape."""
+    if element is None:
+        return None
+    value = element.get("value")
+    if not value:
+        return None
+    quantity = Quantity(value=value)
+    unit = element.get("unit")
+    if unit:
+        quantity.unit = unit
+    return quantity
+
+
+def build_identifier(id_element, fallback_system: str) -> Identifier | None:
+    """A single CDA `<id root="..." extension="...">` -> Identifier -
+    public (not module-private) since app/cda/procedures.py became a
+    second real consumer of the identical root/extension resolution
+    already used here for patient/encounter/document ids."""
     if id_element is None:
         return None
     extension = id_element.get("extension")
@@ -146,17 +177,17 @@ def _build_identifier(id_element, fallback_system: str) -> Identifier | None:
     return None
 
 
-def _build_identifiers(id_elements, fallback_system: str) -> list[Identifier]:
+def build_identifiers(id_elements, fallback_system: str) -> list[Identifier]:
     identifiers = []
     for id_element in id_elements:
-        identifier = _build_identifier(id_element, fallback_system)
+        identifier = build_identifier(id_element, fallback_system)
         if identifier:
             identifiers.append(identifier)
     return identifiers
 
 
 def _build_patient_identifiers(patient_role) -> list[Identifier]:
-    return _build_identifiers(find_all(patient_role, "id"), "urn:interop-tools:cda-patient-id")
+    return build_identifiers(find_all(patient_role, "id"), "urn:interop-tools:cda-patient-id")
 
 
 def _build_patient_names(patient_element) -> list[HumanName]:
@@ -308,7 +339,7 @@ def build_encounter_from_header(document, patient_id: str) -> Encounter | None:
         class_fhir=Coding(system=_ENCOUNTER_CLASS_SYSTEM, code=class_code),
     )
 
-    identifiers = _build_identifiers(find_all(encompassing_encounter, "id"), "urn:interop-tools:cda-encounter-id")
+    identifiers = build_identifiers(find_all(encompassing_encounter, "id"), "urn:interop-tools:cda-encounter-id")
     if identifiers:
         encounter.identifier = identifiers
 
@@ -337,7 +368,7 @@ def assemble_bundle(document, patient: Patient, *resources: Resource) -> Bundle:
     CLAUDE.md)."""
     bundle = Bundle(id=str(uuid.uuid4()), type="collection")
 
-    identifier = _build_identifier(find_child(document, "id"), "urn:interop-tools:cda-document-id")
+    identifier = build_identifier(find_child(document, "id"), "urn:interop-tools:cda-document-id")
     if identifier:
         bundle.identifier = identifier
 

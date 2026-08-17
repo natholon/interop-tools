@@ -39,6 +39,15 @@ from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPL
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
 from app.cda.problems import CONCERN_ACT_TEMPLATE_ID, PROBLEM_OBSERVATION_TEMPLATE_ID
 from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
+from app.cda.procedures import PROCEDURE_TEMPLATE_ID, STATUS_MAP as PROCEDURE_STATUS_MAP
+from app.cda.procedures import SECTION_TEMPLATE_ID as PROCEDURES_SECTION_TEMPLATE_ID
+from app.cda.results import ORGANIZER_TEMPLATE_ID as RESULT_ORGANIZER_TEMPLATE_ID
+from app.cda.results import OBSERVATION_TEMPLATE_ID as RESULT_OBSERVATION_TEMPLATE_ID
+from app.cda.results import SECTION_TEMPLATE_ID as RESULTS_SECTION_TEMPLATE_ID
+from app.cda.results import STATUS_MAP as RESULT_STATUS_MAP
+from app.cda.vitals import ORGANIZER_TEMPLATE_ID as VITAL_SIGNS_ORGANIZER_TEMPLATE_ID
+from app.cda.vitals import OBSERVATION_TEMPLATE_ID as VITAL_SIGN_OBSERVATION_TEMPLATE_ID
+from app.cda.vitals import SECTION_TEMPLATE_ID as VITALS_SECTION_TEMPLATE_ID
 from app.hl7.errors import MappingError, MissingSegmentError
 from app.validation.common import is_before, not_in_future, parse_comparable_datetime
 from app.validation.models import ValidationFinding, ValidationReport
@@ -100,6 +109,18 @@ def _find_allergies_section(document):
 
 def _find_immunizations_section(document):
     return _find_section(document, IMMUNIZATIONS_SECTION_TEMPLATE_ID)
+
+
+def _find_vitals_section(document):
+    return _find_section(document, VITALS_SECTION_TEMPLATE_ID)
+
+
+def _find_results_section(document):
+    return _find_section(document, RESULTS_SECTION_TEMPLATE_ID)
+
+
+def _find_procedures_section(document):
+    return _find_section(document, PROCEDURES_SECTION_TEMPLATE_ID)
 
 
 def _rule_patient_name_missing(patient) -> list[ValidationFinding]:
@@ -549,6 +570,147 @@ def _rule_immunizations(section, patient, now: datetime) -> list[ValidationFindi
     return findings
 
 
+def _iter_vital_sign_observations(section):
+    """Yield each Vital Sign Observation element found via the same
+    organizer/component walk app.cda.vitals.build_vital_signs() uses, so
+    validation can never see a different set of entries than conversion
+    does."""
+    for entry in find_all(section, "entry"):
+        organizer = find_child(entry, "organizer")
+        if organizer is None or not has_template_id(organizer, VITAL_SIGNS_ORGANIZER_TEMPLATE_ID):
+            continue
+        for component in find_all(organizer, "component"):
+            observation = find_child(component, "observation")
+            if observation is None or not has_template_id(observation, VITAL_SIGN_OBSERVATION_TEMPLATE_ID):
+                continue
+            yield observation
+
+
+def _rule_vitals(section, now: datetime) -> list[ValidationFinding]:
+    findings = []
+    for observation in _iter_vital_sign_observations(section):
+        if build_codeable_concept_from_cd(find_child(observation, "code")) is None:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.vitals-missing-code",
+                    segment="Vital Signs/.../observation/code",
+                    message="A Vital Sign Observation has no resolvable coded value - the converter will silently skip this entry.",
+                )
+            )
+            continue
+
+        occurrence, _ = ivl_ts_bounds(find_child(observation, "effectiveTime"))
+        occurrence_dt = parse_comparable_datetime(occurrence) if occurrence else None
+        if occurrence_dt is not None and not_in_future(occurrence, now) is False:
+            findings.append(
+                ValidationFinding(
+                    severity="warning",
+                    rule_id="cda.vitals-effective-time-in-future",
+                    segment="Vital Signs/.../observation/effectiveTime",
+                    message="A Vital Sign Observation's effective time is in the future.",
+                )
+            )
+    return findings
+
+
+def _iter_result_observations(section):
+    """Yield each Result Observation element found via the same
+    organizer/component walk app.cda.results.build_diagnostic_reports()
+    uses, so validation can never see a different set of entries than
+    conversion does."""
+    for entry in find_all(section, "entry"):
+        organizer = find_child(entry, "organizer")
+        if organizer is None or not has_template_id(organizer, RESULT_ORGANIZER_TEMPLATE_ID):
+            continue
+        for component in find_all(organizer, "component"):
+            observation = find_child(component, "observation")
+            if observation is None or not has_template_id(observation, RESULT_OBSERVATION_TEMPLATE_ID):
+                continue
+            yield observation
+
+
+def _rule_results(section, now: datetime) -> list[ValidationFinding]:
+    findings = []
+    for observation in _iter_result_observations(section):
+        if build_codeable_concept_from_cd(find_child(observation, "code")) is None:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.result-missing-code",
+                    segment="Results/.../observation/code",
+                    message="A Result Observation has no resolvable coded value - the converter will silently skip this entry.",
+                )
+            )
+            continue
+
+        status_element = find_child(observation, "statusCode")
+        status_code = (status_element.get("code") or "").strip().lower() if status_element is not None else ""
+        if status_code and status_code not in RESULT_STATUS_MAP:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.result-status-unrecognized",
+                    segment="Results/.../observation/statusCode",
+                    message=f"statusCode {status_code!r} is not recognized - the converter will silently default to 'unknown'.",
+                )
+            )
+
+        occurrence, _ = ivl_ts_bounds(find_child(observation, "effectiveTime"))
+        occurrence_dt = parse_comparable_datetime(occurrence) if occurrence else None
+        if occurrence_dt is not None and not_in_future(occurrence, now) is False:
+            findings.append(
+                ValidationFinding(
+                    severity="warning",
+                    rule_id="cda.result-effective-time-in-future",
+                    segment="Results/.../observation/effectiveTime",
+                    message="A Result Observation's effective time is in the future.",
+                )
+            )
+    return findings
+
+
+def _iter_procedure_entries(section):
+    """Yield each Procedure Activity Procedure element found via the same
+    walk app.cda.procedures.build_procedures() uses, so validation can
+    never see a different set of entries than conversion does."""
+    for entry in find_all(section, "entry"):
+        procedure = find_child(entry, "procedure")
+        if procedure is None or not has_template_id(procedure, PROCEDURE_TEMPLATE_ID):
+            continue
+        yield procedure
+
+
+def _rule_procedures(section, now: datetime) -> list[ValidationFinding]:
+    findings = []
+    for procedure in _iter_procedure_entries(section):
+        if procedure.get("negationInd") != "true":
+            status_element = find_child(procedure, "statusCode")
+            status_code = (status_element.get("code") or "").strip().lower() if status_element is not None else ""
+            if status_code and status_code not in PROCEDURE_STATUS_MAP:
+                findings.append(
+                    ValidationFinding(
+                        severity="info",
+                        rule_id="cda.procedure-status-unrecognized",
+                        segment="Procedures/.../procedure/statusCode",
+                        message=f"statusCode {status_code!r} is not recognized - the converter will silently default to 'unknown'.",
+                    )
+                )
+
+        occurrence, _ = ivl_ts_bounds(find_child(procedure, "effectiveTime"))
+        occurrence_dt = parse_comparable_datetime(occurrence) if occurrence else None
+        if occurrence_dt is not None and not_in_future(occurrence, now) is False:
+            findings.append(
+                ValidationFinding(
+                    severity="warning",
+                    rule_id="cda.procedure-effective-time-in-future",
+                    segment="Procedures/.../procedure/effectiveTime",
+                    message="A Procedure's effective time is in the future.",
+                )
+            )
+    return findings
+
+
 def _check_convertibility(document) -> list[ValidationFinding]:
     # Deferred import: app/cda/registry.py imports app/cda/ccd.py at module
     # load time; this module doesn't need to be part of that load-order
@@ -629,6 +791,18 @@ def validate_document(document) -> ValidationReport:
     immunizations_section = _find_immunizations_section(document)
     if immunizations_section is not None:
         findings.extend(_rule_immunizations(immunizations_section, patient, now))
+
+    vitals_section = _find_vitals_section(document)
+    if vitals_section is not None:
+        findings.extend(_rule_vitals(vitals_section, now))
+
+    results_section = _find_results_section(document)
+    if results_section is not None:
+        findings.extend(_rule_results(results_section, now))
+
+    procedures_section = _find_procedures_section(document)
+    if procedures_section is not None:
+        findings.extend(_rule_procedures(procedures_section, now))
 
     findings.extend(_check_convertibility(document))
 

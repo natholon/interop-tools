@@ -8,11 +8,10 @@ import uuid
 from fhir.resources.R4B.dosage import Dosage, DosageDoseAndRate
 from fhir.resources.R4B.medicationrequest import MedicationRequest
 from fhir.resources.R4B.period import Period
-from fhir.resources.R4B.quantity import Quantity
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.timing import Timing, TimingRepeat
 
-from app.cda.common import build_codeable_concept_from_cd, parse_partial_ts
+from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, parse_partial_ts
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
 
 # Public (not module-private) - reused by app/cda/generator.py and
@@ -60,25 +59,6 @@ def _resolve_intent(substance_administration) -> str:
     return _MOOD_TO_INTENT.get(mood_code, _DEFAULT_INTENT)
 
 
-def _resolve_pq(element) -> Quantity | None:
-    """doseQuantity/rateQuantity are PQ-shaped (@value/@unit directly on the
-    element) in the common case; an IVL_PQ range (low/high children instead
-    of a bare @value) is left unmapped rather than guessed at - the IG's own
-    mapping table doesn't disambiguate which shape governs the target field,
-    and picking one bound silently would misrepresent a range as a fixed
-    dose."""
-    if element is None:
-        return None
-    value = element.get("value")
-    if not value:
-        return None
-    quantity = Quantity(value=value)
-    unit = element.get("unit")
-    if unit:
-        quantity.unit = unit
-    return quantity
-
-
 def _resolve_patient_instruction(substance_administration) -> str | None:
     """Medication Free Text Sig (entryRelationship typeCode=COMP wrapping a
     nested substanceAdministration whose <text> holds free-text SIG
@@ -99,8 +79,8 @@ def _resolve_patient_instruction(substance_administration) -> str | None:
 
 def _build_dosage(substance_administration) -> Dosage | None:
     route = build_codeable_concept_from_cd(find_child(substance_administration, "routeCode"))
-    dose_quantity = _resolve_pq(find_child(substance_administration, "doseQuantity"))
-    rate_quantity = _resolve_pq(find_child(substance_administration, "rateQuantity"))
+    dose_quantity = build_quantity_from_pq(find_child(substance_administration, "doseQuantity"))
+    rate_quantity = build_quantity_from_pq(find_child(substance_administration, "rateQuantity"))
     patient_instruction = _resolve_patient_instruction(substance_administration)
     bounds_start, bounds_end = (
         parse_partial_ts(v) for v in ivl_ts_bounds(find_child(substance_administration, "effectiveTime"))

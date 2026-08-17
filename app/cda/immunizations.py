@@ -19,10 +19,9 @@ types, Allergies' full negation crosswalk)."""
 import uuid
 
 from fhir.resources.R4B.immunization import Immunization
-from fhir.resources.R4B.quantity import Quantity
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, parse_partial_ts
+from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, parse_partial_ts
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
 
 # Public (not module-private) - reused by app/cda/generator.py and
@@ -65,22 +64,6 @@ def _resolve_status(substance_administration) -> str:
     status_element = find_child(substance_administration, "statusCode")
     code = (status_element.get("code") or "").strip().lower() if status_element is not None else ""
     return STATUS_MAP.get(code, _DEFAULT_STATUS)
-
-
-def _resolve_dose_quantity(element) -> Quantity | None:
-    """doseQuantity is PQ-shaped (@value/@unit directly on the element) in
-    the common case - an IVL_PQ range (low/high children) is left unmapped,
-    same "don't guess which bound" rationale as Medications' doseQuantity."""
-    if element is None:
-        return None
-    value = element.get("value")
-    if not value:
-        return None
-    quantity = Quantity(value=value)
-    unit = element.get("unit")
-    if unit:
-        quantity.unit = unit
-    return quantity
 
 
 def _build_immunization(substance_administration, patient_id: str) -> Immunization | None:
@@ -126,7 +109,7 @@ def _build_immunization(substance_administration, patient_id: str) -> Immunizati
     if route:
         immunization.route = route
 
-    dose_quantity = _resolve_dose_quantity(find_child(substance_administration, "doseQuantity"))
+    dose_quantity = build_quantity_from_pq(find_child(substance_administration, "doseQuantity"))
     if dose_quantity:
         immunization.doseQuantity = dose_quantity
 

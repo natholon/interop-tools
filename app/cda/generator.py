@@ -57,6 +57,16 @@ from app.cda.problems import (
     STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS,
 )
 from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
+from app.cda.procedures import PROCEDURE_TEMPLATE_ID
+from app.cda.procedures import SECTION_TEMPLATE_ID as PROCEDURES_SECTION_TEMPLATE_ID
+from app.cda.procedures import STATUS_MAP as PROCEDURE_STATUS_MAP
+from app.cda.results import ORGANIZER_TEMPLATE_ID as RESULT_ORGANIZER_TEMPLATE_ID
+from app.cda.results import OBSERVATION_TEMPLATE_ID as RESULT_OBSERVATION_TEMPLATE_ID
+from app.cda.results import SECTION_TEMPLATE_ID as RESULTS_SECTION_TEMPLATE_ID
+from app.cda.results import STATUS_MAP as RESULT_STATUS_MAP
+from app.cda.vitals import ORGANIZER_TEMPLATE_ID as VITAL_SIGNS_ORGANIZER_TEMPLATE_ID
+from app.cda.vitals import OBSERVATION_TEMPLATE_ID as VITAL_SIGN_OBSERVATION_TEMPLATE_ID
+from app.cda.vitals import SECTION_TEMPLATE_ID as VITALS_SECTION_TEMPLATE_ID
 from app.generators.base import (
     format_hl7_datetime,
     maybe,
@@ -143,6 +153,54 @@ _VACCINE_CODES = [
     ("03", "MMR"),
 ]
 _IMMUNIZATION_ROUTES = [("C28161", "INTRAMUSCULAR"), ("C38299", "TOPICAL"), ("C38304", "SUBCUTANEOUS")]
+
+# Vital Sign Observation codes (LOINC), each with a realistic unit and
+# value range - overlaps with the codes a real C-CDA-Examples CCD used
+# while researching this section, plus a few more for fuzz variety.
+_VITAL_SIGN_CODES = [
+    ("8302-2", "Body height", "cm", (150.0, 200.0)),
+    ("3141-9", "Body weight", "kg", (45.0, 120.0)),
+    ("8480-6", "Systolic blood pressure", "mm[Hg]", (95.0, 160.0)),
+    ("8462-4", "Diastolic blood pressure", "mm[Hg]", (55.0, 100.0)),
+    ("8867-4", "Heart rate", "/min", (55.0, 110.0)),
+    ("8310-5", "Body temperature", "Cel", (36.0, 39.0)),
+    ("9279-1", "Respiratory rate", "/min", (12.0, 22.0)),
+    ("2708-6", "Oxygen saturation", "%", (90.0, 100.0)),
+]
+_INTERPRETATION_CODES = ["N", "H", "L"]
+
+# Result Observation codes (LOINC), each with a realistic unit and value
+# range - a representative basic metabolic/CBC-shaped pool.
+_RESULT_OBSERVATION_CODES = [
+    ("718-7", "Hemoglobin", "g/dL", (11.0, 16.0)),
+    ("6690-2", "Leukocytes", "10*3/uL", (4.0, 11.0)),
+    ("777-3", "Platelets", "10*3/uL", (150.0, 400.0)),
+    ("2160-0", "Creatinine", "mg/dL", (0.6, 1.3)),
+    ("2345-7", "Glucose", "mg/dL", (70.0, 140.0)),
+    ("2951-2", "Sodium", "mmol/L", (135.0, 145.0)),
+]
+_RESULT_PANEL_CODES = [
+    ("58410-2", "CBC panel"),
+    ("24323-8", "Comprehensive metabolic panel"),
+    ("57021-8", "CBC W Auto Differential panel"),
+]
+
+# Procedure Activity Procedure codes (SNOMED CT) and body-site codes -
+# overlaps with the code the real C-CDA-Examples CCD used while
+# researching this section, plus a few more for fuzz variety.
+_PROCEDURE_CODES = [
+    ("80146002", "Excision of appendix"),
+    ("73761001", "Colonoscopy"),
+    ("232717009", "Coronary artery bypass graft"),
+    ("18946005", "Fracture reduction"),
+    ("174040003", "Excisional biopsy of skin lesion"),
+]
+_BODY_SITE_CODES = [
+    ("66019005", "Colon structure"),
+    ("80144004", "Appendix structure"),
+    ("51185008", "Thoracic structure"),
+    ("53120007", "Upper limb structure"),
+]
 
 
 def _random_uuid_like(rng: random.Random) -> str:
@@ -525,6 +583,167 @@ def _random_immunizations_section(rng: random.Random) -> str | None:
     )
 
 
+def _random_vital_sign_observation(rng: random.Random, start) -> str:
+    code, display, unit, (low, high) = rng.choice(_VITAL_SIGN_CODES)
+    obs_id = _random_uuid_like(rng)
+    value = round(rng.uniform(low, high), 1)
+    interpretation = ""
+    if maybe(rng, 0.3):
+        interpretation = (
+            f'<interpretationCode code="{rng.choice(_INTERPRETATION_CODES)}" codeSystem="2.16.840.1.113883.5.83"/>'
+        )
+    return (
+        f'<component><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{VITAL_SIGN_OBSERVATION_TEMPLATE_ID}"/><id root="{obs_id}"/>'
+        f'<code code="{code}" codeSystem="2.16.840.1.113883.6.1" displayName="{display}"/>'
+        '<statusCode code="completed"/>'
+        f'<effectiveTime value="{format_hl7_datetime(start)}"/>'
+        f'<value xsi:type="PQ" value="{value}" unit="{unit}"/>{interpretation}'
+        "</observation></component>"
+    )
+
+
+def _random_vital_signs_organizer(rng: random.Random) -> str:
+    org_id = _random_uuid_like(rng)
+    start, _ = random_time_range(rng, min_days=-60, max_days=5)
+    count = rng.randint(1, 4)
+    components = "".join(_random_vital_sign_observation(rng, start) for _ in range(count))
+    return (
+        f'<entry typeCode="DRIV"><organizer classCode="CLUSTER" moodCode="EVN">'
+        f'<templateId root="{VITAL_SIGNS_ORGANIZER_TEMPLATE_ID}"/><id root="{org_id}"/>'
+        '<code code="46680005" codeSystem="2.16.840.1.113883.6.96" displayName="Vital signs"/>'
+        '<statusCode code="completed"/>'
+        f'<effectiveTime value="{format_hl7_datetime(start)}"/>'
+        f"{components}"
+        "</organizer></entry>"
+    )
+
+
+def _random_vital_signs_section(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.7):
+        return None
+    entries = "".join(_random_vital_signs_organizer(rng) for _ in range(rng.randint(1, 2)))
+    return (
+        f'<component><section><templateId root="{VITALS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="8716-3" codeSystem="2.16.840.1.113883.6.1" displayName="Vital signs"/>'
+        f"<title>Vital Signs</title>{entries}</section></component>"
+    )
+
+
+def _random_result_observation(rng: random.Random, start) -> str:
+    code, display, unit, (low, high) = rng.choice(_RESULT_OBSERVATION_CODES)
+    obs_id = _random_uuid_like(rng)
+    value = round(rng.uniform(low, high), 1)
+    # Mostly recognized statusCode values (exercising every row of
+    # STATUS_MAP at least occasionally), rarely an unrecognized one -
+    # direct fuzz coverage of _resolve_status's "unknown" fallback branch,
+    # same split as Medications'/Procedures' own status fuzzing.
+    status_code = rng.choice(list(RESULT_STATUS_MAP)) if maybe(rng, 0.85) else "nullified"
+    interpretation = ""
+    if maybe(rng, 0.3):
+        interpretation = (
+            f'<interpretationCode code="{rng.choice(_INTERPRETATION_CODES)}" codeSystem="2.16.840.1.113883.5.83"/>'
+        )
+    # A reference range is genuinely optional per result - direct fuzz
+    # coverage of _build_reference_range's own present/absent branch.
+    reference_range = ""
+    if maybe(rng, 0.5):
+        low_bound = round(value * 0.8, 1)
+        high_bound = round(value * 1.2, 1)
+        reference_range = (
+            '<referenceRange><observationRange><value xsi:type="IVL_PQ">'
+            f'<low value="{low_bound}" unit="{unit}"/><high value="{high_bound}" unit="{unit}"/>'
+            "</value></observationRange></referenceRange>"
+        )
+    return (
+        f'<component><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{RESULT_OBSERVATION_TEMPLATE_ID}"/><id root="{obs_id}"/>'
+        f'<code code="{code}" codeSystem="2.16.840.1.113883.6.1" displayName="{display}"/>'
+        f'<statusCode code="{status_code}"/>'
+        f'<effectiveTime value="{format_hl7_datetime(start)}"/>'
+        f'<value xsi:type="PQ" value="{value}" unit="{unit}"/>{interpretation}{reference_range}'
+        "</observation></component>"
+    )
+
+
+def _random_result_organizer(rng: random.Random) -> str:
+    org_id = _random_uuid_like(rng)
+    panel_code, panel_display = rng.choice(_RESULT_PANEL_CODES)
+    start, _ = random_time_range(rng, min_days=-90, max_days=5)
+    status_code = rng.choice(list(RESULT_STATUS_MAP)) if maybe(rng, 0.85) else "nullified"
+    count = rng.randint(1, 3)
+    components = "".join(_random_result_observation(rng, start) for _ in range(count))
+    return (
+        f'<entry typeCode="DRIV"><organizer classCode="BATTERY" moodCode="EVN">'
+        f'<templateId root="{RESULT_ORGANIZER_TEMPLATE_ID}"/><id root="{org_id}"/>'
+        f'<code code="{panel_code}" codeSystem="2.16.840.1.113883.6.1" displayName="{panel_display}"/>'
+        f'<statusCode code="{status_code}"/>'
+        f'<effectiveTime value="{format_hl7_datetime(start)}"/>'
+        f"{components}"
+        "</organizer></entry>"
+    )
+
+
+def _random_results_section(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.7):
+        return None
+    entries = "".join(_random_result_organizer(rng) for _ in range(rng.randint(1, 2)))
+    return (
+        f'<component><section><templateId root="{RESULTS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="30954-2" codeSystem="2.16.840.1.113883.6.1" displayName="Relevant diagnostic tests and/or laboratory data"/>'
+        f"<title>Results</title>{entries}</section></component>"
+    )
+
+
+def _random_procedure_entry(rng: random.Random) -> str:
+    proc_id = _random_uuid_like(rng)
+    code, display = rng.choice(_PROCEDURE_CODES)
+    negated = maybe(rng, 0.1)
+    negation_attr = ' negationInd="true"' if negated else ""
+    # Mostly recognized statusCode values, rarely an unrecognized one -
+    # direct fuzz coverage of _resolve_status's "unknown" fallback branch.
+    status_code = rng.choice(list(PROCEDURE_STATUS_MAP)) if maybe(rng, 0.85) else "held"
+
+    # Point-in-time effectiveTime (~60%) or a low/high period (~40%) -
+    # direct fuzz coverage of both branches app/cda/procedures.py's own
+    # _build_procedure needs to distinguish (use performedDateTime only
+    # when effectiveTime@value is populated, else performedPeriod).
+    if maybe(rng, 0.6):
+        point_in_time, _ = random_time_range(rng, min_days=-400, max_days=5)
+        effective_time = f'<effectiveTime value="{format_hl7_datetime(point_in_time)}"/>'
+    else:
+        start, end = random_time_range(rng, min_days=-400, max_days=5)
+        effective_time = (
+            f'<effectiveTime><low value="{format_hl7_datetime(start)}"/>'
+            f'<high value="{format_hl7_datetime(end)}"/></effectiveTime>'
+        )
+
+    body_site = ""
+    if maybe(rng, 0.5):
+        site_code, site_display = rng.choice(_BODY_SITE_CODES)
+        body_site = f'<targetSiteCode code="{site_code}" codeSystem="2.16.840.1.113883.6.96" displayName="{site_display}"/>'
+
+    return (
+        f'<entry typeCode="DRIV"><procedure classCode="PROC" moodCode="EVN"{negation_attr}>'
+        f'<templateId root="{PROCEDURE_TEMPLATE_ID}"/><id root="{proc_id}"/>'
+        f'<code code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
+        f'<statusCode code="{status_code}"/>'
+        f"{effective_time}{body_site}"
+        "</procedure></entry>"
+    )
+
+
+def _random_procedures_section(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.7):
+        return None
+    entries = "".join(_random_procedure_entry(rng) for _ in range(rng.randint(1, 3)))
+    return (
+        f'<component><section><templateId root="{PROCEDURES_SECTION_TEMPLATE_ID}"/>'
+        '<code code="47519-4" codeSystem="2.16.840.1.113883.6.1" displayName="History of procedures"/>'
+        f"<title>Procedures</title>{entries}</section></component>"
+    )
+
+
 def _random_patient(rng: random.Random) -> str:
     sex = random_sex(rng) if maybe(rng) else None
     ids = "".join(_random_id_element(rng) for _ in range(rng.choice((1, 2))))
@@ -583,7 +802,18 @@ def _generate_sectioned_document(
     medications_section = _random_medications_section(rng) or ""
     allergies_section = _random_allergies_section(rng) or ""
     immunizations_section = _random_immunizations_section(rng) or ""
-    sections = problems_section + medications_section + allergies_section + immunizations_section
+    vitals_section = _random_vital_signs_section(rng) or ""
+    results_section = _random_results_section(rng) or ""
+    procedures_section = _random_procedures_section(rng) or ""
+    sections = (
+        problems_section
+        + medications_section
+        + allergies_section
+        + immunizations_section
+        + vitals_section
+        + results_section
+        + procedures_section
+    )
     body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 
     xml_text = (

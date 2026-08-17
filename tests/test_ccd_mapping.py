@@ -261,6 +261,82 @@ def test_immunizations_basic_fixture_maps_administered_and_refused_skips_planned
     assert refused.occurrenceDateTime is None
 
 
+def test_vitals_basic_fixture_maps_panel_and_members():
+    bundle = convert_cda_to_bundle(read_fixture("ccd_vitals_basic.xml"))
+    entries = _entries_by_type(bundle)
+    patient = entries["Patient"][0].resource
+    observations = [e.resource for e in entries["Observation"]]
+    assert len(observations) == 3
+
+    panel = next(o for o in observations if o.code.coding[0].code == "85353-1")
+    members = [o for o in observations if o.id != panel.id]
+    assert len(members) == 2
+    assert {ref.reference for ref in panel.hasMember} == {f"urn:uuid:{m.id}" for m in members}
+    assert panel.status == "final"
+    assert panel.category[0].coding[0].code == "vital-signs"
+    assert panel.subject.reference == f"urn:uuid:{patient.id}"
+    assert panel.effectiveDateTime.isoformat() == "2026-08-05T09:00:00-05:00"
+
+    heart_rate = next(m for m in members if m.code.coding[0].code == "8867-4")
+    assert float(heart_rate.valueQuantity.value) == 76
+    assert heart_rate.valueQuantity.unit == "/min"
+    assert heart_rate.interpretation[0].coding[0].code == "N"
+
+    temperature = next(m for m in members if m.code.coding[0].code == "8310-5")
+    assert float(temperature.valueQuantity.value) == 98.6
+    assert temperature.valueQuantity.unit == "[degF]"
+    assert temperature.interpretation is None
+
+
+def test_results_basic_fixture_maps_report_and_observations():
+    bundle = convert_cda_to_bundle(read_fixture("ccd_results_basic.xml"))
+    entries = _entries_by_type(bundle)
+    patient = entries["Patient"][0].resource
+    report = entries["DiagnosticReport"][0].resource
+    observations = {o.resource.code.coding[0].code: o.resource for o in entries["Observation"]}
+
+    assert report.status == "final"
+    assert report.code.coding[0].display == "Complete blood count panel"
+    assert report.subject.reference == f"urn:uuid:{patient.id}"
+    assert {ref.reference for ref in report.result} == {f"urn:uuid:{o.id}" for o in observations.values()}
+
+    wbc = observations["6690-2"]
+    assert float(wbc.valueQuantity.value) == 6.8
+    assert wbc.valueQuantity.unit == "10*3/uL"
+    assert float(wbc.referenceRange[0].low.value) == 4.5
+    assert float(wbc.referenceRange[0].high.value) == 11.0
+
+    culture = observations["33747-0"]
+    assert culture.valueString == "No growth after 48 hours"
+    assert culture.valueQuantity is None
+
+
+def test_procedures_basic_fixture_maps_completed_and_negated_entries():
+    bundle = convert_cda_to_bundle(read_fixture("ccd_procedures_basic.xml"))
+    entries = _entries_by_type(bundle)
+    patient = entries["Patient"][0].resource
+    procedures = {p.resource.code.coding[0].code: p.resource for p in entries["Procedure"]}
+    assert len(procedures) == 2
+
+    appendectomy = procedures["80146002"]
+    assert appendectomy.status == "completed"
+    assert appendectomy.subject.reference == f"urn:uuid:{patient.id}"
+    assert appendectomy.performedDateTime.isoformat() == "2026-06-15T12:00:00-05:00"
+    assert appendectomy.performedPeriod is None
+    assert appendectomy.bodySite[0].coding[0].display == "Appendix structure"
+    assert appendectomy.identifier[0].value == "PROC001"
+
+    colonoscopy = procedures["73761001"]
+    # negationInd="true" overrides statusCode unconditionally.
+    assert colonoscopy.status == "not-done"
+    assert colonoscopy.performedDateTime is None
+    assert colonoscopy.performedPeriod.start.isoformat() == "2026-02-01"
+    assert colonoscopy.performedPeriod.end.isoformat() == "2026-02-01"
+    # Root-only id (no @extension) falls back to the urn:oid identifier shape.
+    assert colonoscopy.identifier[0].system == "urn:ietf:rfc:3986"
+    assert colonoscopy.identifier[0].value == "urn:oid:d1e2f3a4-0002-4a1a-8a1a-000000000002"
+
+
 def test_discharge_summary_maps_header_and_recognized_sections_skips_discharge_specific_ones():
     bundle = convert_cda_to_bundle(read_fixture("discharge_summary_basic.xml"))
     entries = _entries_by_type(bundle)

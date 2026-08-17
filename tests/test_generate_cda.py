@@ -489,6 +489,181 @@ def test_immunization_dosing_and_lot_number_vary_across_seeds():
     assert lot_present > 0 and lot_absent > 0
 
 
+_VITALS_SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.4.1"
+_VITAL_SIGNS_ORGANIZER_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.26"
+_VITAL_SIGN_OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.27"
+_RESULTS_SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.3.1"
+_RESULT_ORGANIZER_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.1"
+_RESULT_OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.2"
+_PROCEDURES_SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.7.1"
+_PROCEDURE_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.14"
+
+
+def _vital_signs_organizers(document):
+    for section in find_all(document, "component/structuredBody/component/section"):
+        if not has_template_id(section, _VITALS_SECTION_TEMPLATE_ID):
+            continue
+        for entry in find_all(section, "entry"):
+            organizer = find_child(entry, "organizer")
+            if organizer is not None and has_template_id(organizer, _VITAL_SIGNS_ORGANIZER_TEMPLATE_ID):
+                yield organizer
+
+
+def _vital_sign_observations(document):
+    for organizer in _vital_signs_organizers(document):
+        for component in find_all(organizer, "component"):
+            observation = find_child(component, "observation")
+            if observation is not None and has_template_id(observation, _VITAL_SIGN_OBSERVATION_TEMPLATE_ID):
+                yield observation
+
+
+def test_vitals_section_varies_across_seeds():
+    def has_vitals_section(document):
+        return any(True for _ in _vital_signs_organizers(document))
+
+    present, absent = _present_absent(range(60), has_vitals_section)
+    assert present > 0 and absent > 0
+
+
+def test_vital_signs_organizer_and_observation_counts_vary_across_seeds():
+    organizer_counts = set()
+    observation_counts = set()
+    for seed in range(60):
+        document = _document(seed)
+        organizer_counts.add(sum(1 for _ in _vital_signs_organizers(document)))
+        observation_counts.add(sum(1 for _ in _vital_sign_observations(document)))
+    assert len(organizer_counts) > 1
+    assert len(observation_counts) > 1
+
+
+def test_vital_sign_interpretation_varies_across_seeds():
+    present = absent = 0
+    for seed in range(80):
+        for observation in _vital_sign_observations(_document(seed)):
+            if find_child(observation, "interpretationCode") is not None:
+                present += 1
+            else:
+                absent += 1
+    assert present > 0 and absent > 0
+
+
+def _result_organizers(document):
+    for section in find_all(document, "component/structuredBody/component/section"):
+        if not has_template_id(section, _RESULTS_SECTION_TEMPLATE_ID):
+            continue
+        for entry in find_all(section, "entry"):
+            organizer = find_child(entry, "organizer")
+            if organizer is not None and has_template_id(organizer, _RESULT_ORGANIZER_TEMPLATE_ID):
+                yield organizer
+
+
+def _result_observations(document):
+    for organizer in _result_organizers(document):
+        for component in find_all(organizer, "component"):
+            observation = find_child(component, "observation")
+            if observation is not None and has_template_id(observation, _RESULT_OBSERVATION_TEMPLATE_ID):
+                yield observation
+
+
+def test_results_section_varies_across_seeds():
+    def has_results_section(document):
+        return any(True for _ in _result_organizers(document))
+
+    present, absent = _present_absent(range(60), has_results_section)
+    assert present > 0 and absent > 0
+
+
+def test_result_status_code_varies_across_recognized_and_unrecognized():
+    from app.cda.results import STATUS_MAP
+
+    recognized = unrecognized = 0
+    for seed in range(80):
+        for observation in _result_observations(_document(seed)):
+            status = find_child(observation, "statusCode").get("code")
+            if status in STATUS_MAP:
+                recognized += 1
+            else:
+                unrecognized += 1
+    assert recognized > 0 and unrecognized > 0
+
+
+def test_result_reference_range_varies_across_seeds():
+    present = absent = 0
+    for seed in range(80):
+        for observation in _result_observations(_document(seed)):
+            if find_child(observation, "referenceRange") is not None:
+                present += 1
+            else:
+                absent += 1
+    assert present > 0 and absent > 0
+
+
+def _procedure_entries(document):
+    for section in find_all(document, "component/structuredBody/component/section"):
+        if not has_template_id(section, _PROCEDURES_SECTION_TEMPLATE_ID):
+            continue
+        for entry in find_all(section, "entry"):
+            procedure = find_child(entry, "procedure")
+            if procedure is not None and has_template_id(procedure, _PROCEDURE_TEMPLATE_ID):
+                yield procedure
+
+
+def test_procedures_section_varies_across_seeds():
+    def has_procedures_section(document):
+        return any(True for _ in _procedure_entries(document))
+
+    present, absent = _present_absent(range(60), has_procedures_section)
+    assert present > 0 and absent > 0
+
+
+def test_procedure_negation_varies_across_seeds():
+    negated = asserted = 0
+    for seed in range(120):
+        for procedure in _procedure_entries(_document(seed)):
+            if procedure.get("negationInd") == "true":
+                negated += 1
+            else:
+                asserted += 1
+    assert negated > 0 and asserted > 0
+
+
+def test_procedure_status_code_varies_across_recognized_and_unrecognized():
+    from app.cda.procedures import STATUS_MAP
+
+    recognized = unrecognized = 0
+    for seed in range(80):
+        for procedure in _procedure_entries(_document(seed)):
+            status = find_child(procedure, "statusCode").get("code")
+            if status in STATUS_MAP:
+                recognized += 1
+            else:
+                unrecognized += 1
+    assert recognized > 0 and unrecognized > 0
+
+
+def test_procedure_effective_time_shape_varies_across_seeds():
+    point_in_time = period = 0
+    for seed in range(80):
+        for procedure in _procedure_entries(_document(seed)):
+            effective_time = find_child(procedure, "effectiveTime")
+            if effective_time.get("value"):
+                point_in_time += 1
+            else:
+                period += 1
+    assert point_in_time > 0 and period > 0
+
+
+def test_procedure_body_site_varies_across_seeds():
+    present = absent = 0
+    for seed in range(80):
+        for procedure in _procedure_entries(_document(seed)):
+            if find_child(procedure, "targetSiteCode") is not None:
+                present += 1
+            else:
+                absent += 1
+    assert present > 0 and absent > 0
+
+
 def test_round_trips_through_real_converter():
     for seed in range(1000, 1020):
         xml_text = generate_ccd(random.Random(seed))

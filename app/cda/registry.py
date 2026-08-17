@@ -23,7 +23,7 @@ from xml.etree.ElementTree import Element
 
 from fhir.resources.R4B.resource import Resource
 
-from app.cda import allergies, immunizations, medications, problems
+from app.cda import allergies, immunizations, medications, problems, procedures, results, vitals
 from app.cda.base import CdaDocumentBuilder
 from app.cda.ccd import CcdBuilder
 from app.cda.discharge_summary import DischargeSummaryBuilder
@@ -36,6 +36,9 @@ SECTION_BUILDERS: dict[str, Callable[[Element, str], list[Resource]]] = {
     allergies.SECTION_TEMPLATE_ID: allergies.build_allergy_intolerances,
     allergies.SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL: allergies.build_allergy_intolerances,
     immunizations.SECTION_TEMPLATE_ID: immunizations.build_immunizations,
+    vitals.SECTION_TEMPLATE_ID: vitals.build_vital_signs,
+    results.SECTION_TEMPLATE_ID: results.build_diagnostic_reports,
+    procedures.SECTION_TEMPLATE_ID: procedures.build_procedures,
 }
 
 _DOCUMENT_BUILDERS: dict[str, CdaDocumentBuilder] = {

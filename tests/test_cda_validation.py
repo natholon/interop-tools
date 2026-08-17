@@ -16,6 +16,14 @@ _ALLERGY_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.
 _REACTION_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.9"/>'
 _IMMUNIZATIONS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.2.1"/>'
 _IMMUNIZATION_ACTIVITY_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.52"/>'
+_VITALS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.4.1"/>'
+_VITAL_SIGNS_ORGANIZER_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.26"/>'
+_VITAL_SIGN_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.27"/>'
+_RESULTS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.3.1"/>'
+_RESULT_ORGANIZER_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.1"/>'
+_RESULT_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.2"/>'
+_PROCEDURES_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.7.1"/>'
+_PROCEDURE_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.14"/>'
 
 
 def _doc(body: str, ccd: bool = True) -> object:
@@ -540,6 +548,167 @@ def test_planned_immunization_int_mood_produces_no_findings():
     document = _doc(_patient() + _immunizations_section(entry))
     report = validate_document(document)
     assert report.findings == []
+
+
+def _vital_sign_observation(code: str = "", effective_time: str = "") -> str:
+    observation_code = code or '<code code="8867-4" codeSystem="2.16.840.1.113883.6.1" displayName="Heart rate"/>'
+    return (
+        f'<component><observation classCode="OBS" moodCode="EVN">{_VITAL_SIGN_OBSERVATION_TEMPLATE}'
+        f'{observation_code}<statusCode code="completed"/>{effective_time}'
+        '<value xsi:type="PQ" value="76" unit="/min"/></observation></component>'
+    )
+
+
+def _vitals_organizer(components: str) -> str:
+    return (
+        f'<entry><organizer classCode="CLUSTER" moodCode="EVN">{_VITAL_SIGNS_ORGANIZER_TEMPLATE}'
+        '<statusCode code="completed"/>'
+        f"{components}</organizer></entry>"
+    )
+
+
+def _vitals_section(entries: str) -> str:
+    return (
+        f"<component><structuredBody><component><section>{_VITALS_SECTION_TEMPLATE}"
+        f"{entries}</section></component></structuredBody></component>"
+    )
+
+
+def test_clean_vitals_produces_no_findings():
+    entry = _vitals_organizer(_vital_sign_observation())
+    document = _doc(_patient() + _vitals_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+    assert report.is_valid is True
+
+
+def test_vitals_missing_code_is_info():
+    entry = _vitals_organizer(_vital_sign_observation(code='<code nullFlavor="UNK"/>'))
+    document = _doc(_patient() + _vitals_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.vitals-missing-code")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_vitals_effective_time_in_future_is_warning():
+    entry = _vitals_organizer(_vital_sign_observation(effective_time='<effectiveTime value="20990101"/>'))
+    document = _doc(_patient() + _vitals_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.vitals-effective-time-in-future")
+    assert finding.severity == "warning"
+
+
+def _result_observation(code: str = "", status: str = "completed", effective_time: str = "") -> str:
+    observation_code = code or '<code code="6690-2" codeSystem="2.16.840.1.113883.6.1" displayName="Leukocytes"/>'
+    return (
+        f'<component><observation classCode="OBS" moodCode="EVN">{_RESULT_OBSERVATION_TEMPLATE}'
+        f'{observation_code}<statusCode code="{status}"/>{effective_time}'
+        '<value xsi:type="PQ" value="6.8" unit="10*3/uL"/></observation></component>'
+    )
+
+
+def _results_organizer(components: str) -> str:
+    return (
+        f'<entry><organizer classCode="BATTERY" moodCode="EVN">{_RESULT_ORGANIZER_TEMPLATE}'
+        '<statusCode code="completed"/>'
+        f"{components}</organizer></entry>"
+    )
+
+
+def _results_section(entries: str) -> str:
+    return (
+        f"<component><structuredBody><component><section>{_RESULTS_SECTION_TEMPLATE}"
+        f"{entries}</section></component></structuredBody></component>"
+    )
+
+
+def test_clean_result_produces_no_findings():
+    entry = _results_organizer(_result_observation())
+    document = _doc(_patient() + _results_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+    assert report.is_valid is True
+
+
+def test_result_missing_code_is_info():
+    entry = _results_organizer(_result_observation(code='<code nullFlavor="UNK"/>'))
+    document = _doc(_patient() + _results_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.result-missing-code")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_result_status_unrecognized_is_info():
+    entry = _results_organizer(_result_observation(status="nullified"))
+    document = _doc(_patient() + _results_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.result-status-unrecognized")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_result_effective_time_in_future_is_warning():
+    entry = _results_organizer(_result_observation(effective_time='<effectiveTime value="20990101"/>'))
+    document = _doc(_patient() + _results_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.result-effective-time-in-future")
+    assert finding.severity == "warning"
+
+
+def _procedure_entry(status: str = "completed", effective_time: str = "", negation: str = "") -> str:
+    effective_time = effective_time or '<effectiveTime value="20260615120000-0500"/>'
+    return (
+        f'<entry><procedure classCode="PROC" moodCode="EVN"{negation}>{_PROCEDURE_TEMPLATE}'
+        '<code code="80146002" codeSystem="2.16.840.1.113883.6.96" displayName="Appendectomy"/>'
+        f'<statusCode code="{status}"/>{effective_time}'
+        "</procedure></entry>"
+    )
+
+
+def _procedures_section(entries: str) -> str:
+    return (
+        f"<component><structuredBody><component><section>{_PROCEDURES_SECTION_TEMPLATE}"
+        f"{entries}</section></component></structuredBody></component>"
+    )
+
+
+def test_clean_procedure_produces_no_findings():
+    entry = _procedure_entry()
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+    assert report.is_valid is True
+
+
+def test_procedure_status_unrecognized_is_info():
+    entry = _procedure_entry(status="held")
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.procedure-status-unrecognized")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_negated_procedure_with_unrecognized_status_produces_no_status_finding():
+    # negationInd="true" is a semantic override at the mapper level (this
+    # procedure did NOT happen) but, unlike Immunizations' negationInd,
+    # does not force a fixed status - it maps directly to "not-done"
+    # regardless of statusCode, so the unrecognized-status rule must not
+    # fire for a negated entry either (see app/cda/procedures.py::_resolve_status).
+    entry = _procedure_entry(status="held", negation=' negationInd="true"')
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    assert report.findings == []
+
+
+def test_procedure_effective_time_in_future_is_warning():
+    entry = _procedure_entry(effective_time='<effectiveTime value="20990101"/>')
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.procedure-effective-time-in-future")
+    assert finding.severity == "warning"
 
 
 def test_unregistered_document_type_is_info():
