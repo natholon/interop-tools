@@ -335,6 +335,79 @@ def test_ccd_round_trip_produces_a_convertible_document_again():
     assert displays == {"Hypertensive disorder", "Type 2 diabetes mellitus"}
 
 
+def test_ccd_round_trip_preserves_coding_system_not_just_code():
+    # Regression test for a real, pre-existing bug caught while adding the
+    # Medications section: the Problems value-building originally wrote
+    # coding.system (a FHIR system URL) directly into the CDA codeSystem
+    # attribute instead of reversing it back to an OID, producing garbage
+    # like "urn:oid:http://snomed.info/sct" on a second round trip.
+    forward_xml = (FIXTURES / "ccd_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original_condition = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Condition")
+
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    condition = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Condition")
+
+    assert condition.code.coding[0].system == original_condition.code.coding[0].system == "http://snomed.info/sct"
+
+
+def test_ccd_round_trip_preserves_medication_fields():
+    forward_xml = (FIXTURES / "ccd_medications_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original_requests = sorted(
+        (e.resource for e in bundle.entry if e.resource.get_resource_type() == "MedicationRequest"),
+        key=lambda m: m.medicationCodeableConcept.coding[0].code,
+    )
+    assert len(original_requests) == 2
+
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    requests = sorted(
+        (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "MedicationRequest"),
+        key=lambda m: m.medicationCodeableConcept.coding[0].code,
+    )
+    assert len(requests) == 2
+
+    for original, request in zip(original_requests, requests):
+        assert request.status == original.status
+        assert request.intent == original.intent
+        assert request.medicationCodeableConcept.coding[0].code == original.medicationCodeableConcept.coding[0].code
+        assert (
+            request.medicationCodeableConcept.coding[0].system == original.medicationCodeableConcept.coding[0].system
+        )
+        original_dosage = original.dosageInstruction[0] if original.dosageInstruction else None
+        dosage = request.dosageInstruction[0] if request.dosageInstruction else None
+        if original_dosage is None:
+            assert dosage is None
+            continue
+        assert dosage.patientInstruction == original_dosage.patientInstruction
+        if original_dosage.route:
+            assert dosage.route.coding[0].code == original_dosage.route.coding[0].code
+        if original_dosage.doseAndRate:
+            assert dosage.doseAndRate[0].doseQuantity.value == original_dosage.doseAndRate[0].doseQuantity.value
+            assert dosage.doseAndRate[0].doseQuantity.unit == original_dosage.doseAndRate[0].doseQuantity.unit
+        if original_dosage.timing:
+            assert (
+                dosage.timing.repeat.boundsPeriod.start == original_dosage.timing.repeat.boundsPeriod.start
+            )
+            assert dosage.timing.repeat.boundsPeriod.end == original_dosage.timing.repeat.boundsPeriod.end
+
+
+def test_ccd_round_trip_produces_no_medications_section_when_negated():
+    # ccd_medications_negated.xml has a negationInd="true" entry, which the
+    # forward mapper skips entirely - so the reverse builder must never see
+    # a MedicationRequest for it, and this document has no other Medication
+    # Activity entries, so no Medications section should be emitted at all.
+    forward_xml = (FIXTURES / "ccd_medications_negated.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    assert not [e for e in bundle.entry if e.resource.get_resource_type() == "MedicationRequest"]
+
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    assert not [e for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "MedicationRequest"]
+
+
 def test_ccd_missing_patient_raises_mapping_error():
     empty_bundle = Bundle(id="test", type="collection")
     with pytest.raises(MappingError):

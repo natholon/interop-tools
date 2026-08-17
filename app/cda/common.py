@@ -41,13 +41,16 @@ _GENDER_MAP = {"F": "female", "M": "male", "UN": "other"}
 # couple of other common ones likely to appear in real C-CDA documents.
 # Anything unrecognized falls back to a urn:oid: URI, matching FHIR's own
 # convention for representing an untranslated OID rather than guessing.
-_OID_TO_FHIR_SYSTEM = {
+# Public (not module-private) - app/transform/cda_ccd.py became a real
+# reverse-direction consumer, inverting this same table rather than
+# maintaining a second, independently-drifting copy.
+OID_TO_FHIR_SYSTEM = {
     "2.16.840.1.113883.6.96": "http://snomed.info/sct",
     "2.16.840.1.113883.6.1": "http://loinc.org",
     "2.16.840.1.113883.6.88": "http://www.nlm.nih.gov/research/umls/rxnorm",
     "2.16.840.1.113883.6.90": "http://hl7.org/fhir/sid/icd-10-cm",
 }
-_CD_FALLBACK_SYSTEM = "urn:interop-tools:coded-value"
+CD_FALLBACK_SYSTEM = "urn:interop-tools:coded-value"
 
 _TELECOM_SCHEME_TO_SYSTEM = {"tel": "phone", "mailto": "email", "fax": "fax"}
 # A representative subset of HL7 AddressUse/TelecomUse codes - disclosed,
@@ -86,8 +89,8 @@ def build_codeable_concept_from_cd(element) -> CodeableConcept | None:
     if result is None:
         return None
     code, display_name, code_system_oid = result
-    system = _OID_TO_FHIR_SYSTEM.get(code_system_oid) or (
-        f"urn:oid:{code_system_oid}" if code_system_oid else _CD_FALLBACK_SYSTEM
+    system = OID_TO_FHIR_SYSTEM.get(code_system_oid) or (
+        f"urn:oid:{code_system_oid}" if code_system_oid else CD_FALLBACK_SYSTEM
     )
     coding = Coding(system=system, code=code)
     if display_name:
