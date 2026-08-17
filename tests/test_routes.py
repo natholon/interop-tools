@@ -463,6 +463,31 @@ def test_api_transform_builds_ccd_document():
     assert "Betterhalf" in document_text
 
 
+def test_index_transform_target_dropdown_includes_discharge_summary():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "CDA DISCHARGESUMMARY" in response.text
+
+
+def test_api_transform_builds_discharge_summary_document():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("discharge_summary_basic.xml")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={
+            "bundle_json": bundle_json,
+            "target_format": "CDA",
+            "target_type": "DISCHARGESUMMARY",
+            "target_trigger": "",
+        },
+    )
+    assert response.status_code == 200
+    document_text = response.json()["message_text"]
+    assert document_text.startswith('<?xml version="1.0"')
+    assert "18842-5" in document_text
+
+
 def test_index_transform_target_dropdown_includes_270():
     response = client.get("/")
     assert response.status_code == 200

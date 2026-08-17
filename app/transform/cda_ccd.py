@@ -849,49 +849,63 @@ def _build_procedures_section(procedures) -> str:
     )
 
 
+def build_sectioned_document(bundle: Bundle, template_id: str, doc_code: str, doc_code_display: str, title: str) -> str:
+    """Header + all seven general-purpose sections (Problems/Medications/
+    Allergies/Immunizations/Vital Signs/Results/Procedures) - the reverse-
+    direction mirror of app.cda.common.build_sectioned_bundle's own role on
+    the forward side. Public (not module-private) - extracted here once
+    app/transform/cda_discharge_summary.py became a second real consumer of
+    the identical header+section assembly, confirmed structurally identical
+    the same way the forward `DischargeSummaryBuilder` itself was (both
+    document types share CCD's own recordTarget/componentOf header shape,
+    verified against a real HL7 C-CDA-Examples Discharge Summary)."""
+    patient = find_resource(bundle, "Patient")
+    if patient is None:
+        raise MappingError("Bundle has no Patient resource - cannot build a CDA document")
+    encounter = find_resource(bundle, "Encounter")
+    conditions = find_resources(bundle, "Condition")
+    medication_requests = find_resources(bundle, "MedicationRequest")
+    allergies = find_resources(bundle, "AllergyIntolerance")
+    immunizations = find_resources(bundle, "Immunization")
+    observations = find_resources(bundle, "Observation")
+    diagnostic_reports = find_resources(bundle, "DiagnosticReport")
+    procedures = find_resources(bundle, "Procedure")
+
+    document_id = bundle.identifier.value if bundle.identifier else "TT000"
+    document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
+    effective_time = format_hl7_ts(bundle.timestamp) if bundle.timestamp else ""
+
+    problems_section = _build_problems_section(conditions)
+    medications_section = _build_medications_section(medication_requests)
+    allergies_section = _build_allergies_section(allergies)
+    immunizations_section = _build_immunizations_section(immunizations)
+    vitals_section = _build_vitals_section(observations)
+    observations_by_id = {o.id: o for o in observations}
+    results_section = _build_results_section(diagnostic_reports, observations_by_id)
+    procedures_section = _build_procedures_section(procedures)
+    sections = (
+        f"{problems_section}{medications_section}{allergies_section}"
+        f"{immunizations_section}{vitals_section}{results_section}{procedures_section}"
+    )
+    body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
+
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        f'<templateId root="{_US_HEADER_TEMPLATE_ID}"/><templateId root="{template_id}"/>'
+        f'<id root="{document_root}" extension="{document_id}"/>'
+        f'<code code="{doc_code}" codeSystem="2.16.840.1.113883.6.1" displayName="{doc_code_display}"/>'
+        f"<title>{title}</title>"
+        f'{f"<effectiveTime value=\"{effective_time}\"/>" if effective_time else ""}'
+        '<confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>'
+        '<languageCode code="en-US"/>'
+        f"{_build_patient_role(patient)}{_build_component_of(encounter)}{body}"
+        "</ClinicalDocument>"
+    )
+
+
 class CcdReverseBuilder(MessageBuilder):
     def build_message(self, bundle: Bundle) -> str:
-        patient = find_resource(bundle, "Patient")
-        if patient is None:
-            raise MappingError("Bundle has no Patient resource - cannot build a CCD document")
-        encounter = find_resource(bundle, "Encounter")
-        conditions = find_resources(bundle, "Condition")
-        medication_requests = find_resources(bundle, "MedicationRequest")
-        allergies = find_resources(bundle, "AllergyIntolerance")
-        immunizations = find_resources(bundle, "Immunization")
-        observations = find_resources(bundle, "Observation")
-        diagnostic_reports = find_resources(bundle, "DiagnosticReport")
-        procedures = find_resources(bundle, "Procedure")
-
-        document_id = bundle.identifier.value if bundle.identifier else "TT000"
-        document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
-        effective_time = format_hl7_ts(bundle.timestamp) if bundle.timestamp else ""
-
-        problems_section = _build_problems_section(conditions)
-        medications_section = _build_medications_section(medication_requests)
-        allergies_section = _build_allergies_section(allergies)
-        immunizations_section = _build_immunizations_section(immunizations)
-        vitals_section = _build_vitals_section(observations)
-        observations_by_id = {o.id: o for o in observations}
-        results_section = _build_results_section(diagnostic_reports, observations_by_id)
-        procedures_section = _build_procedures_section(procedures)
-        sections = (
-            f"{problems_section}{medications_section}{allergies_section}"
-            f"{immunizations_section}{vitals_section}{results_section}{procedures_section}"
+        return build_sectioned_document(
+            bundle, CCD_TEMPLATE_ID, "34133-9", "Summarization of Episode Note", "Continuity of Care Document"
         )
-        body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
-
-        xml_text = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            '<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-            f'<templateId root="{_US_HEADER_TEMPLATE_ID}"/><templateId root="{CCD_TEMPLATE_ID}"/>'
-            f'<id root="{document_root}" extension="{document_id}"/>'
-            '<code code="34133-9" codeSystem="2.16.840.1.113883.6.1" displayName="Summarization of Episode Note"/>'
-            "<title>Continuity of Care Document</title>"
-            f'{f"<effectiveTime value=\"{effective_time}\"/>" if effective_time else ""}'
-            '<confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>'
-            '<languageCode code="en-US"/>'
-            f"{_build_patient_role(patient)}{_build_component_of(encounter)}{body}"
-            "</ClinicalDocument>"
-        )
-        return xml_text

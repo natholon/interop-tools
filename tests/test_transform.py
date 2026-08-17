@@ -604,6 +604,49 @@ def test_ccd_encounter_and_problems_are_optional():
     assert resource_types == {"Patient"}
 
 
+def test_list_supported_targets_includes_discharge_summary():
+    assert ("CDA", "DISCHARGESUMMARY", "") in list_supported_targets()
+
+
+def test_discharge_summary_round_trip_produces_a_convertible_document_again():
+    forward_xml = (FIXTURES / "discharge_summary_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original_resource_types = {e.resource.get_resource_type() for e in bundle.entry}
+    assert "Encounter" in original_resource_types
+    assert "Condition" in original_resource_types
+    assert "MedicationRequest" in original_resource_types
+
+    document_text = build_message_from_bundle(bundle, "CDA", "DISCHARGESUMMARY", "")
+    assert document_text.startswith('<?xml version="1.0"')
+    assert "18842-5" in document_text
+
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
+    assert resource_types == original_resource_types
+
+    original_encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
+    encounter = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Encounter")
+    assert encounter.class_fhir.code == original_encounter.class_fhir.code
+    assert encounter.period.start == original_encounter.period.start
+    assert encounter.period.end == original_encounter.period.end
+
+    original_conditions = sorted(
+        (e.resource for e in bundle.entry if e.resource.get_resource_type() == "Condition"),
+        key=lambda c: c.code.coding[0].code,
+    )
+    conditions = sorted(
+        (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Condition"),
+        key=lambda c: c.code.coding[0].code,
+    )
+    assert [c.code.coding[0].code for c in conditions] == [c.code.coding[0].code for c in original_conditions]
+
+
+def test_discharge_summary_missing_patient_raises_mapping_error():
+    empty_bundle = Bundle(id="test", type="collection")
+    with pytest.raises(MappingError):
+        build_message_from_bundle(empty_bundle, "CDA", "DISCHARGESUMMARY", "")
+
+
 def test_edi_270_round_trip_with_dependent_produces_a_convertible_interchange_again():
     # The real fixture used to prove the forward direction (with a
     # dependent), run in reverse then forward again.
