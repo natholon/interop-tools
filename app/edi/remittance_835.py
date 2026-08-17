@@ -93,14 +93,16 @@ TRANSACTION_SET_ID = "835"
 _N1_PAYER = "PR"
 _N1_PAYEE = "PE"
 
-_TRN_IDENTIFIER_SYSTEM = "urn:interop-tools:x12-835-trace-number"
-_N1_ID_FALLBACK_SYSTEM = "urn:interop-tools:x12-n1-id"
+# Public (not module-private) - app/transform/remittance_835.py became a
+# real reverse-direction consumer of all three.
+TRN_IDENTIFIER_SYSTEM = "urn:interop-tools:x12-835-trace-number"
+N1_ID_FALLBACK_SYSTEM = "urn:interop-tools:x12-n1-id"
 
 # CLP02 (Claim Status Code) has no single free, authoritative published
 # code table the way STC's Claim Status Category Codes do - a disclosed
 # local system for PaymentReconciliationDetail.type, same category as
 # claim_status.py's own STC-derived Coding systems.
-_CLP_STATUS_SYSTEM = "urn:interop-tools:x12-clp-status-code"
+CLP_STATUS_SYSTEM = "urn:interop-tools:x12-clp-status-code"
 
 
 def _find_n1(segments: list[Segment], entity_code: str) -> Segment | None:
@@ -115,7 +117,7 @@ def _build_n1_identifier(n1: Segment) -> Identifier | None:
     value = element(n1, 4)
     if not value:
         return None
-    return Identifier(system=resolve_id_qualifier_system(qualifier, _N1_ID_FALLBACK_SYSTEM), value=value)
+    return Identifier(system=resolve_id_qualifier_system(qualifier, N1_ID_FALLBACK_SYSTEM), value=value)
 
 
 def _build_organization_from_n1(n1: Segment) -> Organization:
@@ -139,7 +141,7 @@ def _parse_money(raw: str) -> Money | None:
 def _build_detail(clp: Segment) -> PaymentReconciliationDetail:
     status_code = element(clp, 2)
     detail_type = (
-        CodeableConcept(coding=[Coding(system=_CLP_STATUS_SYSTEM, code=status_code)])
+        CodeableConcept(coding=[Coding(system=CLP_STATUS_SYSTEM, code=status_code)])
         if status_code
         else CodeableConcept(text="Claim Payment")
     )
@@ -161,7 +163,7 @@ def _assemble_835_bundle(trace_number: str, *resources: Resource) -> Bundle:
     reused, since 835 has no BHT segment to derive Bundle.identifier/
     .timestamp from (see the module docstring)."""
     bundle = Bundle(id=str(uuid.uuid4()), type="collection")
-    bundle.identifier = Identifier(system=_TRN_IDENTIFIER_SYSTEM, value=trace_number)
+    bundle.identifier = Identifier(system=TRN_IDENTIFIER_SYSTEM, value=trace_number)
     bundle.entry = [BundleEntry(fullUrl=f"urn:uuid:{resource.id}", resource=resource) for resource in resources]
     return bundle
 

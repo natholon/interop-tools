@@ -955,6 +955,69 @@ def test_edi_278_response_missing_claim_raises_mapping_error():
         build_message_from_bundle(empty_bundle, "EDI", "278RESPONSE", "")
 
 
+def test_list_supported_targets_includes_835():
+    assert ("EDI", "835", "") in list_supported_targets()
+
+
+def test_edi_835_round_trip_preserves_payment_and_details():
+    forward_x12 = (FIXTURES / "edi_835_basic.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_pr = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation")
+    assert len(original_pr.detail) == 1
+
+    message_text = build_message_from_bundle(bundle, "EDI", "835", "")
+    assert "ST*835*" in message_text
+    assert "BPR*" in message_text
+
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    pr = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation")
+    assert pr.paymentAmount.value == original_pr.paymentAmount.value
+    assert pr.paymentDate == original_pr.paymentDate
+    assert len(pr.detail) == 1
+    assert pr.detail[0].identifier.value == original_pr.detail[0].identifier.value
+    assert pr.detail[0].amount.value == original_pr.detail[0].amount.value
+
+    original_payer = next(
+        e.resource
+        for e in bundle.entry
+        if e.resource.get_resource_type() == "Organization" and e.resource.id == original_pr.paymentIssuer.reference.removeprefix("urn:uuid:")
+    )
+    payer = next(
+        e.resource
+        for e in round_tripped_bundle.entry
+        if e.resource.get_resource_type() == "Organization" and e.resource.id == pr.paymentIssuer.reference.removeprefix("urn:uuid:")
+    )
+    assert payer.name == original_payer.name
+    assert payer.identifier[0].value == original_payer.identifier[0].value
+    # Regression check for a real bug caught while building this reverse
+    # slice: naively reusing edi_common.py's own reverse_nm1_qualifier
+    # (whose fallback-marker prefix is NM1-scoped) would have silently
+    # dropped this payer's own non-canonical "XV" qualifier - confirm the
+    # identifier system still round-trips to the same disclosed fallback.
+    assert payer.identifier[0].system == original_payer.identifier[0].system
+
+
+def test_edi_835_multi_claim_round_trip_preserves_all_claims():
+    forward_x12 = (FIXTURES / "edi_835_multi_claim.x12").read_text()
+    bundle = convert_edi_to_bundle(forward_x12)
+    original_pr = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation")
+    assert len(original_pr.detail) == 2
+
+    message_text = build_message_from_bundle(bundle, "EDI", "835", "")
+    round_tripped_bundle = convert_edi_to_bundle(message_text)
+    pr = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation")
+    assert len(pr.detail) == 2
+    original_ids = sorted(d.identifier.value for d in original_pr.detail)
+    ids = sorted(d.identifier.value for d in pr.detail)
+    assert ids == original_ids
+
+
+def test_edi_835_missing_payment_reconciliation_raises_mapping_error():
+    empty_bundle = Bundle(id="test", type="collection")
+    with pytest.raises(MappingError):
+        build_message_from_bundle(empty_bundle, "EDI", "835", "")
+
+
 def test_siu_s12_round_trip_preserves_appointment_fields():
     forward_text = (FIXTURES / "siu_s12_basic.hl7").read_text()
     bundle = convert_hl7_to_bundle(forward_text)

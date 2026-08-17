@@ -609,6 +609,26 @@ def test_api_transform_builds_278_response_interchange():
     assert "BHT*0007*11*" in message_text
 
 
+def test_index_transform_target_dropdown_includes_835():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "EDI 835" in response.text
+
+
+def test_api_transform_builds_835_interchange():
+    convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("edi_835_basic.x12")})
+    bundle_json = json.dumps(convert_response.json()["bundle"])
+
+    response = client.post(
+        "/api/transform",
+        json={"bundle_json": bundle_json, "target_format": "EDI", "target_type": "835", "target_trigger": ""},
+    )
+    assert response.status_code == 200
+    message_text = response.json()["message_text"]
+    assert message_text.startswith("ISA*")
+    assert "ST*835*" in message_text
+
+
 def test_api_transform_builds_adt_a01_message():
     convert_response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
     bundle_json = json.dumps(convert_response.json()["bundle"])
