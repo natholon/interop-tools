@@ -449,6 +449,37 @@ def test_ccd_round_trip_preserves_no_known_allergies_negation():
     assert not allergy.code.coding
 
 
+def test_ccd_round_trip_preserves_immunization_fields():
+    forward_xml = (FIXTURES / "ccd_immunizations_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original_immunizations = sorted(
+        (e.resource for e in bundle.entry if e.resource.get_resource_type() == "Immunization"),
+        key=lambda i: i.vaccineCode.coding[0].code,
+    )
+    # The fixture's third entry (INT mood, planned Tdap) must never convert
+    # at all - only the two EVN-mood entries (administered, refused) do.
+    assert len(original_immunizations) == 2
+
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    immunizations = sorted(
+        (e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Immunization"),
+        key=lambda i: i.vaccineCode.coding[0].code,
+    )
+    assert len(immunizations) == 2
+
+    for original, immunization in zip(original_immunizations, immunizations):
+        assert immunization.status == original.status
+        assert immunization.vaccineCode.coding[0].code == original.vaccineCode.coding[0].code
+        assert immunization.vaccineCode.coding[0].system == original.vaccineCode.coding[0].system
+        assert immunization.lotNumber == original.lotNumber
+        if original.route:
+            assert immunization.route.coding[0].code == original.route.coding[0].code
+        if original.doseQuantity is not None:
+            assert immunization.doseQuantity.value == original.doseQuantity.value
+            assert immunization.doseQuantity.unit == original.doseQuantity.unit
+
+
 def test_ccd_missing_patient_raises_mapping_error():
     empty_bundle = Bundle(id="test", type="collection")
     with pytest.raises(MappingError):

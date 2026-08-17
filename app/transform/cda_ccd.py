@@ -37,6 +37,8 @@ from app.cda.allergies import TYPE_MAP as ALLERGY_TYPE_MAP
 from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.common import CD_FALLBACK_SYSTEM, OID_TO_FHIR_SYSTEM, RECOGNIZED_ENCOUNTER_CLASSES
+from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID
+from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
 from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID
 from app.cda.medications import STATUS_MAP as MEDICATION_STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
@@ -487,6 +489,76 @@ def _build_allergies_section(allergies) -> str:
     )
 
 
+# Reverse of app.cda.immunizations.STATUS_MAP - "completed"/"entered-in-
+# error" are clean bijections ("completed"/"nullified"), but "not-done" is
+# genuinely many-to-one on the forward side (six distinct statusCode
+# values, plus negationInd="true" unconditionally, all collapse to it).
+# Reversed via negationInd="true" specifically, not a non-negated
+# statusCode - the forward side's own comment already treats negation as
+# the primary real-world signal for this status ("negation is checked
+# first, before this table is even consulted"), so it's the more honest
+# disclosed representative than picking one of the six statusCode values
+# arbitrarily. "aborted" is still emitted as statusCode alongside the
+# negation attribute, purely for XML realism - it's inert on the forward
+# side regardless, since negationInd short-circuits status resolution
+# before statusCode is ever consulted.
+_IMMUNIZATION_STATUS_TO_ACT_STATUS = {"completed": "completed", "entered-in-error": "nullified"}
+_DEFAULT_IMMUNIZATION_ACT_STATUS = "aborted"
+
+
+def _build_immunization_entry(immunization) -> str:
+    coding = (
+        immunization.vaccineCode.coding[0] if immunization.vaccineCode and immunization.vaccineCode.coding else None
+    )
+    consumable_code = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
+    lot_number = f"<lotNumberText>{immunization.lotNumber}</lotNumberText>" if immunization.lotNumber else ""
+
+    act_status = _IMMUNIZATION_STATUS_TO_ACT_STATUS.get(immunization.status, _DEFAULT_IMMUNIZATION_ACT_STATUS)
+    negation_attr = ' negationInd="true"' if immunization.status == "not-done" else ""
+
+    # occurrenceString == "Unknown" is itself this builder's own forward
+    # side's disclosed fallback for "no effectiveTime resolved" - omitting
+    # <effectiveTime> here rather than trying to encode "Unknown" as a
+    # real HL7 date lets the next forward pass regenerate the identical
+    # fallback naturally, rather than fabricating a fake timestamp.
+    effective_time = (
+        f'<effectiveTime value="{format_hl7_ts(immunization.occurrenceDateTime)}"/>'
+        if immunization.occurrenceDateTime
+        else ""
+    )
+
+    route = ""
+    if immunization.route and immunization.route.coding:
+        route = f"<routeCode {_build_cd_attrs(immunization.route.coding[0])}/>"
+
+    dose_quantity = ""
+    if immunization.doseQuantity is not None:
+        unit = f' unit="{immunization.doseQuantity.unit}"' if immunization.doseQuantity.unit else ""
+        dose_quantity = f'<doseQuantity value="{immunization.doseQuantity.value}"{unit}/>'
+
+    return (
+        f'<entry typeCode="DRIV"><substanceAdministration classCode="SBADM" moodCode="EVN"{negation_attr}>'
+        f'<templateId root="{IMMUNIZATION_ACTIVITY_TEMPLATE_ID}"/>'
+        f'<statusCode code="{act_status}"/>'
+        f"{effective_time}{route}{dose_quantity}"
+        "<consumable><manufacturedProduct><manufacturedMaterial>"
+        f"{consumable_code}{lot_number}"
+        "</manufacturedMaterial></manufacturedProduct></consumable>"
+        "</substanceAdministration></entry>"
+    )
+
+
+def _build_immunizations_section(immunizations) -> str:
+    if not immunizations:
+        return ""
+    entries = "".join(_build_immunization_entry(i) for i in immunizations)
+    return (
+        f'<component><section><templateId root="{IMMUNIZATIONS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="11369-6" codeSystem="2.16.840.1.113883.6.1" displayName="History of immunizations"/>'
+        f"<title>Immunizations</title>{entries}</section></component>"
+    )
+
+
 class CcdReverseBuilder(MessageBuilder):
     def build_message(self, bundle: Bundle) -> str:
         patient = find_resource(bundle, "Patient")
@@ -496,6 +568,7 @@ class CcdReverseBuilder(MessageBuilder):
         conditions = find_resources(bundle, "Condition")
         medication_requests = find_resources(bundle, "MedicationRequest")
         allergies = find_resources(bundle, "AllergyIntolerance")
+        immunizations = find_resources(bundle, "Immunization")
 
         document_id = bundle.identifier.value if bundle.identifier else "TT000"
         document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
@@ -504,7 +577,8 @@ class CcdReverseBuilder(MessageBuilder):
         problems_section = _build_problems_section(conditions)
         medications_section = _build_medications_section(medication_requests)
         allergies_section = _build_allergies_section(allergies)
-        sections = f"{problems_section}{medications_section}{allergies_section}"
+        immunizations_section = _build_immunizations_section(immunizations)
+        sections = f"{problems_section}{medications_section}{allergies_section}{immunizations_section}"
         body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 
         xml_text = (
