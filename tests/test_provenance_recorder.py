@@ -19,6 +19,7 @@ from app.mappings.adt import (
     AdtA13Mapper,
     AdtA38Mapper,
 )
+from app.mappings.siu import SiuS12Mapper, SiuS13Mapper, SiuS14Mapper, SiuS15Mapper, SiuS17Mapper, SiuS26Mapper
 from app.provenance.location import hl7_location
 from app.provenance.recorder import ProvenanceRecorder
 from app.provenance.resolver import resolve_bundle_paths
@@ -240,3 +241,126 @@ def test_recorder_forget_prefix_removes_only_matching_facts():
     recorder.forget_prefix("e1", "period.")
     remaining_paths = {fact.relative_path for fact in recorder.facts}
     assert remaining_paths == {"status"}
+
+
+# ---------------------------------------------------------------------------
+# SIU
+# ---------------------------------------------------------------------------
+
+_SIU_FIXTURES = [
+    (SiuS12Mapper, "siu_s12_basic.hl7"),
+    (SiuS12Mapper, "siu_s12_minimal.hl7"),
+    (SiuS12Mapper, "siu_s12_aig_location.hl7"),
+    (SiuS12Mapper, "siu_s12_aip_id_only.hl7"),
+    (SiuS12Mapper, "siu_s12_multiple_nte.hl7"),
+    (SiuS12Mapper, "siu_s12_partial_tq1.hl7"),
+    (SiuS12Mapper, "siu_s12_sch11_fallback.hl7"),
+    (SiuS13Mapper, "siu_s13_basic.hl7"),
+    (SiuS13Mapper, "siu_s13_stale_duration.hl7"),
+    (SiuS14Mapper, "siu_s14_basic.hl7"),
+    (SiuS15Mapper, "siu_s15_basic.hl7"),
+    (SiuS17Mapper, "siu_s17_basic.hl7"),
+    (SiuS26Mapper, "siu_s26_basic.hl7"),
+]
+
+
+@pytest.mark.parametrize("mapper_cls,fixture", _SIU_FIXTURES)
+def test_siu_provenance_recording_does_not_change_bundle_output(mapper_cls, fixture):
+    message = parse_message(read_fixture(fixture))
+
+    with patch("uuid.uuid4", side_effect=_deterministic_uuids()):
+        untraced = mapper_cls().to_bundle(message)
+
+    with patch("uuid.uuid4", side_effect=_deterministic_uuids()):
+        recorder = ProvenanceRecorder(source_format="HL7v2")
+        traced = mapper_cls().to_bundle(message, recorder=recorder)
+
+    assert untraced.model_dump(exclude_none=True) == traced.model_dump(exclude_none=True)
+    assert len(recorder.facts) > 0
+
+    entries = resolve_bundle_paths(traced, recorder)
+    assert len(entries) == len(recorder.facts)
+
+
+def test_siu_s12_basic_crosswalk_matches_known_field_values():
+    message = parse_message(read_fixture("siu_s12_basic.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = SiuS12Mapper().to_bundle(message, recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    # AIP-3 produces two independent facts on two different resources: the
+    # materialized Practitioner's own name, and (via person_display) the
+    # Appointment's own participant[1].actor.display - a real "one source
+    # field, two FHIR destinations" case.
+    practitioner_entry = next(
+        (e for e in entries if e.fhir_path.endswith("resource.name[0].family") and e.value == "Smith"), None
+    )
+    assert practitioner_entry is not None
+    assert practitioner_entry.source_location == hl7_location("AIP", 3, component=2)
+
+    participant_entry = by_path["Bundle.entry[1].resource.participant[1].actor.display"]
+    assert participant_entry.value == "Smith, John"
+    assert participant_entry.source_location == hl7_location("AIP", 3)
+
+    status_entry = by_path["Bundle.entry[1].resource.status"]
+    assert status_entry.derivation == "inferred"
+    assert status_entry.value == "booked"
+
+    service_type_entry = by_path["Bundle.entry[1].resource.serviceType[0].coding[0].code"]
+    assert service_type_entry.source_location == hl7_location("AIS", 3, component=1)
+
+    # MSH-7 produces two independent facts too: Appointment.created and
+    # Bundle.timestamp.
+    created_entry = by_path["Bundle.entry[1].resource.created"]
+    timestamp_entry = by_path["Bundle.timestamp"]
+    assert created_entry.value == timestamp_entry.value
+    assert created_entry.source_location == hl7_location("MSH", 7)
+    assert timestamp_entry.source_location == hl7_location("MSH", 7)
+
+
+def test_siu_s12_sch11_fallback_timing_points_at_sch_not_tq1():
+    # This fixture has no TQ1 segment at all - start/end must resolve from
+    # SCH-11's own components, not a nonexistent TQ1-7/TQ1-8.
+    message = parse_message(read_fixture("siu_s12_sch11_fallback.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = SiuS12Mapper().to_bundle(message, recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    start_entry = by_path["Bundle.entry[1].resource.start"]
+    assert start_entry.source_location == hl7_location("SCH", 11, component=4)
+    end_entry = by_path["Bundle.entry[1].resource.end"]
+    assert end_entry.source_location == hl7_location("SCH", 11, component=5)
+
+
+def test_siu_s13_duration_prefers_tq1_over_stale_sch9():
+    # TQ1-6 must win over SCH-9/10 when both are present - the recorded
+    # source_location must reflect TQ1-6, not the stale SCH-9 this fixture
+    # deliberately also carries.
+    message = parse_message(read_fixture("siu_s13_stale_duration.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = SiuS13Mapper().to_bundle(message, recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    duration_entry = by_path["Bundle.entry[1].resource.minutesDuration"]
+    assert duration_entry.source_location == hl7_location("TQ1", 6)
+    assert duration_entry.value == "60"
+
+
+def test_siu_s12_aig_device_records_type_and_identifier():
+    message = parse_message(read_fixture("siu_s12_basic.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = SiuS12Mapper().to_bundle(message, recorder=recorder)
+    device = next((e.resource for e in bundle.entry if e.resource.get_resource_type() == "Device"), None)
+    if device is None:
+        pytest.skip("siu_s12_basic.hl7 doesn't carry an AIG-derived Device")
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+    device_index = next(i for i, entry in enumerate(bundle.entry) if entry.resource is device)
+
+    name_entry = by_path[f"Bundle.entry[{device_index}].resource.deviceName[0].name"]
+    assert name_entry.source_location in (hl7_location("AIG", 3, component=1), hl7_location("AIG", 3, component=2))
+    type_entry = by_path[f"Bundle.entry[{device_index}].resource.type.coding[0].code"]
+    assert type_entry.source_location == hl7_location("AIG", 4, component=1)

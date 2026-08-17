@@ -161,11 +161,24 @@ def build_phone_telecom(pid_segment, resource_id: str | None = None, recorder=No
     return ContactPoint(system="phone", use="home", value=phone)
 
 
-def build_codeable_concept_from_cwe(segment, field_num: int) -> CodeableConcept | None:
+def build_codeable_concept_from_cwe(
+    segment, field_num: int, resource_id: str | None = None, relative_path: str | None = None, recorder=None
+) -> CodeableConcept | None:
     """Build a CodeableConcept from a CWE-shaped field (code=component 1,
     display=component 2, coding system=component 3, falling back to a
     urn:interop-tools system when component 3 is absent). Returns None when the
-    code component is empty."""
+    code component is empty.
+
+    `resource_id`/`relative_path`/`recorder` are optional (see
+    app/provenance/recorder.py) - when all three are given, `.coding[0].code`/
+    `.coding[0].display` are recorded against `{relative_path}.coding[0].*`.
+    Recording lives here, not in each caller, since this builder is reused
+    across multiple mappers (SIU's SCH-7/SCH-8/AIS-3, and others as their own
+    slices land) - centralizing it once avoids every caller re-deriving the
+    identical code/display extraction just to record it. The segment id for
+    `hl7_location` is read from the segment itself (field 0 is always the
+    segment's own name, e.g. "SCH"/"AIS") rather than passed in separately,
+    since this function is already handed the real segment object."""
     code = field_str(segment, field_num, component=1)
     if not code:
         return None
@@ -174,4 +187,16 @@ def build_codeable_concept_from_cwe(segment, field_num: int) -> CodeableConcept 
     coding = Coding(system=system, code=code)
     if display:
         coding.display = display
+    if recorder and resource_id and relative_path:
+        segment_id = field_str(segment, 0)
+        recorder.record(
+            resource_id, f"{relative_path}.coding[0].code", hl7_location(segment_id, field_num, component=1), code
+        )
+        if display:
+            recorder.record(
+                resource_id,
+                f"{relative_path}.coding[0].display",
+                hl7_location(segment_id, field_num, component=2),
+                display,
+            )
     return CodeableConcept(coding=[coding])

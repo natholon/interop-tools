@@ -79,20 +79,34 @@ def test_api_data_specification_cda_input_converts_but_is_unsupported():
     assert report["entries"] == []
 
 
-def test_api_data_specification_non_adt_hl7_type_converts_but_is_unsupported():
-    # SIU's own to_bundle() already threads a recorder into build_patient/
-    # assemble_bundle (shared with ADT), so it produces a few real PID/MSH
-    # facts despite its own Appointment fields having no instrumentation at
-    # all - unsupported must still be True (see app/provenance/dispatch.py's
-    # own _INSTRUMENTED_MESSAGE_TYPES), and those partial facts should still
-    # be visible, not silently dropped.
-    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("siu_s12_basic.hl7")})
+def test_api_data_specification_non_instrumented_hl7_type_converts_but_is_unsupported():
+    # ORU's own to_bundle() already threads a recorder into build_patient/
+    # assemble_bundle (shared with ADT/SIU), so it produces a few real PID/
+    # MSH facts despite its own DiagnosticReport/Observation fields having
+    # no instrumentation at all - unsupported must still be True (see
+    # app/provenance/dispatch.py's own _INSTRUMENTED_MESSAGE_TYPES), and
+    # those partial facts should still be visible, not silently dropped.
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("oru_r01_basic.hl7")})
     assert response.status_code == 200
     report = response.json()["report"]
     assert report["unsupported"] is True
     assert report["source_format"] == "HL7v2"
     assert len(report["entries"]) > 0
-    assert "SIU^S12" in report["unsupported_reason"]
+    assert "ORU^R01" in report["unsupported_reason"]
+
+
+def test_api_data_specification_siu_type_is_now_instrumented():
+    # SIU is instrumented as of this slice - a regression test proving it
+    # stays that way (mirrors the ADT^A01 assertions in the sibling test
+    # above, at lighter depth since the full field-by-field crosswalk is
+    # already covered by tests/test_provenance_recorder.py).
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("siu_s12_basic.hl7")})
+    assert response.status_code == 200
+    report = response.json()["report"]
+    assert report["unsupported"] is False
+    assert report["message_type"] == "SIU"
+    assert report["trigger_event"] == "S12"
+    assert len(report["entries"]) > 0
 
 
 def test_api_data_specification_malformed_input_returns_400():

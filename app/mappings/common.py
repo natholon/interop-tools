@@ -96,38 +96,66 @@ def person_display(segment, field_num: int) -> str:
     return name or field_str(segment, field_num, component=1)
 
 
-def build_practitioner_from_xcn(segment, field_num: int) -> Practitioner | None:
+def build_practitioner_from_xcn(segment, field_num: int, recorder=None) -> Practitioner | None:
     """Build a real Practitioner resource from an XCN-shaped field (id^family^
     given^..., e.g. PV1-7, AIP-3). Returns None when the field is entirely
     empty. Shared so any future mapper needing a materialized (not just
     display-text) practitioner from an XCN field can reuse this rather than
-    re-deriving it."""
+    re-deriving it. `recorder` is optional (see app/provenance/recorder.py) -
+    the segment id for hl7_location is read from the segment itself (field 0
+    is always the segment's own name, e.g. "AIP"/"TXA") rather than passed in
+    separately, since this function is generic across callers using
+    different segment types for the identical XCN shape."""
     practitioner_id = field_str(segment, field_num, component=1)
     family = field_str(segment, field_num, component=2)
     given = field_str(segment, field_num, component=3)
     if not (practitioner_id or family or given):
         return None
     practitioner = Practitioner(id=str(uuid.uuid4()))
+    segment_id = field_str(segment, 0)
     if practitioner_id:
         practitioner.identifier = [Identifier(system="urn:interop-tools:practitioner-id", value=practitioner_id)]
+        if recorder:
+            recorder.record(
+                practitioner.id,
+                "identifier[0].value",
+                hl7_location(segment_id, field_num, component=1),
+                practitioner_id,
+            )
     if family or given:
         name = HumanName()
         if family:
             name.family = family
+            if recorder:
+                recorder.record(
+                    practitioner.id, "name[0].family", hl7_location(segment_id, field_num, component=2), family
+                )
         if given:
             name.given = [given]
+            if recorder:
+                recorder.record(
+                    practitioner.id, "name[0].given[0]", hl7_location(segment_id, field_num, component=3), given
+                )
         practitioner.name = [name]
     return practitioner
 
 
-def build_location_from_pl(segment, field_num: int) -> Location | None:
+def build_location_from_pl(segment, field_num: int, recorder=None) -> Location | None:
     """Build a real Location resource from a PL-shaped field (facility^room^
     bed^hospital, e.g. PV1-3, PV1-6, AIL-3). Returns None when the field is
     empty. Shared for the same reason as build_practitioner_from_xcn."""
     display = location_display(segment, field_num)
     if not display:
         return None
-    return Location(id=str(uuid.uuid4()), name=display)
+    location = Location(id=str(uuid.uuid4()), name=display)
+    if recorder:
+        # location_display() joins facility (component 1) + room (component
+        # 2) into one string - the source location names the whole PL field
+        # rather than picking just one component, since the recorded value
+        # is the joined display, not either component alone.
+        segment_id = field_str(segment, 0)
+        recorder.record(location.id, "name", hl7_location(segment_id, field_num), display)
+    return location
 
 
 def resolve_encounter_class(pv1) -> Coding:
