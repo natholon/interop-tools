@@ -4,6 +4,18 @@ from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
 from app.cda.generator import generate_ccd, generate_discharge_summary, generate_history_and_physical
 from app.cda.history_and_physical import HISTORY_AND_PHYSICAL_TEMPLATE_ID
+from app.cda.narrative_sections import (
+    ASSESSMENT_TEMPLATE_ID,
+    FAMILY_HISTORY_TEMPLATE_ID,
+    GENERAL_STATUS_TEMPLATE_ID,
+    HISTORY_OF_PRESENT_ILLNESS_TEMPLATE_ID,
+    HOSPITAL_COURSE_TEMPLATE_ID,
+    PHYSICAL_EXAM_TEMPLATE_ID,
+    PLAN_OF_TREATMENT_TEMPLATE_ID,
+    REASON_FOR_VISIT_TEMPLATE_ID,
+    REVIEW_OF_SYSTEMS_TEMPLATE_ID,
+    SOCIAL_HISTORY_TEMPLATE_ID,
+)
 from app.cda.parser import find_all, find_child, has_template_id, parse_document
 from app.cda.pipeline import convert_cda_to_bundle, validate_cda
 
@@ -845,6 +857,49 @@ def test_generate_discharge_summary_is_reproducible_with_same_seed():
     assert generate_discharge_summary(random.Random(7)) == generate_discharge_summary(random.Random(7))
 
 
+def _has_section(document, template_id: str) -> bool:
+    return any(
+        has_template_id(section, template_id)
+        for section in find_all(document, "component/structuredBody/component/section")
+    )
+
+
+def test_discharge_summary_narrative_sections_vary_present_and_absent_across_seeds():
+    hospital_course_present = hospital_course_absent = 0
+    plan_of_treatment_present = plan_of_treatment_absent = 0
+    for seed in range(60):
+        document = _discharge_summary_document(seed)
+        if _has_section(document, HOSPITAL_COURSE_TEMPLATE_ID):
+            hospital_course_present += 1
+        else:
+            hospital_course_absent += 1
+        if _has_section(document, PLAN_OF_TREATMENT_TEMPLATE_ID):
+            plan_of_treatment_present += 1
+        else:
+            plan_of_treatment_absent += 1
+    assert hospital_course_present > 0 and hospital_course_absent > 0
+    assert plan_of_treatment_present > 0 and plan_of_treatment_absent > 0
+
+
+def test_discharge_summary_narrative_sections_convert_to_document_reference_and_binary():
+    # Direct proof (not just "doesn't crash") that a generated narrative
+    # section round-trips through the real converter into a real,
+    # non-empty DocumentReference+Binary pair - see
+    # app/cda/narrative_sections.py.
+    found_one = False
+    for seed in range(30):
+        xml_text = generate_discharge_summary(random.Random(seed))
+        bundle = convert_cda_to_bundle(xml_text)
+        document_references = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference"]
+        binaries_by_id = {e.resource.id: e.resource for e in bundle.entry if e.resource.get_resource_type() == "Binary"}
+        for document_reference in document_references:
+            binary_id = document_reference.content[0].attachment.url.removeprefix("urn:uuid:")
+            assert binary_id in binaries_by_id
+            assert len(binaries_by_id[binary_id].data) > 0
+            found_one = True
+    assert found_one
+
+
 def _history_and_physical_document(seed: int):
     return parse_document(generate_history_and_physical(random.Random(seed)))
 
@@ -889,3 +944,76 @@ def test_generated_history_and_physical_has_no_validation_errors():
 
 def test_generate_history_and_physical_is_reproducible_with_same_seed():
     assert generate_history_and_physical(random.Random(7)) == generate_history_and_physical(random.Random(7))
+
+
+_HP_NARRATIVE_TEMPLATE_IDS = {
+    "Reason for Visit": REASON_FOR_VISIT_TEMPLATE_ID,
+    "History of Present Illness": HISTORY_OF_PRESENT_ILLNESS_TEMPLATE_ID,
+    "Review of Systems": REVIEW_OF_SYSTEMS_TEMPLATE_ID,
+    "Physical Exam": PHYSICAL_EXAM_TEMPLATE_ID,
+    "General Status": GENERAL_STATUS_TEMPLATE_ID,
+    "Assessment": ASSESSMENT_TEMPLATE_ID,
+    "Social History": SOCIAL_HISTORY_TEMPLATE_ID,
+    "Family History": FAMILY_HISTORY_TEMPLATE_ID,
+}
+
+
+def test_history_and_physical_narrative_sections_each_vary_present_and_absent_across_seeds():
+    counts = {name: [0, 0] for name in _HP_NARRATIVE_TEMPLATE_IDS}
+    for seed in range(80):
+        document = _history_and_physical_document(seed)
+        for name, template_id in _HP_NARRATIVE_TEMPLATE_IDS.items():
+            counts[name][0 if _has_section(document, template_id) else 1] += 1
+    for name, (present, absent) in counts.items():
+        assert present > 0 and absent > 0, f"{name} did not vary across seeds: present={present} absent={absent}"
+
+
+def test_history_and_physical_plan_of_treatment_varies_present_and_absent_across_seeds():
+    # Plan of Treatment is shared with Discharge Summary (see
+    # app/cda/narrative_sections.py's own docstring) - confirmed here too,
+    # not just on the Discharge Summary side.
+    present = absent = 0
+    for seed in range(60):
+        document = _history_and_physical_document(seed)
+        if _has_section(document, PLAN_OF_TREATMENT_TEMPLATE_ID):
+            present += 1
+        else:
+            absent += 1
+    assert present > 0 and absent > 0
+
+
+def test_narrative_sections_never_occur_on_ccd():
+    # include_hospital_course/include_plan_of_treatment/
+    # include_hp_narrative_sections are all scoped away from CCD - see
+    # _generate_sectioned_document's own docstring for why generating them
+    # there would produce unrealistic synthetic data.
+    all_narrative_template_ids = [HOSPITAL_COURSE_TEMPLATE_ID, PLAN_OF_TREATMENT_TEMPLATE_ID] + list(
+        _HP_NARRATIVE_TEMPLATE_IDS.values()
+    )
+    for seed in range(60):
+        document = _document(seed)
+        for template_id in all_narrative_template_ids:
+            assert not _has_section(document, template_id)
+
+
+def test_history_and_physical_narrative_sections_convert_to_document_reference_and_binary():
+    # Direct proof (not just "doesn't crash") that a generated narrative
+    # section round-trips through the real converter into a real,
+    # non-empty DocumentReference+Binary pair, including a table-shaped one
+    # (Social History) - confirming the row/column-preserving extraction
+    # never produces an empty or garbled body.
+    found_table_shaped = False
+    for seed in range(30):
+        xml_text = generate_history_and_physical(random.Random(seed))
+        bundle = convert_cda_to_bundle(xml_text)
+        document_references = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference"]
+        binaries_by_id = {e.resource.id: e.resource for e in bundle.entry if e.resource.get_resource_type() == "Binary"}
+        for document_reference in document_references:
+            binary_id = document_reference.content[0].attachment.url.removeprefix("urn:uuid:")
+            assert binary_id in binaries_by_id
+            text = binaries_by_id[binary_id].data.decode("utf-8")
+            assert len(text) > 0
+            if document_reference.type and document_reference.type.coding[0].code == "29762-2":
+                assert " | " in text  # Social History's own table row shape survived
+                found_table_shaped = True
+    assert found_table_shaped

@@ -26,7 +26,7 @@
   <component>
     <structuredBody>
       <component>
-        <!-- Reason for Visit/Chief Complaint Section - H&P-specific narrative section, out of scope this slice, must be silently skipped -->
+        <!-- Reason for Visit/Chief Complaint Section - H&P-specific narrative section - converts to a DocumentReference+Binary (see app/cda/narrative_sections.py) -->
         <section>
           <templateId root="2.16.840.1.113883.10.20.22.2.12"/>
           <code code="29299-5" codeSystem="2.16.840.1.113883.6.1" displayName="Reason for visit"/>
@@ -52,6 +52,117 @@
               <effectiveTime value="20190614"/>
             </procedure>
           </entry>
+        </section>
+      </component>
+      <component>
+        <!-- History of Present Illness - narrative-only, plain paragraph shape -->
+        <section>
+          <templateId root="1.3.6.1.4.1.19376.1.5.3.1.3.4"/>
+          <code code="10164-2" codeSystem="2.16.840.1.113883.6.1" displayName="History of Present Illness"/>
+          <title>History of Present Illness</title>
+          <text>
+            <paragraph>Patient presents for pre-operative evaluation prior to elective right knee replacement. Reports chronic right knee pain, worsening over the past two years, now limiting ambulation.</paragraph>
+            <paragraph>Conservative management with physical therapy and NSAIDs has failed to provide adequate relief.</paragraph>
+          </text>
+        </section>
+      </component>
+      <component>
+        <!-- Review of Systems - narrative-only, plain paragraph shape -->
+        <section>
+          <templateId root="1.3.6.1.4.1.19376.1.5.3.1.3.18"/>
+          <code code="10187-3" codeSystem="2.16.840.1.113883.6.1" displayName="Review of Systems"/>
+          <title>Review of Systems</title>
+          <text>
+            <paragraph>Denies fever, chills, or recent weight loss. Positive for chronic right knee pain and stiffness. Denies chest pain, shortness of breath, or gastrointestinal symptoms.</paragraph>
+          </text>
+        </section>
+      </component>
+      <component>
+        <!-- Physical Exam - narrative-only, ordered list shape (the real shape a fetched HL7 example used) -->
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.2.10"/>
+          <code code="29545-1" codeSystem="2.16.840.1.113883.6.1" displayName="Physical Exam"/>
+          <title>Physical Examination</title>
+          <text>
+            <list listType="ordered">
+              <item>HEENT: Normal to examination.</item>
+              <item>Heart: Regular rate and rhythm, no murmur.</item>
+              <item>Right knee: Decreased range of motion, crepitus on flexion, no effusion.</item>
+            </list>
+          </text>
+        </section>
+      </component>
+      <component>
+        <!-- General Status - narrative-only, plain paragraph shape -->
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.2.5"/>
+          <code code="10210-3" codeSystem="2.16.840.1.113883.6.1" displayName="General Status"/>
+          <title>General Status</title>
+          <text>
+            <paragraph>Alert and oriented, no acute distress, ambulates with mild antalgic gait.</paragraph>
+          </text>
+        </section>
+      </component>
+      <component>
+        <!-- Assessment - narrative-only, ordered list shape -->
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.8"/>
+          <code code="51848-0" codeSystem="2.16.840.1.113883.6.1" displayName="Assessment"/>
+          <title>Assessment</title>
+          <text>
+            <list listType="ordered">
+              <item>Severe osteoarthritis of the right knee, failed conservative management.</item>
+              <item>Candidate for total knee arthroplasty.</item>
+            </list>
+          </text>
+        </section>
+      </component>
+      <component>
+        <!-- Social History - narrative table shape (row/column association must be preserved by narrative extraction) -->
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.17"/>
+          <code code="29762-2" codeSystem="2.16.840.1.113883.6.1" displayName="Social History"/>
+          <title>Social History</title>
+          <text>
+            <table border="1" width="100%">
+              <thead>
+                <tr><th>Social History Element</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Tobacco smoking status</td><td>Never smoker</td></tr>
+                <tr><td>Alcohol use</td><td>Occasional</td></tr>
+              </tbody>
+            </table>
+          </text>
+        </section>
+      </component>
+      <component>
+        <!-- Family History - narrative-only, plain paragraph shape -->
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.15"/>
+          <code code="10157-6" codeSystem="2.16.840.1.113883.6.1" displayName="Family History"/>
+          <title>Family History</title>
+          <text>
+            <paragraph>Mother: osteoarthritis. Father: coronary artery disease.</paragraph>
+          </text>
+        </section>
+      </component>
+      <component>
+        <!-- Plan of Treatment / "Plan of Care" - the same template Discharge Summary uses, narrative table shape -->
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.10"/>
+          <code code="18776-5" codeSystem="2.16.840.1.113883.6.1" displayName="Plan of Treatment"/>
+          <title>Plan of Care</title>
+          <text>
+            <table border="1" width="100%">
+              <thead>
+                <tr><th>Planned Activity</th><th>Planned Date</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Total knee arthroplasty</td><td>Sep 2, 2026</td></tr>
+              </tbody>
+            </table>
+          </text>
         </section>
       </component>
     </structuredBody>

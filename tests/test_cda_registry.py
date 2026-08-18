@@ -10,6 +10,7 @@ from app.cda.discharge_summary import DischargeSummaryBuilder
 from app.cda.hospital_discharge_diagnosis import SECTION_TEMPLATE_ID as HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID
 from app.cda.hospital_discharge_diagnosis import build_hospital_discharge_diagnoses
 from app.cda.history_and_physical import HistoryAndPhysicalBuilder
+from app.cda import narrative_sections
 from app.cda.parser import parse_document
 from app.cda.procedures import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as PROCEDURES_ENTRIES_OPTIONAL
 from app.cda.procedures import build_procedures
@@ -79,3 +80,30 @@ def test_section_builders_registers_discharge_specific_sections():
     # already parse - only the outer Act template differs.
     assert SECTION_BUILDERS[HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID] is build_hospital_discharge_diagnoses
     assert SECTION_BUILDERS[DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID] is build_discharge_medication_requests
+
+
+def test_section_builders_registers_all_twelve_narrative_section_templateids():
+    # Hospital Course/Plan of Treatment (Discharge Summary) and the nine
+    # History and Physical-specific narrative sections (Reason for Visit/
+    # Chief Complaint in all three of its legal shapes, History of Present
+    # Illness, Physical Exam, Assessment, Review of Systems, Social
+    # History, Family History, General Status) all share the one builder -
+    # see app/cda/narrative_sections.py's own docstring for the full
+    # templateId/LOINC sourcing.
+    narrative_template_ids = [
+        narrative_sections.HOSPITAL_COURSE_TEMPLATE_ID,
+        narrative_sections.PLAN_OF_TREATMENT_TEMPLATE_ID,
+        narrative_sections.REASON_FOR_VISIT_CHIEF_COMPLAINT_TEMPLATE_ID,
+        narrative_sections.REASON_FOR_VISIT_TEMPLATE_ID,
+        narrative_sections.CHIEF_COMPLAINT_TEMPLATE_ID,
+        narrative_sections.HISTORY_OF_PRESENT_ILLNESS_TEMPLATE_ID,
+        narrative_sections.PHYSICAL_EXAM_TEMPLATE_ID,
+        narrative_sections.ASSESSMENT_TEMPLATE_ID,
+        narrative_sections.REVIEW_OF_SYSTEMS_TEMPLATE_ID,
+        narrative_sections.SOCIAL_HISTORY_TEMPLATE_ID,
+        narrative_sections.FAMILY_HISTORY_TEMPLATE_ID,
+        narrative_sections.GENERAL_STATUS_TEMPLATE_ID,
+    ]
+    assert len(narrative_template_ids) == len(set(narrative_template_ids))  # every templateId genuinely distinct
+    for template_id in narrative_template_ids:
+        assert SECTION_BUILDERS[template_id] is narrative_sections.build_narrative_document_reference

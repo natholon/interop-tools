@@ -9,23 +9,29 @@ not assumed from the document-type name alone - this was also the exact
 same fetch that surfaced the Procedures section's own "entries optional"
 templateId gap (see app/cda/procedures.py).
 
-**A real, disclosed scope limit, not a redesign - mirroring Discharge
-Summary's own precedent exactly**: an H&P Note's own IG-required narrative
-sections (Reason for Visit/Chief Complaint, History of Present Illness,
-Physical Exam, Assessment, Plan of Care, Review of Systems, Social History,
-Family History, General Status) either carry no structured entries at all
-(would need a proper FHIR Composition to represent narrative-only content,
-already an out-of-scope item) or use entry shapes this app's existing
-section builders don't recognize - none are mapped this slice, and are
-silently skipped, the same "unrecognized section" treatment
-build_sectioned_bundle already gives any section without a registered
-builder. Verified directly against the real fetched example (not assumed):
-alongside these H&P-specific sections, it also carried Allergies,
-Immunizations, Medications, Problems, Procedures, Results, and Vital Signs
-sections - every one of this app's seven currently-recognized section types
-in a single document - so a real H&P Note converts to something genuinely
-useful (header + all seven recognized sections) even without the
-H&P-specific narrative ones."""
+**A real, disclosed scope limit, now closed - mirroring Discharge
+Summary's own precedent exactly**: an H&P Note's own nine IG-required
+narrative sections (Reason for Visit/Chief Complaint, History of Present
+Illness, Physical Exam, Assessment, Plan of Care, Review of Systems, Social
+History, Family History, General Status) were originally silently skipped
+entirely - they either carry no structured entries at all, or (Social
+History/Family History/Plan of Care) can carry real structured entries in
+practice that still aren't parsed this slice. All nine now convert to a
+DocumentReference + Binary (extracted narrative text) rather than a full
+FHIR-Document Bundle(type="document")+Composition, which stays a disclosed,
+deliberate out-of-scope item - see app/cda/narrative_sections.py for the
+full design reasoning, the real templateId/LOINC sourcing (four of these
+nine sections use legacy IHE PCC/HITSP OIDs, not the native C-CDA
+namespace - a real gotcha found during that research), and what's still
+explicitly deferred (structured entries for Social History/Family
+History/Plan of Care, provenance instrumentation, bidirectional transform).
+Verified directly against the real fetched example (not assumed): alongside
+these H&P-specific sections, it also carried Allergies, Immunizations,
+Medications, Problems, Procedures, Results, and Vital Signs sections - every
+one of this app's seven general-purpose section types in a single document
+- so a real H&P Note now converts to something genuinely comprehensive
+(header + all seven general-purpose sections + all nine H&P-specific
+narrative sections)."""
 
 from xml.etree.ElementTree import Element
 

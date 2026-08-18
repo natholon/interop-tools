@@ -112,6 +112,40 @@
           </entry>
         </section>
       </component>
+      <component>
+        <!-- Hospital Course Section - narrative-only, no <entry> at all in
+             real documents (confirmed against the real HL7 C-CDA-Examples
+             Discharge Summary) - must convert to a DocumentReference+Binary
+             (see app/cda/narrative_sections.py), not be silently skipped. -->
+        <section>
+          <templateId root="1.3.6.1.4.1.19376.1.5.3.1.3.5"/>
+          <code code="8648-8" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital Course"/>
+          <title>Hospital Course</title>
+          <text>Patient admitted with fever and productive cough, diagnosed with community-acquired pneumonia. Treated with IV antibiotics and responded well. Afebrile for 48 hours prior to discharge, tolerating oral intake, ambulating without difficulty.</text>
+        </section>
+      </component>
+      <component>
+        <!-- Plan of Treatment Section - narrative table shape (this app's
+             own narrative extraction must preserve the row/column
+             association, not flatten it into one unlabeled run) - must
+             convert to a DocumentReference+Binary too. -->
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.10"/>
+          <code code="18776-5" codeSystem="2.16.840.1.113883.6.1" displayName="Plan of Treatment"/>
+          <title>Plan of Care</title>
+          <text>
+            <table border="1" width="100%">
+              <thead>
+                <tr><th>Planned Activity</th><th>Planned Date</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Follow up with primary care physician</td><td>Aug 12, 2026</td></tr>
+                <tr><td>Complete oral antibiotic course</td><td>Aug 15, 2026</td></tr>
+              </tbody>
+            </table>
+          </text>
+        </section>
+      </component>
     </structuredBody>
   </component>
 </ClinicalDocument>

@@ -22,25 +22,21 @@
   <component>
     <structuredBody>
       <component>
-        <!-- Unrecognized this slice - Social History has no registered
-             section builder. Its entry should be silently skipped, not
-             raise and not produce a resource. -->
+        <!-- Unrecognized this slice - Encounters has no registered section
+             builder (this app maps no C-CDA section to a FHIR Encounter
+             beyond the document header's own componentOf/encompassing
+             Encounter). Its entry should be silently skipped, not raise
+             and not produce a resource. (Social History, this fixture's
+             own former example, is now a recognized narrative section -
+             see app/cda/narrative_sections.py - so it no longer serves
+             this test's own purpose.) -->
         <section>
-          <templateId root="2.16.840.1.113883.10.20.22.2.17"/>
-          <code code="29762-2" codeSystem="2.16.840.1.113883.6.1" displayName="Social History"/>
-          <title>Social History</title>
+          <templateId root="2.16.840.1.113883.10.20.22.2.22.1"/>
+          <code code="46240-8" codeSystem="2.16.840.1.113883.6.1" displayName="History of encounters"/>
+          <title>Encounters</title>
           <text>
-            <paragraph>Former smoker.</paragraph>
+            <paragraph>Seen in clinic for follow-up.</paragraph>
           </text>
-          <entry typeCode="DRIV">
-            <observation classCode="OBS" moodCode="EVN">
-              <templateId root="2.16.840.1.113883.10.20.22.4.78"/>
-              <code code="72166-2" codeSystem="2.16.840.1.113883.6.1" displayName="Tobacco smoking status"/>
-              <statusCode code="completed"/>
-              <effectiveTime value="20200101"/>
-              <value xsi:type="CD" code="8517006" codeSystem="2.16.840.1.113883.6.96" displayName="Former smoker"/>
-            </observation>
-          </entry>
         </section>
       </component>
       <component>

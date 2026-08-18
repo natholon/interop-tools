@@ -54,6 +54,18 @@ from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_T
 from app.cda.immunizations import STATUS_MAP as IMMUNIZATION_STATUS_MAP
 from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
+from app.cda.narrative_sections import (
+    ASSESSMENT_TEMPLATE_ID,
+    FAMILY_HISTORY_TEMPLATE_ID,
+    GENERAL_STATUS_TEMPLATE_ID,
+    HISTORY_OF_PRESENT_ILLNESS_TEMPLATE_ID,
+    HOSPITAL_COURSE_TEMPLATE_ID,
+    PHYSICAL_EXAM_TEMPLATE_ID,
+    PLAN_OF_TREATMENT_TEMPLATE_ID,
+    REASON_FOR_VISIT_TEMPLATE_ID,
+    REVIEW_OF_SYSTEMS_TEMPLATE_ID,
+    SOCIAL_HISTORY_TEMPLATE_ID,
+)
 from app.cda.parser import parse_document
 from app.cda.problems import (
     CONCERN_ACT_TEMPLATE_ID,
@@ -855,6 +867,199 @@ def _random_procedures_section(rng: random.Random) -> str | None:
     )
 
 
+# Small, obviously-synthetic text pools for the narrative-only sections
+# (see app/cda/narrative_sections.py) - one rng.choice() per generated
+# document, mirroring this generator's own established "small pool, not
+# full free-text randomization" style for every other free-text field.
+_HOSPITAL_COURSE_TEXTS = [
+    "Patient admitted with fever and productive cough, treated with IV antibiotics and responded well. Afebrile for 48 hours prior to discharge.",
+    "Uncomplicated post-operative course. Ambulating independently, tolerating a regular diet, pain well controlled on oral medication.",
+]
+_REASON_FOR_VISIT_TEXTS = [
+    "Pre-operative evaluation prior to elective surgery.",
+    "Follow-up evaluation of chronic condition.",
+    "New patient visit for evaluation of recent symptoms.",
+]
+_HPI_TEXTS = [
+    "Patient reports symptoms worsening over the past several weeks despite conservative management.",
+    "Patient presents with a several-day history of symptoms, now improving with supportive care.",
+]
+_REVIEW_OF_SYSTEMS_TEXTS = [
+    "Denies fever, chills, or recent weight loss. All other systems reviewed and negative.",
+    "Positive for fatigue and mild joint pain. Denies chest pain, shortness of breath, or gastrointestinal symptoms.",
+]
+_GENERAL_STATUS_TEXTS = [
+    "Alert and oriented, no acute distress.",
+    "Well-appearing, in no apparent distress, ambulating without assistance.",
+]
+_PHYSICAL_EXAM_ITEMS = [
+    "HEENT: Normal to examination.",
+    "Heart: Regular rate and rhythm, no murmur.",
+    "Lungs: Clear to auscultation bilaterally.",
+    "Abdomen: Soft, non-tender, non-distended.",
+    "Extremities: No edema, normal range of motion.",
+]
+_ASSESSMENT_ITEMS = [
+    "Condition stable, continue current management.",
+    "Improving on current treatment regimen.",
+    "Candidate for further intervention as previously discussed.",
+]
+_SOCIAL_HISTORY_ROWS = [
+    ("Tobacco smoking status", "Never smoker"),
+    ("Tobacco smoking status", "Former smoker"),
+    ("Alcohol use", "Occasional"),
+    ("Alcohol use", "None"),
+]
+_FAMILY_HISTORY_TEXTS = [
+    "Mother: hypertension. Father: coronary artery disease.",
+    "No known family history of significant illness.",
+]
+_PLAN_OF_TREATMENT_ROWS = [
+    ("Follow up with primary care physician", "1-2 weeks"),
+    ("Complete prescribed medication course", "As directed"),
+]
+
+
+def _random_narrative_section(
+    rng: random.Random, template_id: str, code: str, code_display: str, title: str, text_options: list[str]
+) -> str:
+    """A plain-paragraph narrative section - the shape Hospital Course/
+    Reason for Visit/History of Present Illness/Review of Systems/General
+    Status all use in real documents (confirmed against the real HL7
+    C-CDA-Examples documents - see app/cda/narrative_sections.py's own
+    docstring). Always returns real narrative text (this app's own
+    established "guarantee convertibility by construction" contract) -
+    presence/absence of the whole *section* is decided by the caller via
+    maybe(), not by this function returning None."""
+    text = rng.choice(text_options)
+    return (
+        f'<component><section><templateId root="{template_id}"/>'
+        f'<code code="{code}" codeSystem="2.16.840.1.113883.6.1" displayName="{code_display}"/>'
+        f"<title>{title}</title><text><paragraph>{text}</paragraph></text></section></component>"
+    )
+
+
+def _random_list_narrative_section(
+    rng: random.Random, template_id: str, code: str, code_display: str, title: str, item_pool: list[str]
+) -> str:
+    """An ordered-<list> narrative section - the shape Physical Exam/
+    Assessment both use in real documents."""
+    items = rng.sample(item_pool, k=rng.randint(2, min(3, len(item_pool))))
+    items_xml = "".join(f"<item>{item}</item>" for item in items)
+    return (
+        f'<component><section><templateId root="{template_id}"/>'
+        f'<code code="{code}" codeSystem="2.16.840.1.113883.6.1" displayName="{code_display}"/>'
+        f'<title>{title}</title><text><list listType="ordered">{items_xml}</list></text></section></component>'
+    )
+
+
+def _random_table_narrative_section(
+    rng: random.Random,
+    template_id: str,
+    code: str,
+    code_display: str,
+    title: str,
+    header_cells: tuple[str, str],
+    row_pool: list[tuple[str, str]],
+) -> str:
+    """A `<table>` narrative section - the shape Social History/Family
+    History/Plan of Treatment commonly use in real documents (see
+    app/cda/narrative_sections.py's own extract_narrative_text docstring
+    for why this app's own narrative extraction has to be table-aware at
+    all). Two rows, direct fuzz coverage of the row/column-preserving
+    extraction path every generated Discharge Summary/History and Physical
+    now exercises."""
+    rows = rng.sample(row_pool, k=min(2, len(row_pool)))
+    header = f"<tr><th>{header_cells[0]}</th><th>{header_cells[1]}</th></tr>"
+    body = "".join(f"<tr><td>{left}</td><td>{right}</td></tr>" for left, right in rows)
+    table = f"<table><thead>{header}</thead><tbody>{body}</tbody></table>"
+    return (
+        f'<component><section><templateId root="{template_id}"/>'
+        f'<code code="{code}" codeSystem="2.16.840.1.113883.6.1" displayName="{code_display}"/>'
+        f"<title>{title}</title><text>{table}</text></section></component>"
+    )
+
+
+def _random_hospital_course_section(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.7):
+        return None
+    return _random_narrative_section(
+        rng, HOSPITAL_COURSE_TEMPLATE_ID, "8648-8", "Hospital Course", "Hospital Course", _HOSPITAL_COURSE_TEXTS
+    )
+
+
+def _random_plan_of_treatment_section(rng: random.Random) -> str | None:
+    if not maybe(rng, 0.8):
+        return None
+    return _random_table_narrative_section(
+        rng,
+        PLAN_OF_TREATMENT_TEMPLATE_ID,
+        "18776-5",
+        "Plan of Treatment",
+        "Plan of Care",
+        ("Planned Activity", "Timeframe"),
+        _PLAN_OF_TREATMENT_ROWS,
+    )
+
+
+def _random_hp_narrative_sections(rng: random.Random) -> str:
+    """History and Physical's own eight remaining required narrative
+    sections (Plan of Treatment/Plan of Care is shared with Discharge
+    Summary - see _random_plan_of_treatment_section - so it isn't repeated
+    here). Each section is independently maybe()-gated, matching this
+    generator's own established per-section presence policy."""
+    sections = ""
+    if maybe(rng, 0.8):
+        sections += _random_narrative_section(
+            rng, REASON_FOR_VISIT_TEMPLATE_ID, "29299-5", "Reason for visit", "Reason for Visit", _REASON_FOR_VISIT_TEXTS
+        )
+    if maybe(rng, 0.7):
+        sections += _random_narrative_section(
+            rng,
+            HISTORY_OF_PRESENT_ILLNESS_TEMPLATE_ID,
+            "10164-2",
+            "History of present illness",
+            "History of Present Illness",
+            _HPI_TEXTS,
+        )
+    if maybe(rng, 0.7):
+        sections += _random_narrative_section(
+            rng,
+            REVIEW_OF_SYSTEMS_TEMPLATE_ID,
+            "10187-3",
+            "Review of systems",
+            "Review of Systems",
+            _REVIEW_OF_SYSTEMS_TEXTS,
+        )
+    if maybe(rng, 0.7):
+        sections += _random_list_narrative_section(
+            rng, PHYSICAL_EXAM_TEMPLATE_ID, "29545-1", "Physical findings", "Physical Examination", _PHYSICAL_EXAM_ITEMS
+        )
+    if maybe(rng, 0.7):
+        sections += _random_narrative_section(
+            rng, GENERAL_STATUS_TEMPLATE_ID, "10210-3", "General status", "General Status", _GENERAL_STATUS_TEXTS
+        )
+    if maybe(rng, 0.7):
+        sections += _random_list_narrative_section(
+            rng, ASSESSMENT_TEMPLATE_ID, "51848-0", "Assessment", "Assessment", _ASSESSMENT_ITEMS
+        )
+    if maybe(rng, 0.7):
+        sections += _random_table_narrative_section(
+            rng,
+            SOCIAL_HISTORY_TEMPLATE_ID,
+            "29762-2",
+            "Social history",
+            "Social History",
+            ("Social History Element", "Description"),
+            _SOCIAL_HISTORY_ROWS,
+        )
+    if maybe(rng, 0.7):
+        sections += _random_narrative_section(
+            rng, FAMILY_HISTORY_TEMPLATE_ID, "10157-6", "Family history", "Family History", _FAMILY_HISTORY_TEXTS
+        )
+    return sections
+
+
 def _random_patient(rng: random.Random) -> str:
     sex = random_sex(rng) if maybe(rng) else None
     ids = "".join(_random_id_element(rng) for _ in range(rng.choice((1, 2))))
@@ -887,6 +1092,9 @@ def _generate_sectioned_document(
     title: str,
     force_encounter: bool = False,
     include_discharge_specific_sections: bool = False,
+    include_hospital_course: bool = False,
+    include_plan_of_treatment: bool = False,
+    include_hp_narrative_sections: bool = False,
 ) -> str:
     """Shared body for every "header + generic sections" C-CDA document
     type this generator produces - CCD, Discharge Summary, and History and
@@ -901,7 +1109,12 @@ def _generate_sectioned_document(
     make real-world sense on a Discharge Summary (SECTION_BUILDERS itself
     has no document-type awareness - any document type carrying one of
     these sections would convert it - but generating them for CCD/H&P would
-    produce unrealistic synthetic data no real sender would emit)."""
+    produce unrealistic synthetic data no real sender would emit). The
+    three narrative-section flags follow the identical reasoning: Hospital
+    Course only makes sense on a Discharge Summary, the eight H&P-specific
+    narrative sections only on a History and Physical, and Plan of
+    Treatment (shared, see app/cda/narrative_sections.py's own docstring)
+    on both but never CCD."""
     ids = "".join(_random_id_element(rng) for _ in range(1))
     # A ~10-day window around "now" (rather than always-past) exercises the
     # (warning-severity) "document date in the future" rule about half the
@@ -929,6 +1142,9 @@ def _generate_sectioned_document(
     discharge_medications_section = (
         _random_discharge_medications_section(rng) or "" if include_discharge_specific_sections else ""
     )
+    hospital_course_section = _random_hospital_course_section(rng) or "" if include_hospital_course else ""
+    plan_of_treatment_section = _random_plan_of_treatment_section(rng) or "" if include_plan_of_treatment else ""
+    hp_narrative_sections = _random_hp_narrative_sections(rng) if include_hp_narrative_sections else ""
     sections = (
         problems_section
         + medications_section
@@ -939,6 +1155,9 @@ def _generate_sectioned_document(
         + procedures_section
         + discharge_diagnosis_section
         + discharge_medications_section
+        + hospital_course_section
+        + plan_of_treatment_section
+        + hp_narrative_sections
     )
     body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 
@@ -978,6 +1197,8 @@ def generate_discharge_summary(rng: random.Random) -> str:
         title="Discharge Summary",
         force_encounter=True,
         include_discharge_specific_sections=True,
+        include_hospital_course=True,
+        include_plan_of_treatment=True,
     )
 
 
@@ -992,4 +1213,6 @@ def generate_history_and_physical(rng: random.Random) -> str:
         doc_code="34117-2",
         doc_code_display="History and physical note",
         title="History and Physical Note",
+        include_plan_of_treatment=True,
+        include_hp_narrative_sections=True,
     )

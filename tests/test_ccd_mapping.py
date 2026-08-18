@@ -121,9 +121,9 @@ def test_effective_time_variants_resolve_onset_and_abatement_per_shape():
 def test_unrecognized_section_is_silently_skipped():
     bundle = convert_cda_to_bundle(read_fixture("ccd_unrecognized_section_present.xml"))
     entries = _entries_by_type(bundle)
-    # Social History has no registered section builder this slice - its
-    # entry must not appear as any resource, but the sibling recognized
-    # Problems section must still be processed normally.
+    # Encounters has no registered section builder - its entry must not
+    # appear as any resource, but the sibling recognized Problems section
+    # must still be processed normally.
     assert set(entries.keys()) == {"Patient", "Condition"}
     assert entries["Condition"][0].resource.code.coding[0].display == "Osteoarthritis"
 
@@ -337,7 +337,7 @@ def test_procedures_basic_fixture_maps_completed_and_negated_entries():
     assert colonoscopy.identifier[0].value == "urn:oid:d1e2f3a4-0002-4a1a-8a1a-000000000002"
 
 
-def test_discharge_summary_maps_header_and_all_four_of_its_sections():
+def test_discharge_summary_maps_header_and_all_six_of_its_sections():
     bundle = convert_cda_to_bundle(read_fixture("discharge_summary_basic.xml"))
     entries = _entries_by_type(bundle)
 
@@ -346,8 +346,17 @@ def test_discharge_summary_maps_header_and_all_four_of_its_sections():
     # templates Problems/Medications already parse (see
     # app/cda/hospital_discharge_diagnosis.py and
     # app/cda/discharge_medications.py) - both must convert now, alongside
-    # the plain Problems-shaped Condition.
-    assert set(entries.keys()) == {"Patient", "Encounter", "Condition", "MedicationRequest"}
+    # the plain Problems-shaped Condition. Hospital Course and Plan of
+    # Treatment are narrative-only sections that each produce a
+    # DocumentReference+Binary pair (see app/cda/narrative_sections.py).
+    assert set(entries.keys()) == {
+        "Patient",
+        "Encounter",
+        "Condition",
+        "MedicationRequest",
+        "DocumentReference",
+        "Binary",
+    }
     conditions = {c.resource.code.coding[0].display: c.resource for c in entries["Condition"]}
     assert set(conditions) == {"Hypertensive disorder", "Community-acquired pneumonia"}
 
@@ -364,20 +373,92 @@ def test_discharge_summary_maps_header_and_all_four_of_its_sections():
     assert encounter.period.start.isoformat() == "2026-07-28T08:00:00-05:00"
     assert encounter.period.end.isoformat() == "2026-08-05T10:00:00-05:00"
 
+    document_references = {dr.resource.type.coding[0].code: dr.resource for dr in entries["DocumentReference"]}
+    assert set(document_references) == {"8648-8", "18776-5"}
+    binaries_by_id = {b.resource.id: b.resource for b in entries["Binary"]}
 
-def test_history_and_physical_maps_header_and_recognized_section_skips_hp_specific_one():
+    hospital_course = document_references["8648-8"]
+    assert hospital_course.description == "Hospital Course"
+    hospital_course_binary_id = hospital_course.content[0].attachment.url.removeprefix("urn:uuid:")
+    assert "community-acquired pneumonia" in binaries_by_id[hospital_course_binary_id].data.decode("utf-8").lower()
+
+    plan_of_treatment = document_references["18776-5"]
+    assert plan_of_treatment.description == "Plan of Care"
+    plan_binary_id = plan_of_treatment.content[0].attachment.url.removeprefix("urn:uuid:")
+    plan_text = binaries_by_id[plan_binary_id].data.decode("utf-8")
+    # Table row/column association preserved, not flattened into one
+    # unlabeled run - see extract_narrative_text's own docstring.
+    assert "Planned Activity | Planned Date" in plan_text
+    assert "Follow up with primary care physician | Aug 12, 2026" in plan_text
+
+
+def test_history_and_physical_maps_header_recognized_section_and_all_nine_narrative_sections():
     bundle = convert_cda_to_bundle(read_fixture("history_and_physical_basic.xml"))
     entries = _entries_by_type(bundle)
 
-    # Reason for Visit is an H&P-specific narrative section this app
-    # doesn't recognize and must be silently skipped - only the Procedures
-    # section (using the "entries optional" templateId, the exact shape a
-    # real official HL7 History and Physical example was found using)
-    # converts.
-    assert set(entries.keys()) == {"Patient", "Procedure"}
+    # Reason for Visit, History of Present Illness, Review of Systems,
+    # Physical Exam, General Status, Assessment, Social History, Family
+    # History, and Plan of Treatment are all H&P-specific narrative
+    # sections - each now converts to its own DocumentReference+Binary pair
+    # (see app/cda/narrative_sections.py) - alongside the Procedures section
+    # (using the "entries optional" templateId, the exact shape a real
+    # official HL7 History and Physical example was found using).
+    assert set(entries.keys()) == {"Patient", "Procedure", "DocumentReference", "Binary"}
     procedure = entries["Procedure"][0].resource
     assert procedure.code.coding[0].display == "Knee arthroscopy"
     assert procedure.status == "completed"
+
+    document_references = entries["DocumentReference"]
+    assert len(document_references) == 9
+    binaries_by_id = {b.resource.id: b.resource for b in entries["Binary"]}
+
+    by_code = {dr.resource.type.coding[0].code: dr.resource for dr in document_references}
+    expected_codes = {
+        "29299-5": "Reason for Visit",
+        "10164-2": "History of Present Illness",
+        "10187-3": "Review of Systems",
+        "29545-1": "Physical Examination",
+        "10210-3": "General Status",
+        "51848-0": "Assessment",
+        "29762-2": "Social History",
+        "10157-6": "Family History",
+        "18776-5": "Plan of Care",
+    }
+    assert set(by_code) == set(expected_codes)
+    for code, title in expected_codes.items():
+        document_reference = by_code[code]
+        assert document_reference.type.coding[0].system == "http://loinc.org"
+        assert document_reference.description == title
+
+    def narrative_text(loinc_code: str) -> str:
+        document_reference = by_code[loinc_code]
+        binary_id = document_reference.content[0].attachment.url.removeprefix("urn:uuid:")
+        return binaries_by_id[binary_id].data.decode("utf-8")
+
+    # Reason for Visit - the fixture's own original narrative section,
+    # already covered before this section became a nine-section fixture.
+    assert narrative_text("29299-5") == "Pre-operative evaluation prior to elective knee replacement."
+
+    # History of Present Illness - two <paragraph>s, one line each.
+    hpi_text = narrative_text("10164-2")
+    assert "worsening over the past two years" in hpi_text
+    assert "failed to provide adequate relief" in hpi_text
+
+    # Physical Exam - an ordered <list>, one line per <item>.
+    physical_exam_text = narrative_text("29545-1")
+    assert "HEENT: Normal to examination." in physical_exam_text
+    assert "Right knee: Decreased range of motion, crepitus on flexion, no effusion." in physical_exam_text
+
+    # Social History and Plan of Treatment - table row/column association
+    # preserved, not flattened into one unlabeled run (see
+    # extract_narrative_text's own docstring).
+    social_history_text = narrative_text("29762-2")
+    assert "Social History Element | Description" in social_history_text
+    assert "Tobacco smoking status | Never smoker" in social_history_text
+
+    plan_text = narrative_text("18776-5")
+    assert "Planned Activity | Planned Date" in plan_text
+    assert "Total knee arthroplasty | Sep 2, 2026" in plan_text
 
 
 def test_bundle_round_trips_through_json():

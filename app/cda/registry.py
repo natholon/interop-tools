@@ -29,6 +29,7 @@ from app.cda import (
     hospital_discharge_diagnosis,
     immunizations,
     medications,
+    narrative_sections,
     problems,
     procedures,
     results,
@@ -55,6 +56,22 @@ SECTION_BUILDERS: dict[str, Callable[..., list[Resource]]] = {
     procedures.SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL: procedures.build_procedures,
     hospital_discharge_diagnosis.SECTION_TEMPLATE_ID: hospital_discharge_diagnosis.build_hospital_discharge_diagnoses,
     discharge_medications.SECTION_TEMPLATE_ID: discharge_medications.build_discharge_medication_requests,
+    # Narrative-only sections (Discharge Summary's Hospital Course/Plan of
+    # Treatment, History and Physical's own nine required narrative
+    # sections) - see app/cda/narrative_sections.py's own docstring for the
+    # full templateId/LOINC sourcing and why they all share one builder.
+    narrative_sections.HOSPITAL_COURSE_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    narrative_sections.PLAN_OF_TREATMENT_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    narrative_sections.REASON_FOR_VISIT_CHIEF_COMPLAINT_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    narrative_sections.REASON_FOR_VISIT_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    narrative_sections.CHIEF_COMPLAINT_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    narrative_sections.HISTORY_OF_PRESENT_ILLNESS_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    narrative_sections.PHYSICAL_EXAM_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    narrative_sections.ASSESSMENT_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    narrative_sections.REVIEW_OF_SYSTEMS_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    narrative_sections.SOCIAL_HISTORY_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    narrative_sections.FAMILY_HISTORY_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    narrative_sections.GENERAL_STATUS_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
 }
 
 _DOCUMENT_BUILDERS: dict[str, CdaDocumentBuilder] = {
