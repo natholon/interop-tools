@@ -43,6 +43,7 @@ from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP 
 from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
 from app.cda.medications import MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP as MEDICATION_STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
+from app.cda.narrative_sections import ALL_TEMPLATE_IDS as NARRATIVE_SECTION_TEMPLATE_IDS, extract_narrative_text
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
 from app.cda.problems import CONCERN_ACT_TEMPLATE_ID, PROBLEM_OBSERVATION_TEMPLATE_ID
 from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
@@ -821,6 +822,41 @@ def _rule_discharge_medications(section, now: datetime) -> list[ValidationFindin
     )
 
 
+def _iter_narrative_sections(document):
+    """Yield every section matching any of the twelve templateIds
+    app.cda.narrative_sections registers a builder for, via the exact same
+    structuredBody walk build_sectioned_bundle() uses, so validation can
+    never see a different set of narrative sections than conversion does.
+    All twelve share one rule (below) rather than one per section type,
+    the same "one shared builder, one shared rule" shape the builder side
+    already established - there's no per-section-type check to diverge
+    (the only thing this rule verifies is "does this section have any
+    extractable narrative text at all", which is identical regardless of
+    which of the twelve templateIds matched)."""
+    for section in find_all(document, "component/structuredBody/component/section"):
+        if any(has_template_id(section, template_id) for template_id in NARRATIVE_SECTION_TEMPLATE_IDS):
+            yield section
+
+
+def _rule_narrative_sections(document) -> list[ValidationFinding]:
+    findings = []
+    for section in _iter_narrative_sections(document):
+        if extract_narrative_text(find_child(section, "text")):
+            continue
+        title_element = find_child(section, "title")
+        title = title_element.text.strip() if title_element is not None and title_element.text else None
+        label = f"{title!r}" if title else "A narrative section"
+        findings.append(
+            ValidationFinding(
+                severity="info",
+                rule_id="cda.narrative-section-missing-text",
+                segment=f"{title or 'NarrativeSection'}/text",
+                message=f"{label} has no extractable narrative text - the converter will silently skip this section.",
+            )
+        )
+    return findings
+
+
 def _check_convertibility(document) -> list[ValidationFinding]:
     # Deferred import: app/cda/registry.py imports app/cda/ccd.py at module
     # load time; this module doesn't need to be part of that load-order
@@ -921,6 +957,8 @@ def validate_document(document) -> ValidationReport:
     discharge_medications_section = _find_discharge_medications_section(document)
     if discharge_medications_section is not None:
         findings.extend(_rule_discharge_medications(discharge_medications_section, now))
+
+    findings.extend(_rule_narrative_sections(document))
 
     findings.extend(_check_convertibility(document))
 

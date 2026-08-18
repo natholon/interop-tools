@@ -60,18 +60,13 @@ SECTION_BUILDERS: dict[str, Callable[..., list[Resource]]] = {
     # Treatment, History and Physical's own nine required narrative
     # sections) - see app/cda/narrative_sections.py's own docstring for the
     # full templateId/LOINC sourcing and why they all share one builder.
-    narrative_sections.HOSPITAL_COURSE_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
-    narrative_sections.PLAN_OF_TREATMENT_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
-    narrative_sections.REASON_FOR_VISIT_CHIEF_COMPLAINT_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
-    narrative_sections.REASON_FOR_VISIT_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
-    narrative_sections.CHIEF_COMPLAINT_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
-    narrative_sections.HISTORY_OF_PRESENT_ILLNESS_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
-    narrative_sections.PHYSICAL_EXAM_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
-    narrative_sections.ASSESSMENT_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
-    narrative_sections.REVIEW_OF_SYSTEMS_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
-    narrative_sections.SOCIAL_HISTORY_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
-    narrative_sections.FAMILY_HISTORY_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
-    narrative_sections.GENERAL_STATUS_TEMPLATE_ID: narrative_sections.build_narrative_document_reference,
+    # Built from narrative_sections.ALL_TEMPLATE_IDS (not twelve individual
+    # entries) so this dict and app/cda/validation.py's own document walk
+    # can never independently drift about which templateIds count.
+    **{
+        template_id: narrative_sections.build_narrative_document_reference
+        for template_id in narrative_sections.ALL_TEMPLATE_IDS
+    },
 }
 
 _DOCUMENT_BUILDERS: dict[str, CdaDocumentBuilder] = {

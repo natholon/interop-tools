@@ -31,6 +31,8 @@ _RESULT_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.2
 _PROCEDURES_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.7.1"/>'
 _PROCEDURES_SECTION_TEMPLATE_ENTRIES_OPTIONAL = '<templateId root="2.16.840.1.113883.10.20.22.2.7"/>'
 _PROCEDURE_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.14"/>'
+_HOSPITAL_COURSE_SECTION_TEMPLATE = '<templateId root="1.3.6.1.4.1.19376.1.5.3.1.3.5"/>'
+_SOCIAL_HISTORY_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.17"/>'
 
 
 def _doc(body: str, ccd: bool = True) -> object:
@@ -846,6 +848,52 @@ def test_discharge_medication_status_unrecognized_is_info():
     finding = next(f for f in report.findings if f.rule_id == "cda.discharge-medication-status-unrecognized")
     assert finding.severity == "info"
     assert report.is_valid is True
+
+
+def test_narrative_section_missing_text_is_info():
+    section = (
+        f"<component><structuredBody><component><section>{_HOSPITAL_COURSE_SECTION_TEMPLATE}"
+        '<code code="8648-8" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital Course"/>'
+        "<title>Hospital Course</title><text></text>"
+        "</section></component></structuredBody></component>"
+    )
+    document = _doc(_patient() + section)
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.narrative-section-missing-text")
+    assert finding.severity == "info"
+    assert finding.segment == "Hospital Course/text"
+    assert "Hospital Course" in finding.message
+    assert report.is_valid is True
+
+
+def test_narrative_section_with_text_produces_no_finding():
+    section = (
+        f"<component><structuredBody><component><section>{_HOSPITAL_COURSE_SECTION_TEMPLATE}"
+        '<code code="8648-8" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital Course"/>'
+        "<title>Hospital Course</title><text><paragraph>Uncomplicated course.</paragraph></text>"
+        "</section></component></structuredBody></component>"
+    )
+    document = _doc(_patient() + section)
+    report = validate_document(document)
+    assert not [f for f in report.findings if f.rule_id == "cda.narrative-section-missing-text"]
+
+
+def test_narrative_section_rule_applies_generically_across_different_templateids():
+    # The rule walks all twelve registered templateIds generically (see
+    # _iter_narrative_sections) - confirmed here against a genuinely
+    # different one (Social History) than the Hospital Course fixture
+    # every other test in this block uses, so this isn't just hardcoded to
+    # one specific section type.
+    section = (
+        f"<component><structuredBody><component><section>{_SOCIAL_HISTORY_SECTION_TEMPLATE}"
+        '<code code="29762-2" codeSystem="2.16.840.1.113883.6.1" displayName="Social History"/>'
+        "<title>Social History</title><text></text>"
+        "</section></component></structuredBody></component>"
+    )
+    document = _doc(_patient() + section)
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.narrative-section-missing-text")
+    assert finding.segment == "Social History/text"
 
 
 def test_unregistered_document_type_is_info():

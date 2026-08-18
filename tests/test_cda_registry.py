@@ -105,5 +105,10 @@ def test_section_builders_registers_all_twelve_narrative_section_templateids():
         narrative_sections.GENERAL_STATUS_TEMPLATE_ID,
     ]
     assert len(narrative_template_ids) == len(set(narrative_template_ids))  # every templateId genuinely distinct
+    # This test's own independently-typed list must match
+    # narrative_sections.ALL_TEMPLATE_IDS exactly - not just re-import and
+    # reuse it, which would make this test tautological against the very
+    # registration it's meant to verify.
+    assert set(narrative_template_ids) == set(narrative_sections.ALL_TEMPLATE_IDS)
     for template_id in narrative_template_ids:
         assert SECTION_BUILDERS[template_id] is narrative_sections.build_narrative_document_reference

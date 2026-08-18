@@ -99,6 +99,28 @@ SOCIAL_HISTORY_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.17"  # LOINC 29762-2
 FAMILY_HISTORY_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.15"  # LOINC 10157-6
 GENERAL_STATUS_TEMPLATE_ID = "2.16.840.1.113883.10.20.2.5"  # LOINC 10210-3, legacy HITSP/C32 OID
 
+# Every templateId this module registers a builder for - the single
+# canonical list `app/cda/registry.py`'s own SECTION_BUILDERS entries are
+# built from and `app/cda/validation.py` walks a document for, so the two
+# can never independently drift apart about which twelve templateIds count
+# as "a narrative section" (the same "one real implementation, not two
+# maintained lists" discipline this app applies everywhere - e.g.
+# app.edi.common.resolve_837_variant).
+ALL_TEMPLATE_IDS = [
+    HOSPITAL_COURSE_TEMPLATE_ID,
+    PLAN_OF_TREATMENT_TEMPLATE_ID,
+    REASON_FOR_VISIT_CHIEF_COMPLAINT_TEMPLATE_ID,
+    REASON_FOR_VISIT_TEMPLATE_ID,
+    CHIEF_COMPLAINT_TEMPLATE_ID,
+    HISTORY_OF_PRESENT_ILLNESS_TEMPLATE_ID,
+    PHYSICAL_EXAM_TEMPLATE_ID,
+    ASSESSMENT_TEMPLATE_ID,
+    REVIEW_OF_SYSTEMS_TEMPLATE_ID,
+    SOCIAL_HISTORY_TEMPLATE_ID,
+    FAMILY_HISTORY_TEMPLATE_ID,
+    GENERAL_STATUS_TEMPLATE_ID,
+]
+
 _TABLE_ROW_TAG = "tr"
 _TABLE_CELL_TAGS = ("th", "td")
 _BLOCK_TEXT_TAGS = ("paragraph", "content", "caption", "item")
