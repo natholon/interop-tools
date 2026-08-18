@@ -37,7 +37,11 @@ This project converts and validates data in formats governed by external standar
 
 Every disclosed judgment call, local-system fallback, and scope limit made along the way is documented in [CLAUDE.md](CLAUDE.md)'s own per-module notes, alongside the file/line it applies to.
 
-## Installation (Windows / PowerShell)
+## Installation
+
+No platform-specific dependencies — everything in `pyproject.toml` is pure Python, so setup only differs in how the virtual environment gets activated. Requires Python 3.10+.
+
+### Windows (PowerShell)
 
 ```powershell
 python -m venv .venv
@@ -50,16 +54,28 @@ If `Activate.ps1` is blocked by your execution policy, run once:
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
+### macOS / Linux (bash/zsh)
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+(`python3`/`pip` — not `python`/`pip3` — is what most macOS/Linux distributions ship; substitute whichever your system actually resolves `python -V` to if it already points at Python 3.10+.)
+
 ## Usage
 
-Start the app:
-```powershell
+Start the app (identical on every platform once the virtual environment above is active):
+```
 uvicorn app.main:app --reload
 ```
 
 Then open [http://127.0.0.1:8000](http://127.0.0.1:8000) in a browser. Paste a raw HL7v2 message, a C-CDA XML document, or an X12 EDI interchange (any supported type/trigger, see Status above) into the text box, pick a message type from the dropdown and click **Generate sample** for a fresh randomized example, or upload a `.hl7`/`.txt`/`.xml`/`.x12` file — then click **Convert to FHIR** to see the resulting FHIR Bundle JSON, or **Validate** to see a report of error/warning/info findings instead. Input format is auto-detected for both buttons. Parse errors and mapping/FHIR-construction errors are shown as clear categorized messages rather than raw errors; a validation report is returned even for messages with issues — it's an analysis result, not an error.
 
-A JSON API is also available:
+A JSON API is also available. The `-d` payload quoting below is genuinely platform-specific (PowerShell and a POSIX shell handle embedded quotes inside a `curl` argument differently), so both are shown - use whichever matches your terminal, not necessarily your OS (e.g. Git Bash on Windows wants the bash form):
+
+**PowerShell:**
 ```powershell
 curl -X POST http://127.0.0.1:8000/api/convert -H "Content-Type: application/json" -d '{\"hl7_text\": \"MSH|...\"}'
 curl -X POST http://127.0.0.1:8000/api/validate -H "Content-Type: application/json" -d '{\"hl7_text\": \"MSH|...\"}'
@@ -69,12 +85,31 @@ curl "http://127.0.0.1:8000/api/generate?message_type=EDI&trigger_event=837P"
 curl -X POST http://127.0.0.1:8000/api/transform -H "Content-Type: application/json" -d '{\"bundle_json\": \"{...}\", \"target_format\": \"HL7\", \"target_type\": \"ADT\", \"target_trigger\": \"A01\"}'
 curl -X POST http://127.0.0.1:8000/api/data-specification -H "Content-Type: application/json" -d '{\"hl7_text\": \"MSH|...\"}'
 ```
+
+**bash/zsh:**
+```bash
+curl -X POST http://127.0.0.1:8000/api/convert -H "Content-Type: application/json" -d '{"hl7_text": "MSH|..."}'
+curl -X POST http://127.0.0.1:8000/api/validate -H "Content-Type: application/json" -d '{"hl7_text": "MSH|..."}'
+curl "http://127.0.0.1:8000/api/generate?message_type=ADT&trigger_event=A01"
+curl "http://127.0.0.1:8000/api/generate?message_type=CDA&trigger_event=CCD"
+curl "http://127.0.0.1:8000/api/generate?message_type=EDI&trigger_event=837P"
+curl -X POST http://127.0.0.1:8000/api/transform -H "Content-Type: application/json" -d '{"bundle_json": "{...}", "target_format": "HL7", "target_type": "ADT", "target_trigger": "A01"}'
+curl -X POST http://127.0.0.1:8000/api/data-specification -H "Content-Type: application/json" -d '{"hl7_text": "MSH|..."}'
+```
+
 Pass `&seed=<int>` to `/api/generate` for a reproducible message instead of a fresh random one. `/api/transform` takes a FHIR Bundle back the other way, to any of the targets `/api/convert` can produce - see [CLAUDE.md](CLAUDE.md) for the full list. `/api/data-specification` (also reachable via the **Data Specification** page/nav link in the UI) returns both the converted Bundle and a field-level crosswalk report for it.
 
 ## Running tests
 
+**Windows (PowerShell):**
 ```powershell
 .\.venv\Scripts\Activate.ps1
+pytest
+```
+
+**macOS / Linux:**
+```bash
+source .venv/bin/activate
 pytest
 ```
 

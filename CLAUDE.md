@@ -44,13 +44,24 @@ The previously-"remaining" HL7v2 trigger events for these four message types are
 
 ## Commands
 
+No platform-specific dependencies (everything in `pyproject.toml` is pure Python) - only the venv activation step differs by shell.
+
 ```powershell
-# one-time setup (PowerShell)
+# one-time setup (Windows / PowerShell)
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
+```
 
-# run the app (http://127.0.0.1:8000)
+```bash
+# one-time setup (macOS / Linux, bash/zsh)
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+```
+# run the app (http://127.0.0.1:8000) - identical once the venv above is active
 uvicorn app.main:app --reload
 
 # run the full test suite
