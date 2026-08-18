@@ -18,9 +18,11 @@ from app.provenance.dispatch import convert_with_provenance
 from app.provenance.highlighting import build_highlighting_payload
 from app.routes.dropdowns import grouped_supported_types
 from app.routes.errors import ERROR_STATUS, resolve_raw_text
+from app.routes.static_assets import static_url
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+templates.env.globals["static_url"] = static_url
 
 
 class CrosswalkResult(BaseModel):

@@ -12,11 +12,13 @@ from app.hl7.errors import MappingError
 from app.pipeline import convert_to_bundle, validate_any
 from app.routes.dropdowns import grouped_supported_types
 from app.routes.errors import ERROR_STATUS, VALIDATION_ERROR_STATUS, resolve_raw_text
+from app.routes.static_assets import static_url
 from app.transform.pipeline import build_message_from_bundle
 from app.transform.registry import list_supported_targets
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+templates.env.globals["static_url"] = static_url
 
 
 def _transform_target_options() -> list[tuple[str, str, str, str]]:

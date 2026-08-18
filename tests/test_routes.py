@@ -20,6 +20,14 @@ def test_index_renders_form():
     assert "hl7_text" in response.text
 
 
+def test_index_static_asset_urls_are_cache_busted():
+    # See app/routes/static_assets.py - a plain "/static/app.js" would let
+    # a browser keep serving a stale cached copy across an edit.
+    response = client.get("/")
+    assert 'src="/static/app.js?v=' in response.text
+    assert 'href="/static/style.css?v=' in response.text
+
+
 def test_healthz():
     response = client.get("/healthz")
     assert response.status_code == 200

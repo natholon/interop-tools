@@ -19,6 +19,15 @@ def test_data_specification_page_renders():
     assert "hl7_text" in response.text
 
 
+def test_data_specification_static_asset_urls_are_cache_busted():
+    # See app/routes/static_assets.py - this page has its own separate
+    # Jinja2Templates instance from app/routes/convert.py's, so the global
+    # needed registering on both, not just one.
+    response = client.get("/data-specification")
+    assert 'src="/static/data_specification.js?v=' in response.text
+    assert 'href="/static/style.css?v=' in response.text
+
+
 def test_index_page_has_nav_linking_to_data_specification():
     response = client.get("/")
     assert response.status_code == 200
