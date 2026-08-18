@@ -115,7 +115,7 @@ def _build_insurance_items(
         category = build_service_type_category(
             element(eb, 3),
             resource_id=resource_id,
-            relative_path=item_path,
+            relative_path=f"{item_path}.category",
             source_location=edi_location("EB", 3),
             recorder=recorder,
         )

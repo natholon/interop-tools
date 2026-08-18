@@ -56,6 +56,33 @@ def test_api_data_specification_adt_a01_returns_supported_report_with_entries():
     assert status_entry["reason"]
 
 
+def test_api_data_specification_response_includes_highlighting_payload():
+    # See app/provenance/highlighting.py - the correlated source<->FHIR
+    # span data the Data Specification page's side-by-side view renders.
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
+    assert response.status_code == 200
+    body = response.json()
+    highlighting = body["highlighting"]
+    assert highlighting["display_source_text"].startswith("MSH|")
+    assert highlighting["fhir_json_text"]
+    assert len(highlighting["matches"]) == len(body["report"]["entries"])
+
+    matches_by_path = {m["fhir_path"]: m for m in highlighting["matches"]}
+    family_match = matches_by_path["Bundle.entry[0].resource.name[0].family"]
+    assert family_match["color_index"] is not None
+    start, end = family_match["source_span"]
+    assert highlighting["display_source_text"][start:end] == "Doe"
+    fhir_start, fhir_end = family_match["fhir_span"]
+    assert highlighting["fhir_json_text"][fhir_start:fhir_end] == '"Doe"'
+    assert family_match["fhir_token_type"] == "string"
+
+    status_match = matches_by_path["Bundle.entry[1].resource.status"]
+    # exclude_none omits null fields entirely, matching every other JSON
+    # response in this app.
+    assert "color_index" not in status_match
+    assert "source_span" not in status_match
+
+
 def test_api_data_specification_837d_type_is_now_instrumented():
     # 837D is instrumented as of this slice - the fifth and last EDI family,
     # completing full "big five" HIPAA EDI breadth for the Data

@@ -3,15 +3,20 @@ import hl7
 from app.hl7.errors import Hl7ParseError, MissingSegmentError
 
 
-def _normalize_segment_separators(raw_text: str) -> str:
+def normalize_segment_separators(raw_text: str) -> str:
     """hl7.parse() always splits segments on '\\r'. Input pasted into a browser
     textarea or read from a file may use '\\n' or '\\r\\n' instead, so normalize
-    to '\\r' and drop blank lines before handing off to the parser."""
+    to '\\r' and drop blank lines before handing off to the parser.
+
+    Public (not module-private) - app/provenance/hl7_locator.py became a
+    second real consumer, needing the exact same normalized text
+    parse_message() itself parses (re-deriving it independently would risk
+    the two silently drifting apart)."""
     text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
     return "\r".join(line for line in text.split("\n") if line.strip() != "")
 
 
-def _truncate_to_first_message(normalized_text: str) -> str:
+def truncate_to_first_message(normalized_text: str) -> str:
     """A real HL7v2 file can be a batch - multiple MSH-led messages
     concatenated back to back, with no wrapper segments (BHS/BTS) this app
     recognizes. hl7.parse() has no MSH-boundary awareness at all: it
@@ -36,7 +41,7 @@ def _truncate_to_first_message(normalized_text: str) -> str:
 
 def parse_message(raw_text: str) -> hl7.Message:
     """Parse raw HL7v2 text into an hl7.Message, or raise Hl7ParseError."""
-    normalized = _truncate_to_first_message(_normalize_segment_separators(raw_text))
+    normalized = truncate_to_first_message(normalize_segment_separators(raw_text))
     try:
         return hl7.parse(normalized)
     except hl7.exceptions.ParseException as exc:

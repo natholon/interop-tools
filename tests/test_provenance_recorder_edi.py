@@ -151,7 +151,7 @@ def test_edi_270_basic_crosswalk_matches_known_field_values():
     assert purpose_entry.derivation == "inferred"
     assert purpose_entry.value == "benefits"
 
-    item_entry = by_path[f"Bundle.entry[{request_index}].resource.item[0].coding[0].code"]
+    item_entry = by_path[f"Bundle.entry[{request_index}].resource.item[0].category.coding[0].code"]
     assert item_entry.value == "30"
     assert item_entry.source_location == edi_location("EQ", 1)
 
@@ -180,7 +180,7 @@ def test_edi_271_basic_crosswalk_matches_known_field_values():
     response = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "CoverageEligibilityResponse")
     response_index = next(i for i, e in enumerate(bundle.entry) if e.resource is response)
 
-    item0_code = by_path[f"Bundle.entry[{response_index}].resource.insurance[0].item[0].coding[0].code"]
+    item0_code = by_path[f"Bundle.entry[{response_index}].resource.insurance[0].item[0].category.coding[0].code"]
     assert item0_code.value == "30"
     item0_excluded = by_path[f"Bundle.entry[{response_index}].resource.insurance[0].item[0].excluded"]
     # ProvenanceEntry.value is str | None - a recorded bool is stringified
@@ -192,7 +192,7 @@ def test_edi_271_basic_crosswalk_matches_known_field_values():
     item0_network = by_path[f"Bundle.entry[{response_index}].resource.insurance[0].item[0].network.text"]
     assert item0_network.value == "In Network"
 
-    item1_code = by_path[f"Bundle.entry[{response_index}].resource.insurance[0].item[1].coding[0].code"]
+    item1_code = by_path[f"Bundle.entry[{response_index}].resource.insurance[0].item[1].category.coding[0].code"]
     assert item1_code.value == "88"
     item1_description = by_path[f"Bundle.entry[{response_index}].resource.insurance[0].item[1].description"]
     assert item1_description.value == "Dental Plan"

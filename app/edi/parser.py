@@ -78,12 +78,17 @@ class HlLoop:
     children: list["HlLoop"] = field(default_factory=list)
 
 
-def _strip_bom_and_whitespace(raw_text: str) -> str:
+def strip_bom_and_whitespace(raw_text: str) -> str:
     """Same BOM-before-whitespace ordering app/pipeline.py::is_xml already
     documents: the BOM character isn't itself whitespace, so it must be
     stripped first or a leading BOM stops a whitespace-only lstrip() before
     it ever reaches the whitespace that follows it. Idempotent - safe to
-    call on already-stripped text."""
+    call on already-stripped text.
+
+    Public (not module-private) - app/provenance/edi_locator.py became a
+    second real consumer, needing the exact same stripped text
+    read_isa_delimiters()/split_segments() themselves parse against
+    (re-deriving it independently would risk silent drift)."""
     return raw_text.lstrip(_BOM).lstrip()
 
 
@@ -101,7 +106,7 @@ def read_isa_delimiters(raw_text: str) -> Delimiters:
       - segment terminator:     byte 105
     Raises EdiParseError if the text (after BOM/whitespace stripping) is
     under 106 bytes or doesn't start with "ISA"."""
-    text = _strip_bom_and_whitespace(raw_text)
+    text = strip_bom_and_whitespace(raw_text)
     if len(text) < _ISA_LENGTH or not text.startswith("ISA"):
         raise EdiParseError("Input does not start with a valid 106-character ISA segment")
     return Delimiters(
@@ -121,7 +126,7 @@ def split_segments(raw_text: str, delimiters: Delimiters) -> list[Segment]:
     (e.g. "\\nGS" instead of "GS"), silently breaking every subsequent
     segment-ID match. Empty segments (a trailing terminator with nothing
     after it) are dropped."""
-    text = _strip_bom_and_whitespace(raw_text)
+    text = strip_bom_and_whitespace(raw_text)
     segments: list[Segment] = []
     for raw_segment in text.split(delimiters.segment_terminator):
         cleaned = raw_segment.strip()

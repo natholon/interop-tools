@@ -2,13 +2,30 @@
 {% block title %}Data Specification | interop-tools{% endblock %}
 {% block content %}
 <h2 class="section-heading">Data Specification</h2>
-<p class="page-intro">Paste (or generate) a message and see exactly which source field produced each FHIR R4 field in the resulting Bundle.</p>
+<p class="page-intro">Paste (or generate) a message, then generate a crosswalk to see exactly which source field produced each FHIR R4 field - matching colors mark the correlation, and hovering either side shows the detail.</p>
 <form id="crosswalk-form" method="post" action="/data-specification" enctype="multipart/form-data">
-    <div class="field">
-        <div class="field-label-row">
-            <label for="hl7_text">Raw HL7v2 message, C-CDA XML document, or X12 EDI interchange</label>
+    <div class="crosswalk-panes">
+        <div class="crosswalk-pane">
+            <div class="crosswalk-pane-head">
+                <label for="hl7_text">Raw HL7v2 message, C-CDA XML document, or X12 EDI interchange</label>
+            </div>
+            <textarea id="hl7_text" name="hl7_text" rows="14" spellcheck="false" placeholder="MSH|^~\&amp;|... or &lt;ClinicalDocument xmlns=&quot;urn:hl7-org:v3&quot;&gt;... or ISA*00*...">{{ hl7_text or "" }}</textarea>
+            <pre id="source-highlighted" class="xwalk-pre" hidden><code id="source-highlighted-code"></code></pre>
+            <button type="button" id="edit-source-btn" class="btn-link" style="margin-top: 0.4rem;" hidden>&larr; Edit source</button>
         </div>
-        <textarea id="hl7_text" name="hl7_text" rows="14" spellcheck="false" placeholder="MSH|^~\&amp;|... or &lt;ClinicalDocument xmlns=&quot;urn:hl7-org:v3&quot;&gt;... or ISA*00*...">{{ hl7_text or "" }}</textarea>
+        <div class="crosswalk-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="4" y1="12" x2="20" y2="12"></line>
+                <polyline points="13 5 20 12 13 19"></polyline>
+            </svg>
+        </div>
+        <div class="crosswalk-pane">
+            <div class="crosswalk-pane-head">
+                <label>Resulting FHIR Bundle</label>
+            </div>
+            <div id="fhir-placeholder" class="crosswalk-placeholder">Generate a crosswalk to see the resulting FHIR Bundle here.</div>
+            <pre id="fhir-highlighted" class="xwalk-pre" hidden><code id="fhir-highlighted-code"></code></pre>
+        </div>
     </div>
     <div class="field">
         <label for="hl7_file">Or upload a file (overrides pasted text)</label>
@@ -31,7 +48,7 @@
             <span class="btn-label">Generate sample</span>
         </button>
         <button type="submit" class="btn-primary" data-busy-text="Building crosswalk&hellip;">
-            <span class="btn-label">Build crosswalk</span>
+            <span class="btn-label">Generate Crosswalk</span>
         </button>
     </div>
 </form>
@@ -45,7 +62,7 @@
 
 <section id="crosswalk-output-pane" class="panel output-panel" aria-live="polite" {% if not crosswalk_result %}hidden{% endif %}>
     <div class="panel-head">
-        <h2>Crosswalk</h2>
+        <h2>Field detail</h2>
     </div>
     <div id="crosswalk-unsupported-banner" class="unsupported-banner" hidden></div>
     <div id="crosswalk-table-wrapper" class="table-wrapper" hidden>
@@ -61,9 +78,14 @@
             <tbody id="crosswalk-table-body"></tbody>
         </table>
     </div>
+    {# No-JS fallback only - the JS-driven path renders the two panes above instead. #}
     <pre id="crosswalk-raw-json" {% if not crosswalk_result %}hidden{% endif %}><code>{{ crosswalk_result or "" }}</code></pre>
+    {% if crosswalk_bundle %}
+    <pre id="crosswalk-raw-bundle"><code>{{ crosswalk_bundle }}</code></pre>
+    {% endif %}
 </section>
 
+<div id="xwalk-tooltip" class="xwalk-tooltip" role="tooltip" hidden></div>
 <div id="toast" class="toast" role="status" hidden></div>
 
 <script src="/static/data_specification.js"></script>

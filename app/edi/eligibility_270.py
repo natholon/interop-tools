@@ -82,7 +82,7 @@ def _build_items_and_serviced_date(
         category = build_service_type_category(
             element(eq, 1),
             resource_id=resource_id,
-            relative_path=f"item[{len(items)}]",
+            relative_path=f"item[{len(items)}].category",
             source_location=edi_location("EQ", 1),
             recorder=recorder,
         )
