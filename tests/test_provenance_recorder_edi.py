@@ -169,6 +169,47 @@ def test_edi_270_basic_crosswalk_matches_known_field_values():
     assert timestamp_entry.value == created_entry.value
 
 
+def test_edi_270_basic_crosswalk_entries_carry_a_human_readable_field_label():
+    # app/provenance/edi_field_names.py's own "source field name" -
+    # spot-checked against the same real entries the content-correctness
+    # test above already resolves, mirroring test_provenance_recorder.py's
+    # own equivalent ADT test.
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_270_basic.x12", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    payer = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Organization")
+    payer_index = next(i for i, e in enumerate(bundle.entry) if e.resource is payer)
+    assert by_path[f"Bundle.entry[{payer_index}].resource.name"].field_label == "Name Last or Organization Name"
+    assert by_path[f"Bundle.entry[{payer_index}].resource.identifier[0].value"].field_label == "Identification Code"
+
+    subscriber = next(
+        e.resource
+        for e in bundle.entry
+        if e.resource.get_resource_type() == "Patient" and e.resource.name and e.resource.name[0].given[0] == "JANE"
+    )
+    subscriber_index = next(i for i, e in enumerate(bundle.entry) if e.resource is subscriber)
+    assert by_path[f"Bundle.entry[{subscriber_index}].resource.birthDate"].field_label == "Date of Birth"
+    assert by_path[f"Bundle.entry[{subscriber_index}].resource.gender"].field_label == "Gender Code"
+
+    request = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "CoverageEligibilityRequest")
+    request_index = next(i for i, e in enumerate(bundle.entry) if e.resource is request)
+    item_entry = by_path[f"Bundle.entry[{request_index}].resource.item[0].category.coding[0].code"]
+    assert item_entry.field_label == "Service Type Code"
+    serviced_date_entry = by_path[f"Bundle.entry[{request_index}].resource.servicedDate"]
+    assert serviced_date_entry.field_label == "Service Date"
+
+    # created's own source_location is a compound "BHT-4+BHT-5" string,
+    # not a single edi_location() shape - parse_edi_location() can't
+    # parse it, so it gets no label rather than a wrong one.
+    created_entry = by_path[f"Bundle.entry[{request_index}].resource.created"]
+    assert created_entry.field_label is None
+
+    bundle_identifier_entry = by_path["Bundle.identifier.value"]
+    assert bundle_identifier_entry.field_label == "Reference Identification"
+
+
 def test_edi_271_basic_crosswalk_matches_known_field_values():
     # edi_271_basic.x12 carries two EB groups (both active/in-network) -
     # both must resolve to their own, independently-indexed insurance items.
@@ -426,26 +467,32 @@ def test_edi_837p_basic_crosswalk_matches_known_field_values():
     identifier_entry = by_path[f"Bundle.entry[{claim_index}].resource.identifier[0].value"]
     assert identifier_entry.value == "26407789"
     assert identifier_entry.source_location == edi_location("CLM", 1)
+    assert identifier_entry.field_label == "Patient Control Number"
     total_entry = by_path[f"Bundle.entry[{claim_index}].resource.total.value"]
     assert total_entry.value == "79.04"
     assert total_entry.source_location == edi_location("CLM", 2)
+    assert total_entry.field_label == "Total Claim Charge Amount"
 
     diagnosis0 = by_path[f"Bundle.entry[{claim_index}].resource.diagnosis[0].diagnosisCodeableConcept.coding[0].code"]
     assert diagnosis0.value == "J209"
+    assert diagnosis0.field_label == "Diagnosis Code"
     diagnosis1 = by_path[f"Bundle.entry[{claim_index}].resource.diagnosis[1].diagnosisCodeableConcept.coding[0].code"]
     assert diagnosis1.value == "E119"
 
     item0_procedure = by_path[f"Bundle.entry[{claim_index}].resource.item[0].productOrService.coding[0].code"]
     assert item0_procedure.value == "99213"
     assert item0_procedure.source_location == edi_location("SV1", 1, component=2)
+    assert item0_procedure.field_label == "Procedure Code"
     item0_price = by_path[f"Bundle.entry[{claim_index}].resource.item[0].unitPrice.value"]
     assert item0_price.value == "43"
     item0_pointers = by_path[f"Bundle.entry[{claim_index}].resource.item[0].diagnosisSequence"]
     assert item0_pointers.value == "1,2"
     assert item0_pointers.source_location == edi_location("SV1", 7)
+    assert item0_pointers.field_label == "Diagnosis Code Pointer"
     item0_location = by_path[f"Bundle.entry[{claim_index}].resource.item[0].locationCodeableConcept.coding[0].code"]
     assert item0_location.value == "11"
     assert item0_location.source_location == edi_location("CLM", 5, component=1)
+    assert item0_location.field_label == "Place of Service Code"
 
     item1_pointers = by_path[f"Bundle.entry[{claim_index}].resource.item[1].diagnosisSequence"]
     assert item1_pointers.value == "1"
@@ -658,9 +705,11 @@ def test_edi_277_basic_records_direct_status_and_business_status():
     category_entry = by_path[f"Bundle.entry[{finalized_index}].resource.businessStatus.coding[0].code"]
     assert category_entry.value == "F1"
     assert category_entry.source_location == edi_location("STC", 1, component=1)
+    assert category_entry.field_label == "Health Care Claim Status Category Code"
     status_code_entry = by_path[f"Bundle.entry[{finalized_index}].resource.businessStatus.coding[1].code"]
     assert status_code_entry.value == "1"
     assert status_code_entry.source_location == edi_location("STC", 1, component=2)
+    assert status_code_entry.field_label == "Claim Status Code"
 
 
 def test_edi_277_error_status_records_failed_status():

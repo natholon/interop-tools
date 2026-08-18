@@ -26,11 +26,13 @@ class ProvenanceEntry(BaseModel):
     actually came from instead, so the crosswalk stays a complete picture
     of the resource rather than silently only showing the directly-copied
     parts. `field_label` is a human-readable name for `source_location`
-    (e.g. "Assigning Authority" for `"PID-3[0].4"`) - populated for HL7v2
-    entries via `app/provenance/hl7_field_names.py`, `None` for CDA/EDI
-    entries or any location string outside that module's own scoped
-    table, matching this app's own "map what's confirmed, disclose the
-    rest as absent" precedent rather than guessing at a name."""
+    (e.g. "Assigning Authority" for `"PID-3[0].4"`, "Procedure Code" for
+    the EDI `"SV1-1.2"`, "Route of Administration" for the CDA `".../
+    routeCode/@code"`) - resolved per `source_format` via `app/provenance/
+    hl7_field_names.py`/`edi_field_names.py`/`cda_field_names.py`, `None`
+    for any location string outside that format's own scoped table,
+    matching this app's own "map what's confirmed, disclose the rest as
+    absent" precedent rather than guessing at a name."""
 
     source_format: SourceFormat
     fhir_path: str

@@ -6,6 +6,9 @@ accumulated facts is fully assembled."""
 
 from fhir.resources.R4B.bundle import Bundle
 
+from app.provenance.cda_field_names import resolve_cda_field_label
+from app.provenance.edi_field_names import resolve_edi_field_label
+from app.provenance.edi_locator import parse_edi_location
 from app.provenance.hl7_field_names import resolve_hl7_field_label
 from app.provenance.hl7_locator import parse_hl7_location
 from app.provenance.models import ProvenanceEntry
@@ -13,17 +16,28 @@ from app.provenance.recorder import ProvenanceRecorder
 
 
 def _resolve_field_label(source_format: str, source_location: str | None) -> str | None:
-    """HL7v2-only for now (see app/provenance/hl7_field_names.py's own
-    scope disclosure) - CDA's xpath_location() and EDI's edi_location()
-    produce a structurally different location shape neither this lookup
-    nor parse_hl7_location() understands, so both degrade to no label
-    rather than a guessed or accidentally-mismatched one."""
-    if source_format != "HL7v2" or not source_location:
+    """Dispatches to the field-name lookup for `source_format` - `app/
+    provenance/hl7_field_names.py`/`edi_field_names.py`/`cda_field_names.py`,
+    each scoped to exactly the segments/elements/xpath shapes that
+    format's own mappers actually record provenance against. Returns
+    `None` (no label, never a guess) whenever the location string is
+    absent or falls outside that format's own scoped table - HL7v2 and
+    EDI first parse the location string into a structured shape (`SEG-
+    N.C` / `SEGMENT[rep]-element[.component]`) via each format's own
+    already-existing locator parser; CDA has no equivalent whole-path
+    parser (see `cda_field_names.py`'s own docstring for why) and
+    resolves directly from the raw string instead."""
+    if not source_location:
         return None
-    parsed = parse_hl7_location(source_location)
-    if parsed is None:
-        return None
-    return resolve_hl7_field_label(parsed)
+    if source_format == "HL7v2":
+        parsed = parse_hl7_location(source_location)
+        return resolve_hl7_field_label(parsed) if parsed is not None else None
+    if source_format == "EDI":
+        parsed_edi = parse_edi_location(source_location)
+        return resolve_edi_field_label(parsed_edi) if parsed_edi is not None else None
+    if source_format == "CDA":
+        return resolve_cda_field_label(source_location)
+    return None
 
 
 def resolve_bundle_paths(bundle: Bundle, recorder: ProvenanceRecorder) -> list[ProvenanceEntry]:

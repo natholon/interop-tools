@@ -131,28 +131,40 @@ def test_ccd_basic_crosswalk_matches_known_field_values():
     assert class_entry.value == "AMB"
     assert class_entry.source_value == "AMB"
 
-    # app/provenance/hl7_field_names.py's "source field name" lookup is
-    # HL7v2-only (see that module's own scope disclosure) - a CDA entry's
-    # xpath_location()-shaped source_location never matches its grammar,
-    # so field_label stays None for every CDA entry, never a guess.
-    assert all(e.field_label is None for e in entries)
+    # app/provenance/cda_field_names.py resolves a "source field name"
+    # from the trailing piece of an xpath_location()-shaped
+    # source_location - spot-checked here against the same entries
+    # test_provenance_recorder.py's own ADT equivalent checks.
+    assert identifier_entry.field_label == "ID"
+    assert family_entry.field_label == "Family Name"
+    assert given_entry.field_label == "Given Name"
+    assert gender_entry.field_label == "Administrative Gender"
+    assert birth_date_entry.field_label == "Date of Birth"
+    assert city_entry.field_label == "City"
+    assert telecom_entry.field_label == "Contact Point"
+    assert class_entry.field_label == "Code"
 
     period_start_entry = by_path["Bundle.entry[1].resource.period.start"]
     assert period_start_entry.source_location == xpath_location(
         "componentOf/encompassingEncounter/effectiveTime/low/@value"
     )
+    assert period_start_entry.field_label == "Start Date/Time"
     period_end_entry = by_path["Bundle.entry[1].resource.period.end"]
     assert period_end_entry.source_location == xpath_location(
         "componentOf/encompassingEncounter/effectiveTime/high/@value"
     )
+    assert period_end_entry.field_label == "End Date/Time"
 
     condition0_code = by_path["Bundle.entry[2].resource.code.coding[0].code"]
     assert condition0_code.value == "38341003"
+    assert condition0_code.field_label == "Coded Value"
     condition0_display = by_path["Bundle.entry[2].resource.code.coding[0].display"]
     assert condition0_display.value == "Hypertensive disorder"
+    assert condition0_display.field_label == "Display Name"
     condition0_status = by_path["Bundle.entry[2].resource.clinicalStatus.coding[0].code"]
     assert condition0_status.value == "active"
     assert condition0_status.source_location == xpath_location("act", "statusCode", "@code")
+    assert condition0_status.field_label == "Status Code"
     condition0_onset = by_path["Bundle.entry[2].resource.onsetDateTime"]
     assert condition0_onset.value == "2025-01-03"
     assert "Bundle.entry[2].resource.abatementDateTime" not in by_path
