@@ -5,14 +5,19 @@ own parsing/dispatch layer, the same "own file per format" discipline
 test_cda_validation.py already established relative to the HL7v2
 test_validation_*.py files.
 
-Scope: the document header (Patient + optional Encounter) and all seven
+Scope: the document header (Patient + optional Encounter), all seven
 general-purpose sections (Problems, Medications, Allergies, Immunizations,
-Vital Signs, Results, Procedures) - see app/provenance/dispatch.py's own
+Vital Signs, Results, Procedures), Discharge Summary's own Hospital
+Discharge Diagnosis/Discharge Medications sections, and now all twelve
+narrative-section templateIds app/cda/narrative_sections.py registers
+(Discharge Summary's Hospital Course/Plan of Treatment, History and
+Physical's own nine) - see app/provenance/dispatch.py's own
 _CDA_UNSUPPORTED_REASON for why no CDA document type is "fully
-instrumented" yet despite these pieces producing real facts (History and
-Physical's own IG-required narrative sections remain unmapped entirely,
-the one disclosed gap this pillar shares with the forward-conversion
-pillar itself)."""
+instrumented" yet despite all of this producing real facts: the still-
+deferred structured-entry parsing for Plan of Treatment/Social History/
+Family History (see app/cda/narrative_sections.py's own docstring) has
+nothing to instrument in the first place, and a handful of narrower
+per-field gaps disclosed elsewhere remain."""
 
 import itertools
 import uuid
@@ -689,8 +694,8 @@ def test_discharge_summary_hospital_discharge_diagnosis_condition_also_recorded(
 
 def test_history_and_physical_header_only_fixture_records_header_facts():
     # history_and_physical_basic.xml carries no Problems section at all (an
-    # H&P-specific narrative section this app doesn't recognize instead) -
-    # only header facts should appear.
+    # H&P-specific narrative section instead) - only header facts should
+    # appear from that gap specifically.
     recorder = ProvenanceRecorder(source_format="CDA")
     bundle = _build_bundle("history_and_physical_basic.xml", recorder=recorder)
     assert not any(e.resource.get_resource_type() == "Condition" for e in bundle.entry)
@@ -698,3 +703,84 @@ def test_history_and_physical_header_only_fixture_records_header_facts():
     by_path = {e.fhir_path: e for e in entries}
     assert by_path["Bundle.entry[0].resource.name[0].family"].value == "Pilford"
     assert by_path["Bundle.identifier.value"].value == "HP100"
+
+
+def test_discharge_summary_hospital_course_records_precise_location_for_unwrapped_text():
+    # The real fixture's own Hospital Course section has no <paragraph>
+    # wrapper at all - the one shape narrative-section provenance can point
+    # at a precise location for (see build_narrative_document_reference's
+    # own docstring).
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("discharge_summary_basic.xml", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    document_references = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference"]
+    hospital_course = next(dr for dr in document_references if dr.type.coding[0].code == "8648-8")
+    index = next(i for i, e in enumerate(bundle.entry) if e.resource is hospital_course)
+
+    code_entry = by_path[f"Bundle.entry[{index}].resource.type.coding[0].code"]
+    assert code_entry.derivation == "direct"
+    assert code_entry.source_location == "code/@code"
+    assert code_entry.value == "8648-8"
+
+    description_entry = by_path[f"Bundle.entry[{index}].resource.description"]
+    assert description_entry.source_location == "title"
+    assert description_entry.value == "Hospital Course"
+
+    binary_id = hospital_course.content[0].attachment.url.removeprefix("urn:uuid:")
+    binary_index = next(i for i, e in enumerate(bundle.entry) if e.resource.id == binary_id)
+    data_entry = by_path[f"Bundle.entry[{binary_index}].resource.data"]
+    assert data_entry.source_location == "text"
+    assert "community-acquired pneumonia" in data_entry.value.lower()
+
+
+def test_discharge_summary_plan_of_treatment_records_disclosed_marker_for_table():
+    # The real fixture's own Plan of Treatment section is table-shaped (a
+    # header row plus two data rows, three <tr> lines total) - a disclosed
+    # block-count marker, not a precise single location, since Binary.data
+    # joins multiple rows with no per-row boundary kept.
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("discharge_summary_basic.xml", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    document_references = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference"]
+    plan_of_treatment = next(dr for dr in document_references if dr.type.coding[0].code == "18776-5")
+    binary_id = plan_of_treatment.content[0].attachment.url.removeprefix("urn:uuid:")
+    binary_index = next(i for i, e in enumerate(bundle.entry) if e.resource.id == binary_id)
+
+    data_entry = by_path[f"Bundle.entry[{binary_index}].resource.data"]
+    assert data_entry.source_location == "text (×3 blocks)"
+    assert "Planned Activity | Planned Date" in data_entry.value
+
+
+def test_history_and_physical_all_nine_narrative_sections_recorded():
+    # Every one of the real fixture's nine H&P-specific narrative sections
+    # (plus the shared Plan of Treatment) must independently produce its
+    # own type/description/data facts - none silently skipped, none
+    # cross-contaminating another section's own facts.
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("history_and_physical_basic.xml", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    document_references = [
+        (i, e.resource) for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "DocumentReference"
+    ]
+    assert len(document_references) == 9
+
+    for index, document_reference in document_references:
+        code_entry = by_path.get(f"Bundle.entry[{index}].resource.type.coding[0].code")
+        assert code_entry is not None, f"no type fact recorded for entry {index}"
+        assert code_entry.value == document_reference.type.coding[0].code
+
+        description_entry = by_path.get(f"Bundle.entry[{index}].resource.description")
+        assert description_entry is not None
+        assert description_entry.value == document_reference.description
+
+        binary_id = document_reference.content[0].attachment.url.removeprefix("urn:uuid:")
+        binary_index = next(i for i, e in enumerate(bundle.entry) if e.resource.id == binary_id)
+        data_entry = by_path.get(f"Bundle.entry[{binary_index}].resource.data")
+        assert data_entry is not None
+        assert len(data_entry.value) > 0

@@ -75,6 +75,7 @@ from fhir.resources.R4B.resource import Resource
 
 from app.cda.common import build_codeable_concept_from_cd
 from app.cda.parser import find_child
+from app.provenance.location import xpath_location
 
 # Discharge Summary only.
 HOSPITAL_COURSE_TEMPLATE_ID = "1.3.6.1.4.1.19376.1.5.3.1.3.5"  # LOINC 8648-8, legacy IHE PCC OID
@@ -195,18 +196,14 @@ def _walk_block(element: Element, lines: list[str]) -> None:
         _walk_block(child, lines)
 
 
-def extract_narrative_text(text_element: Element | None) -> str:
-    """Renders a CDA `<section>/<text>` narrative block - `paragraph`/
-    `list`+`item`/`table`/plain mixed text, confirmed against the real
-    shapes this app's own fixtures and the fetched HL7 C-CDA-Examples
-    documents actually use - to readable plain text, one line per
-    paragraph/list-item/table-row. Returns `""` for a missing or fully
-    empty `<text>` element - the caller's own "nothing to build" signal,
-    matching this app's established "no resolvable content -> skip"
-    convention rather than fabricating a DocumentReference with an empty
-    body."""
+def _extract_narrative_lines(text_element: Element | None) -> list[str]:
+    """The real work behind `extract_narrative_text` (below), exposed as
+    its own list-returning step - `build_narrative_document_reference`
+    needs the line *count* too (to decide between a precise vs. a
+    disclosed-marker provenance location, see its own docstring), not just
+    the final joined string."""
     if text_element is None:
-        return ""
+        return []
     lines: list[str] = []
     # <text>'s own direct leading text (before its first child, if any) -
     # Hospital Course's own real shape has no <paragraph> wrapper at all,
@@ -219,7 +216,20 @@ def extract_narrative_text(text_element: Element | None) -> str:
         tail = (child.tail or "").strip()
         if tail:
             lines.append(tail)
-    return "\n".join(lines)
+    return lines
+
+
+def extract_narrative_text(text_element: Element | None) -> str:
+    """Renders a CDA `<section>/<text>` narrative block - `paragraph`/
+    `list`+`item`/`table`/plain mixed text, confirmed against the real
+    shapes this app's own fixtures and the fetched HL7 C-CDA-Examples
+    documents actually use - to readable plain text, one line per
+    paragraph/list-item/table-row. Returns `""` for a missing or fully
+    empty `<text>` element - the caller's own "nothing to build" signal,
+    matching this app's established "no resolvable content -> skip"
+    convention rather than fabricating a DocumentReference with an empty
+    body."""
+    return "\n".join(_extract_narrative_lines(text_element))
 
 
 def build_narrative_document_reference(section: Element, patient_id: str, recorder=None) -> list[Resource]:
@@ -231,15 +241,25 @@ def build_narrative_document_reference(section: Element, patient_id: str, record
     `extract_narrative_text`. Returns `[]` when there's no usable narrative
     text at all, rather than a DocumentReference with an empty attachment.
 
-    `recorder` is accepted but not yet acted on - every section builder
-    SECTION_BUILDERS dispatches through accepts it uniformly, even before
-    its own slice records anything (see app.cda.common.build_sectioned_
-    bundle's own docstring); provenance instrumentation for these sections
-    is a disclosed, deliberate follow-up, not attempted here."""
+    **`Binary.data`'s own provenance location is precise only for the one
+    shape that genuinely allows it**: when `<text>` has no child elements at
+    all (Hospital Course's own real shape - plain mixed text, no `<paragraph>`
+    wrapper), the whole narrative literally *is* `<text>`'s own direct text
+    content, so `xpath_location("text")` (bare tag - "descend into this
+    child, take its own text") points at it exactly. Every other real shape
+    (one or more `<paragraph>`/`<list>`/`<table>` children) has no single
+    element whose own text span covers the *joined*, multi-line value
+    `Binary.data` actually holds - the identical "N source elements joined
+    into one FHIR value with no per-element boundary in the output" case
+    `app/mappings/mdm.py::_build_binary_from_obx`'s own OBX-5 join and
+    `app/mappings/siu.py`'s own NTE-3 join already disclose, so this
+    follows their exact precedent: a disclosed marker naming the block
+    count (`"text (×N blocks)"`) rather than guessing at one of them."""
     text_element = find_child(section, "text")
-    narrative_text = extract_narrative_text(text_element)
-    if not narrative_text:
+    narrative_lines = _extract_narrative_lines(text_element)
+    if not narrative_lines:
         return []
+    narrative_text = "\n".join(narrative_lines)
 
     binary_id = str(uuid.uuid4())
     binary = Binary(
@@ -247,6 +267,13 @@ def build_narrative_document_reference(section: Element, patient_id: str, record
         contentType="text/plain",
         data=base64.b64encode(narrative_text.encode("utf-8")).decode("ascii"),
     )
+    if recorder:
+        has_children = len(list(text_element)) > 0
+        # xpath_location() joins segments with "/", meant for a real path
+        # chain - a disclosed marker isn't one, so it's built directly here
+        # instead, matching MDM's own identical f-string marker precedent.
+        location = f"text (×{len(narrative_lines)} blocks)" if has_children else xpath_location("text")
+        recorder.record(binary_id, "data", location, narrative_text)
 
     document_reference_id = str(uuid.uuid4())
     attachment = Attachment(contentType="text/plain", url=f"urn:uuid:{binary_id}")
@@ -257,12 +284,27 @@ def build_narrative_document_reference(section: Element, patient_id: str, record
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
     )
 
-    section_type = build_codeable_concept_from_cd(find_child(section, "code"))
+    code_element = find_child(section, "code")
+    section_type = build_codeable_concept_from_cd(code_element)
     if section_type:
         document_reference.type = section_type
+        if recorder:
+            recorder.record(
+                document_reference_id, "type.coding[0].code", xpath_location("code", "@code"), section_type.coding[0].code
+            )
+            if section_type.coding[0].display:
+                recorder.record(
+                    document_reference_id,
+                    "type.coding[0].display",
+                    xpath_location("code", "@displayName"),
+                    section_type.coding[0].display,
+                )
 
     title_element = find_child(section, "title")
     if title_element is not None and title_element.text and title_element.text.strip():
-        document_reference.description = title_element.text.strip()
+        title = title_element.text.strip()
+        document_reference.description = title
+        if recorder:
+            recorder.record(document_reference_id, "description", xpath_location("title"), title)
 
     return [document_reference, binary]

@@ -76,37 +76,42 @@ from app.provenance.resolver import resolve_bundle_paths
 _INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835", "837P", "837I", "837D"}
 # Every section registered in app/cda/registry.py::SECTION_BUILDERS is now
 # instrumented: all seven general-purpose sections (Problems, Medications,
-# Allergies, Immunizations, Vital Signs, Results, Procedures) plus, for
-# free via shared entry-level builders, Discharge Summary's own Hospital
-# Discharge Diagnosis (reuses problems.py::build_condition) and Discharge
-# Medications (reuses medications.py::build_medication_request) - see each
-# module's own docstring.
+# Allergies, Immunizations, Vital Signs, Results, Procedures), Discharge
+# Summary's own Hospital Discharge Diagnosis/Discharge Medications sections
+# (for free, via shared entry-level builders - problems.py::build_condition,
+# medications.py::build_medication_request), and now all twelve narrative-
+# section templateIds app/cda/narrative_sections.py registers (Discharge
+# Summary's own Hospital Course/Plan of Treatment, History and Physical's
+# own nine required narrative sections) - see each module's own docstring.
 #
-# `unsupported` still deliberately stays True unconditionally for every
-# CDA document, though - not graduated to a per-document-type
+# `unsupported` still deliberately stays True unconditionally for every CDA
+# document, though - not graduated to a per-document-type
 # _INSTRUMENTED_...-style set the way HL7v2/EDI's own binary
-# "registered => fully covered" bar works. That bar doesn't translate
-# cleanly here: unlike an HL7v2 message type (where every segment the
-# standard defines for that type is either read or a disclosed, narrow
-# per-field gap) or an EDI transaction set, a C-CDA document type carries
-# its own IG-required *sections* this app's forward-conversion pillar
-# itself never maps at all - Discharge Summary's own Hospital Course/Plan
-# of Treatment, and History and Physical's own required narrative sections
-# (Reason for Visit, HPI, Physical Exam, etc., see
-# app/cda/history_and_physical.py/discharge_summary.py) - not merely
-# "outside this app's read scope" the way an unread HL7v2 field is, but
-# entire required sections a real consumer would expect reflected in the
-# output. Marking any document type "fully supported" here would overclaim
-# relative to what conversion itself actually guarantees for it - the
-# identical, permanent disclosure the forward-conversion pillar already
-# makes for this exact gap (see CLAUDE.md's own C-CDA subsection).
+# "registered => fully covered" bar works. **The justification narrowed
+# once narrative_sections.py shipped, but didn't disappear**: every section
+# either document type's own IG requires now converts to *something* (a
+# real structured FHIR resource, or - for the ten narrative-only sections -
+# a DocumentReference+Binary pair), so this is no longer "entire required
+# sections this app's forward-conversion pillar never maps at all" the way
+# it was before. What remains is narrower: three of those twelve sections
+# (Plan of Treatment, Social History, Family History) can carry real
+# structured entries in practice - a Plan of Care Activity Observation,
+# Social History/Smoking Status Observations, a Family History Organizer -
+# that this app deliberately doesn't parse yet (see app/cda/narrative_
+# sections.py's own docstring for why), so a document carrying one of those
+# still isn't *fully* represented even though it's no longer *unrepresented*.
+# Marking any document type "fully supported" here would still overclaim
+# relative to what conversion itself actually guarantees for it - a
+# narrower, but still real and disclosed, permanent gap the forward-
+# conversion pillar itself already discloses (see CLAUDE.md's own C-CDA
+# subsection).
 _CDA_UNSUPPORTED_REASON = (
-    "Field-level provenance for C-CDA covers every section this app's "
-    "forward conversion recognizes (the document header and all seven "
-    "general-purpose sections), but some document types (Discharge "
-    "Summary, History and Physical) carry their own additional IG-required "
-    "sections this app's conversion never maps at all - so no C-CDA "
-    "document type is ever reported fully supported."
+    "Field-level provenance for C-CDA covers the document header, all "
+    "seven general-purpose sections, and every narrative-only section "
+    "either document type's own IG requires - but Plan of Treatment/Social "
+    "History/Family History can also carry real structured clinical data "
+    "this app's conversion doesn't parse yet (only their narrative text), "
+    "so no C-CDA document type is ever reported fully supported."
 )
 
 # Message types with real, complete field-level instrumentation. Extended

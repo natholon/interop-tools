@@ -1,6 +1,7 @@
 import xml.etree.ElementTree as ET
 
 from app.cda.narrative_sections import build_narrative_document_reference, extract_narrative_text
+from app.provenance.recorder import ProvenanceRecorder
 
 _NS = "urn:hl7-org:v3"
 
@@ -162,16 +163,52 @@ def test_build_narrative_document_reference_without_title_leaves_description_uns
     assert document_reference.type.coding[0].code == "8648-8"
 
 
-def test_build_narrative_document_reference_accepts_recorder_without_recording():
-    # recorder is accepted (matching SECTION_BUILDERS' own uniform-signature
-    # requirement) but not yet acted on - provenance instrumentation for
-    # these sections is a disclosed, deliberate follow-up, not this slice.
-    class _FailingRecorder:
-        def record(self, *args, **kwargs):
-            raise AssertionError("should never be called this slice")
+def test_build_narrative_document_reference_records_type_description_and_data():
+    recorder = ProvenanceRecorder(source_format="CDA")
+    document_reference, binary = build_narrative_document_reference(
+        _hospital_course_section(), "patient-1", recorder=recorder
+    )
+    facts = {(f.resource_id, f.relative_path): f for f in recorder.facts}
 
-        def record_inferred(self, *args, **kwargs):
-            raise AssertionError("should never be called this slice")
+    code_fact = facts[(document_reference.id, "type.coding[0].code")]
+    assert code_fact.derivation == "direct"
+    assert code_fact.source_location == "code/@code"
+    assert code_fact.value == "8648-8"
 
-    resources = build_narrative_document_reference(_hospital_course_section(), "patient-1", recorder=_FailingRecorder())
+    display_fact = facts[(document_reference.id, "type.coding[0].display")]
+    assert display_fact.source_location == "code/@displayName"
+    assert display_fact.value == "HOSPITAL COURSE"
+
+    description_fact = facts[(document_reference.id, "description")]
+    assert description_fact.source_location == "title"
+    assert description_fact.value == "HOSPITAL COURSE"
+
+    # Hospital Course's own real shape (no <paragraph> wrapper at all) is
+    # the one case with a genuinely precise location - see the function's
+    # own docstring for why every other shape gets a disclosed marker
+    # instead.
+    data_fact = facts[(binary.id, "data")]
+    assert data_fact.source_location == "text"
+    assert data_fact.value == "Patient presented with dark stools."
+
+
+def test_build_narrative_document_reference_uses_disclosed_marker_for_multi_block_text():
+    section = _section(
+        '<templateId root="1.3.6.1.4.1.19376.1.5.3.1.3.5"/>'
+        '<code code="8648-8" displayName="HOSPITAL COURSE" codeSystem="2.16.840.1.113883.6.1"/>'
+        "<title>HOSPITAL COURSE</title>"
+        "<text><paragraph>First line.</paragraph><paragraph>Second line.</paragraph></text>"
+    )
+    recorder = ProvenanceRecorder(source_format="CDA")
+    _document_reference, binary = build_narrative_document_reference(section, "patient-1", recorder=recorder)
+    data_fact = next(f for f in recorder.facts if f.resource_id == binary.id and f.relative_path == "data")
+    assert data_fact.source_location == "text (×2 blocks)"
+    assert data_fact.value == "First line.\nSecond line."
+
+
+def test_build_narrative_document_reference_without_recorder_still_works():
+    # recorder is optional - every SECTION_BUILDERS entry must tolerate
+    # being called with no recorder at all (the normal, non-provenance
+    # conversion path).
+    resources = build_narrative_document_reference(_hospital_course_section(), "patient-1")
     assert len(resources) == 2
