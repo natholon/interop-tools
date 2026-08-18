@@ -44,6 +44,10 @@
         </select>
     </div>
     <div class="actions">
+        <label class="checkbox-field" title="Merge duplicate Patient/Practitioner/Organization/Location resources within the resulting Bundle before building the crosswalk (e.g. a billing provider and rendering provider that are the same person). A merged-away duplicate's own source field no longer has a separate resource to highlight, so it drops out of the crosswalk - only the kept resource's own fields stay highlighted.">
+            <input type="checkbox" id="crosswalk-deduplicate" name="deduplicate">
+            Deduplicate resources
+        </label>
         <button type="button" id="crosswalk-generate-sample" data-busy-text="Generating&hellip;">
             <span class="btn-label">Generate sample</span>
         </button>
@@ -63,6 +67,15 @@
 <section id="crosswalk-output-pane" class="panel output-panel" aria-live="polite" {% if not crosswalk_result %}hidden{% endif %}>
     <div class="panel-head">
         <h2>Field detail</h2>
+    </div>
+    <div id="crosswalk-dedup-summary" class="dedup-summary" {% if not dedup_summary %}hidden{% endif %}>
+        {% if dedup_summary %}
+        {% if dedup_summary.resources_merged %}
+        Merged {{ dedup_summary.resources_merged }} duplicate resource{{ "s" if dedup_summary.resources_merged != 1 else "" }}.
+        {% else %}
+        No duplicate resources found.
+        {% endif %}
+        {% endif %}
     </div>
     <div id="crosswalk-unsupported-banner" class="unsupported-banner" hidden></div>
     <div id="crosswalk-table-wrapper" class="table-wrapper" hidden>

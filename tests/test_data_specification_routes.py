@@ -244,6 +244,58 @@ def test_api_data_specification_mdm_type_is_now_instrumented():
     assert len(report["entries"]) > 0
 
 
+def test_api_data_specification_without_deduplicate_omits_deduplication_key():
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture("adt_a01_basic.hl7")})
+    assert response.status_code == 200
+    assert "deduplication" not in response.json()
+
+
+def test_api_data_specification_with_deduplicate_reports_zero_merges_when_nothing_to_merge():
+    response = client.post(
+        "/api/data-specification", json={"hl7_text": read_fixture("adt_a01_basic.hl7"), "deduplicate": True}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deduplication"]["resources_merged"] == 0
+    assert body["deduplication"]["merges"] == []
+    # A genuine no-op: the crosswalk itself is unaffected when nothing
+    # merges - see tests/test_highlighting.py's own equivalent module-level
+    # assertion for the fuller entry-by-entry proof.
+    plain = client.post("/api/data-specification", json={"hl7_text": read_fixture("adt_a01_basic.hl7")}).json()
+    assert len(body["report"]["entries"]) == len(plain["report"]["entries"])
+
+
+def test_api_data_specification_with_deduplicate_merges_837p_billing_and_rendering_provider():
+    # The real motivating case for app/dedup.py itself, reused here - see
+    # tests/test_highlighting.py's own equivalent test for the fuller
+    # provenance-specific assertion detail (which resource's facts survive).
+    response = client.post(
+        "/api/data-specification", json={"hl7_text": read_fixture("edi_837p_basic.x12"), "deduplicate": True}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deduplication"]["resources_merged"] == 1
+    practitioners = [e for e in body["bundle"]["entry"] if e["resource"]["resourceType"] == "Practitioner"]
+    assert len(practitioners) == 1
+
+    # Every crosswalk entry and every highlighting match must still point
+    # at a real Bundle.entry[N] - none left dangling at an index that
+    # belonged to the now-removed duplicate.
+    entry_count = len(body["bundle"]["entry"])
+    for entry in body["report"]["entries"]:
+        if entry["fhir_path"].startswith("Bundle.entry["):
+            index = int(entry["fhir_path"][len("Bundle.entry[") : entry["fhir_path"].index("]")])
+            assert index < entry_count
+
+
+def test_form_data_specification_with_deduplicate_checkbox_renders_summary():
+    response = client.post(
+        "/data-specification", data={"hl7_text": read_fixture("edi_837p_basic.x12"), "deduplicate": "on"}
+    )
+    assert response.status_code == 200
+    assert "Merged 1 duplicate resource" in response.text
+
+
 def test_api_data_specification_malformed_input_returns_400():
     response = client.post("/api/data-specification", json={"hl7_text": "not a real message"})
     assert response.status_code == 400

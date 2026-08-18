@@ -89,6 +89,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const messageTypeSelect = document.getElementById("message-type-select");
     const errorPane = document.getElementById("crosswalk-error-pane");
     const outputPane = document.getElementById("crosswalk-output-pane");
+    const dedupCheckbox = document.getElementById("crosswalk-deduplicate");
+    const dedupSummaryEl = document.getElementById("crosswalk-dedup-summary");
     const unsupportedBanner = document.getElementById("crosswalk-unsupported-banner");
     const tableWrapper = document.getElementById("crosswalk-table-wrapper");
     const tableBody = document.getElementById("crosswalk-table-body");
@@ -198,9 +200,21 @@ document.addEventListener("DOMContentLoaded", () => {
         if (rawJson) rawJson.hidden = true;
     }
 
-    function showCrosswalk(report, highlighting) {
+    function showCrosswalk(report, highlighting, dedupSummary) {
         if (!outputPane) return;
         currentReportEntries = report.entries || [];
+
+        if (dedupSummaryEl) {
+            if (dedupSummary) {
+                const count = dedupSummary.resources_merged || 0;
+                dedupSummaryEl.textContent = count
+                    ? `Merged ${count} duplicate resource${count === 1 ? "" : "s"}.`
+                    : "No duplicate resources found.";
+                dedupSummaryEl.hidden = false;
+            } else {
+                dedupSummaryEl.hidden = true;
+            }
+        }
 
         if (unsupportedBanner) {
             if (report.unsupported) {
@@ -363,14 +377,17 @@ document.addEventListener("DOMContentLoaded", () => {
             const response = await fetch("/api/data-specification", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ hl7_text: textarea.value }),
+                body: JSON.stringify({
+                    hl7_text: textarea.value,
+                    deduplicate: dedupCheckbox ? dedupCheckbox.checked : false,
+                }),
             });
             const data = await response.json();
             if (!response.ok) {
                 showError(data.error.category, data.error.message);
                 return;
             }
-            showCrosswalk(data.report, data.highlighting);
+            showCrosswalk(data.report, data.highlighting, data.deduplication);
         } catch (err) {
             showError("Network error", String(err));
         } finally {

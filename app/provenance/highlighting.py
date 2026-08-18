@@ -53,7 +53,73 @@ identical "a Reference can be at any depth on any resource" reason) by
 some *other* resource that already holds a claim for the same
 `(root_key, scope_hint)` - if so, the referenced resource borrows that
 same occurrence instead of claiming its own. Checked in both directions
-(referenced-by and references-to) so processing order doesn't matter."""
+(referenced-by and references-to) so processing order doesn't matter.
+
+**Content-verified occurrence claiming, a second and genuinely different
+correctness problem from the shared-physical-segment one above** - found
+while wiring dedup-aware provenance (see `app/provenance/dispatch.py`'s
+own docstring) and verifying the result against a real, un-deduplicated
+837P fixture in an actual browser, not caught by this module's own
+original 1464-entry sweep (that sweep cross-checked a resolved span
+against `entry.source_value`, which every EDI-family fact leaves `None` -
+so it silently skipped exactly the entries this bug affects; re-running it
+with `entry.value` as the fallback comparison, the way `_claim_fresh_
+occurrence` below now uses it, immediately surfaced 837P/837I/837D's own
+shared bug). The *original* claiming scheme (before this fix) assigned
+strictly sequential occurrence numbers - 0, 1, 2, ... - to each newly-seen
+`(root_key, scope_hint)` claim, in the order facts were recorded, and
+trusted that the Nth *distinct fact-bearing resource*, in that order,
+really was the Nth *physical* occurrence of `root_key` in the raw text.
+That assumption silently breaks whenever either holds: (a) some physical
+occurrences of `root_key` never produce any fact at all (837P/837I/837D
+all carry two leading, untracked `NM1` loops - 1000A Submitter and 1000B
+Receiver - before the first `NM1` loop this app actually maps to a FHIR
+field), or (b) the mapper's own resource-build order doesn't match
+physical document order (`Edi837pBuilder.build_bundle()` builds Billing
+Provider, then Payer, then Subscriber, then Rendering Provider - but their
+own `NM1` segments appear in the raw text as Billing, Subscriber, Payer,
+Rendering). Reproduced directly against the real `edi_837p_basic.x12`
+fixture: with (a) and (b) both present, the sequential scheme resolved
+*every* NM1-rooted fact to a different, wrong physical segment entirely -
+not an approximation, e.g. the Billing Provider's own recorded family name
+`"KILDARE"` highlighted the Submitter's `"PREMIER BILLING SERVICE"` text
+instead.
+
+Fixed by trying **content-based verification first**, only falling back to
+the original sequential scheme when it can't apply: `_claim_fresh_
+occurrence()` takes the fact's own already-recorded `source_value`
+(falling back to `value` when `source_value` wasn't recorded - see
+`ProvenanceRecorder.record()`'s own two-argument shape) and searches every
+*not-yet-claimed* physical occurrence of `root_key` for the one whose
+*own, field-scoped* resolved text - via the same `.locate()` every
+occurrence would otherwise be checked with - matches it exactly. This is
+safe for the cases the original scheme already got right, not just the
+one it got wrong: a transformed/derived value (`person_display`/`location_
+display`'s own space-joined, non-literal display strings; a parsed date;
+a mapped code) never matches any physical text byte-for-byte, so the
+search finds nothing and falls straight through to the original,
+already-correct sequential fallback - no regression risk for HL7v2/CDA,
+whose own field values verified as content-matchable were already being
+assigned the right occurrence by the sequential scheme anyway (confirmed
+by re-running the very same sweep this bug fix was found through, with the
+new logic in place, before considering it done). For the genuine multiple-
+identical-value case this app's own dedup feature exists to collapse (the
+solo-practitioner shape, `"KILDARE"`/`"BEN"`/the same NPI, legitimately
+repeated at both the Billing and Rendering Provider's own physical `NM1`
+loops) content matching still resolves correctly *in order*: the first
+resource whose facts get processed claims the first unclaimed matching
+occurrence, and the second resource - since that first occurrence is now
+excluded from the search - correctly finds the *other* one instead,
+rather than both racing for the same physical segment.
+
+Occurrence tracking itself had to change shape to support this:
+`next_occurrence: dict[count_key, int]` (a bare monotonic counter, correct
+only when occurrences are always claimed in ascending order) became
+`used_occurrences: dict[count_key, set[int]]` (every occurrence already
+spoken for, in either direction - borrowed occurrences are added too, not
+just fresh ones, so a later content-matching search can never collide with
+one), since content matching can legitimately jump straight to occurrence
+4 before occurrence 1 ever gets claimed."""
 
 import re
 
@@ -70,7 +136,20 @@ from app.provenance.models import CrosswalkReport, ProvenanceEntry
 _PALETTE_SIZE = 10
 
 _ENTRY_INDEX_RE = re.compile(r"^Bundle\.entry\[(\d+)\]")
-_ITEM_INDEX_RE = re.compile(r"\.item\[(\d+)\]")
+# Every FHIR array field this app has ever recorded facts against where a
+# *single* location string is shared identically across every repetition,
+# with no other disambiguator baked into the location string itself (see
+# _item_index's own docstring for the full reasoning, and why other
+# repeating arrays - reaction[N], referenceRange[N], diagnosis[N] - are
+# deliberately NOT in this set). `detail[N]` (PaymentReconciliation.
+# detail[], one per 835 CLP claim) was found missing here via the exact
+# same real-fixture bug edi_837p_basic.x12's own NM1 occurrence-resolution
+# bug was found through - reproduced directly against edi_835_multi_claim
+# .x12, whose own second claim's facts (CLP-1/CLP-2/CLP-4) were silently
+# resolving to the *first* claim's physical CLP segment instead, since both
+# claims live on the one PaymentReconciliation resource with no item[]-
+# style bracket in their shared "CLP-1"/"CLP-2"/"CLP-4" location strings.
+_REPEATING_FIELD_INDEX_RE = re.compile(r"\.(?:item|detail)\[(\d+)\]")
 
 
 class HighlightMatch(BaseModel):
@@ -88,29 +167,30 @@ class HighlightingPayload(BaseModel):
 
 
 def _item_index(fhir_path: str) -> int | None:
-    """A `.item[N]` index in `fhir_path`, when present - the one bracket
-    (beyond `Bundle.entry[N]` itself, handled separately via the real
-    resource identity) that genuinely indicates a *different* physical
-    source occurrence *within* one resource. Deliberately *not* every
-    bracketed integer in the path: a field like `identifier[0]`/
-    `name[0].given[1]` is a perfectly ordinary FHIR array on one resource,
-    still sourced from the *same* physical segment as every other field on
-    it - treating it as a distinct occurrence would be wrong (confirmed as
-    a real bug during this module's own development: an EDI Organization's
-    `identifier[0].value` and `name` fact were claiming *different*
-    physical NM1 segments purely because `identifier[0]` added a bracket
-    `name` didn't have). `.item[N]` (`Claim.item[]`/
-    `CoverageEligibilityRequest.item[]`/`ClaimResponse.item[]`) is
-    different - every item shares the *identical* location string across
-    items (e.g. `SV1-1.2` for every line) with no other disambiguator
-    baked into the string itself, unlike C-CDA's own repeating
-    sub-structures (`reaction[N]`, `referenceRange[N]`), which already
-    carry their own disambiguating index *inside* the location string's
-    own bracket grammar (see `app/provenance/cda_locator.py`), and EDI's
-    own `diagnosis[N]`, whose location string already varies by HI
+    """A `.item[N]`/`.detail[N]` index in `fhir_path`, when present - the
+    one kind of bracket (beyond `Bundle.entry[N]` itself, handled
+    separately via the real resource identity) that genuinely indicates a
+    *different* physical source occurrence *within* one resource.
+    Deliberately *not* every bracketed integer in the path: a field like
+    `identifier[0]`/`name[0].given[1]` is a perfectly ordinary FHIR array
+    on one resource, still sourced from the *same* physical segment as
+    every other field on it - treating it as a distinct occurrence would be
+    wrong (confirmed as a real bug during this module's own development: an
+    EDI Organization's `identifier[0].value` and `name` fact were claiming
+    *different* physical NM1 segments purely because `identifier[0]` added
+    a bracket `name` didn't have). `.item[N]` (`Claim.item[]`/
+    `CoverageEligibilityRequest.item[]`/`ClaimResponse.item[]`) and
+    `.detail[N]` (`PaymentReconciliation.detail[]`) are different - every
+    repetition shares the *identical* location string (e.g. `SV1-1.2` for
+    every claim line, `CLP-1` for every remittance detail) with no other
+    disambiguator baked into the string itself, unlike C-CDA's own
+    repeating sub-structures (`reaction[N]`, `referenceRange[N]`), which
+    already carry their own disambiguating index *inside* the location
+    string's own bracket grammar (see `app/provenance/cda_locator.py`), and
+    EDI's own `diagnosis[N]`, whose location string already varies by HI
     composite position/segment_repetition per diagnosis - neither needs
     help here."""
-    match = _ITEM_INDEX_RE.search(fhir_path)
+    match = _REPEATING_FIELD_INDEX_RE.search(fhir_path)
     return int(match.group(1)) if match else None
 
 
@@ -242,7 +322,7 @@ def build_highlighting_payload(bundle: Bundle, report: CrosswalkReport, raw_text
 
     claimed_occurrence: dict[tuple, int] = {}
     resource_claims: dict[str, dict[tuple, tuple[int, bool]]] = {}
-    next_occurrence: dict[tuple, int] = {}
+    used_occurrences: dict[tuple, set[int]] = {}
     matches: list[HighlightMatch] = []
     color_counter = 0
 
@@ -258,7 +338,7 @@ def build_highlighting_payload(bundle: Bundle, report: CrosswalkReport, raw_text
         if source_locator is not None and entry.derivation == "direct" and entry.source_location:
             try:
                 source_span = _resolve_source_span(
-                    entry, source_locator, scope_resolver, bundle, claimed_occurrence, resource_claims, next_occurrence, reference_map
+                    entry, source_locator, scope_resolver, bundle, claimed_occurrence, resource_claims, used_occurrences, reference_map
                 )
             except Exception:
                 source_span = None
@@ -281,6 +361,49 @@ def build_highlighting_payload(bundle: Bundle, report: CrosswalkReport, raw_text
     return HighlightingPayload(display_source_text=display_source_text, fhir_json_text=fhir_json_text, matches=matches)
 
 
+def _occurrence_count(source_locator, root_key: str, scope_hint: str | None) -> int:
+    if isinstance(source_locator, CdaLocator):
+        return source_locator.occurrence_count(root_key, scope_hint)
+    return source_locator.occurrence_count(root_key)
+
+
+def _locate(source_locator, source_location: str, occurrence: int, scope_hint: str | None) -> tuple[int, int] | None:
+    if isinstance(source_locator, CdaLocator):
+        return source_locator.locate(source_location, occurrence, scope_hint)
+    return source_locator.locate(source_location, occurrence)
+
+
+def _claim_fresh_occurrence(
+    source_locator,
+    entry: ProvenanceEntry,
+    root_key: str,
+    scope_hint: str | None,
+    used: set[int],
+) -> int:
+    """Picks the physical occurrence a brand-new (never borrowed) claim
+    should use - content-verified first, falling back to the original
+    "next unclaimed, in ascending order" scheme only when content
+    verification can't apply. See this module's own docstring for the real
+    837P/837I/837D bug this exists to fix, and why the fallback is safe for
+    every case the original scheme already got right."""
+    expected = entry.source_value if entry.source_value is not None else entry.value
+    if expected is not None:
+        total = _occurrence_count(source_locator, root_key, scope_hint)
+        for candidate in range(total):
+            if candidate in used:
+                continue
+            span = _locate(source_locator, entry.source_location, candidate, scope_hint)
+            if span is None:
+                continue
+            start, end = span
+            if source_locator.display_text[start:end] == expected:
+                return candidate
+    candidate = 0
+    while candidate in used:
+        candidate += 1
+    return candidate
+
+
 def _resolve_source_span(
     entry: ProvenanceEntry,
     source_locator,
@@ -288,7 +411,7 @@ def _resolve_source_span(
     bundle: Bundle,
     claimed_occurrence: dict[tuple, int],
     resource_claims: dict[str, dict[tuple, tuple[int, bool]]],
-    next_occurrence: dict[tuple, int],
+    used_occurrences: dict[tuple, set[int]],
     reference_map: dict[str, set[str]],
 ) -> tuple[int, int] | None:
     root_key = source_locator.root_key(entry.source_location)
@@ -326,17 +449,20 @@ def _resolve_source_span(
         if borrowed is not None:
             occurrence, is_original = borrowed, False
         else:
-            occurrence = next_occurrence.get(count_key, 0)
-            next_occurrence[count_key] = occurrence + 1
+            used = used_occurrences.setdefault(count_key, set())
+            occurrence = _claim_fresh_occurrence(source_locator, entry, root_key, scope_hint, used)
             is_original = True
         claimed_occurrence[claim_key] = occurrence
+        # Recorded for *both* branches, not just the fresh one - a borrowed
+        # occurrence is just as "spoken for" as a freshly-claimed one, so a
+        # later content-matching search (see _claim_fresh_occurrence) must
+        # never be able to pick it back up for an unrelated resource.
+        used_occurrences.setdefault(count_key, set()).add(occurrence)
         if item_index is None and resource_id is not None:
             resource_claims.setdefault(resource_id, {})[count_key] = (occurrence, is_original)
     occurrence = claimed_occurrence[claim_key]
 
-    if isinstance(source_locator, CdaLocator):
-        return source_locator.locate(entry.source_location, occurrence, scope_hint)
-    return source_locator.locate(entry.source_location, occurrence)
+    return _locate(source_locator, entry.source_location, occurrence, scope_hint)
 
 
 def _borrow_occurrence(

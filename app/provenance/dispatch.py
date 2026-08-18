@@ -10,13 +10,42 @@ dispatch `app/hl7/pipeline.py::convert_hl7_to_bundle`/
 `app/edi/pipeline.py::convert_edi_to_bundle` already do, just with a
 `ProvenanceRecorder` threaded into the one call
 (`mapper.to_bundle(...)`/`builder.build_bundle(...)`) that actually needs
-it."""
+it.
+
+**Dedup-aware provenance, an opt-in `deduplicate` parameter**: `app/
+dedup.py::deduplicate_bundle` merges duplicate Patient/Practitioner/
+Organization/Location entries within an already-built Bundle - a real,
+evidenced case for 837P/837I's own Billing-vs-Rendering-provider shape
+(see that module's own docstring). Wiring it in here turned out to need
+*zero* changes to `app/provenance/{recorder,resolver,highlighting}.py`
+themselves - `ProvenanceRecorder`'s own facts are keyed by
+`(resource_id, relative_path)`, and `deduplicate_bundle` never changes a
+surviving resource's own `.id` (only entries for the *removed* duplicate
+drop out of `bundle.entry`, via `model_copy(deep=True)` followed by an
+entry-list filter), so a fact recorded during mapping against a resource
+that dedup goes on to remove simply hits `resolve_bundle_paths`'s own
+pre-existing "a `resource_id` not found in `bundle.entry` is skipped, not
+raised" branch (see that function's own docstring - written for a
+different, hypothetical reason originally, but it's exactly the
+mechanism this needs) once `deduplicate_bundle` runs *before*
+`resolve_bundle_paths`, not after. The surviving (canonical) resource's
+own facts are completely unaffected - dedup never rewrites a kept
+resource's own fields, only *other* resources' `Reference`s that pointed
+at a resource now removed - so they resolve against their own,
+correctly-recomputed post-dedup `Bundle.entry[N]` index exactly as
+before. This also means a removed duplicate's own source segment/element
+(e.g. an 837P claim's Rendering Provider `NM1` loop, once its
+`Practitioner` gets merged into the Billing Provider's) simply shows no
+highlight in the Data Specification page's correlated view - the
+correct, honest result, since that segment's own data didn't produce a
+*separate* surviving resource for a highlight to point at."""
 
 from fhir.resources.R4B.bundle import Bundle
 
 from app.cda.parser import parse_document
 from app.cda.registry import get_document_builder
 from app.cda.validation import resolve_trigger_event as resolve_cda_trigger_event
+from app.dedup import DedupResult, deduplicate_bundle
 from app.edi.common import resolve_837_variant
 from app.edi.parser import first_transaction_set, parse_interchange
 from app.edi.registry import get_transaction_builder
@@ -85,11 +114,16 @@ _CDA_UNSUPPORTED_REASON = (
 _INSTRUMENTED_MESSAGE_TYPES = {"ADT", "SIU", "ORU", "MDM"}
 
 
-def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:
+def convert_with_provenance(raw_text: str, deduplicate: bool = False) -> tuple[Bundle, CrosswalkReport, DedupResult | None]:
     """Sniff the input format (reusing app.pipeline's own sniffing, not
-    re-derived) and convert it, returning both the real Bundle (identical
-    to what convert_to_bundle would produce - conversion behavior itself
-    is never altered by requesting provenance) and a CrosswalkReport.
+    re-derived) and convert it, returning the real Bundle (identical to
+    what convert_to_bundle would produce when `deduplicate=False` -
+    conversion behavior itself is never altered by requesting provenance),
+    a CrosswalkReport, and - only when `deduplicate=True` - the
+    `DedupResult` describing what was merged (`None` otherwise, the same
+    "opt-in, never automatic" contract `app/dedup.py` itself establishes).
+    See this module's own docstring for how dedup and provenance resolution
+    interact.
 
     EDI input converts normally and threads a recorder through when its own
     ST01 is in `_INSTRUMENTED_TRANSACTION_SETS` (so `entries` is genuinely
@@ -123,6 +157,7 @@ def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:
         builder = get_transaction_builder(transaction_set.st01, transaction_set.st03)
         recorder = ProvenanceRecorder(source_format="EDI")
         bundle = builder.build_bundle(transaction_set, interchange.delimiters, recorder=recorder)
+        bundle, dedup_result = _deduplicate_if_requested(bundle, deduplicate)
         entries = resolve_bundle_paths(bundle, recorder)
         st01 = transaction_set.st01.strip().upper()
         # 837P/837I/837D share ST01="837" - resolve which variant this
@@ -140,12 +175,13 @@ def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:
             entries=entries,
             unsupported=unsupported,
             unsupported_reason=unsupported_reason,
-        )
+        ), dedup_result
     if is_xml(raw_text):
         document = parse_document(raw_text)
         builder = get_document_builder(document)
         recorder = ProvenanceRecorder(source_format="CDA")
         bundle = builder.build_bundle(document, recorder=recorder)
+        bundle, dedup_result = _deduplicate_if_requested(bundle, deduplicate)
         entries = resolve_bundle_paths(bundle, recorder)
         return bundle, CrosswalkReport(
             message_type="CDA",
@@ -154,7 +190,7 @@ def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:
             entries=entries,
             unsupported=True,
             unsupported_reason=_CDA_UNSUPPORTED_REASON,
-        )
+        ), dedup_result
 
     message = parse_message(raw_text)
     msh = require_segment(message, "MSH")
@@ -164,6 +200,7 @@ def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:
 
     recorder = ProvenanceRecorder(source_format="HL7v2")
     bundle = mapper.to_bundle(message, recorder=recorder)
+    bundle, dedup_result = _deduplicate_if_requested(bundle, deduplicate)
     entries = resolve_bundle_paths(bundle, recorder)
     unsupported = message_type not in _INSTRUMENTED_MESSAGE_TYPES
     unsupported_reason = (
@@ -176,4 +213,15 @@ def convert_with_provenance(raw_text: str) -> tuple[Bundle, CrosswalkReport]:
         entries=entries,
         unsupported=unsupported,
         unsupported_reason=unsupported_reason,
-    )
+    ), dedup_result
+
+
+def _deduplicate_if_requested(bundle: Bundle, deduplicate: bool) -> tuple[Bundle, DedupResult | None]:
+    """`deduplicate_bundle(bundle)` when requested, run *before*
+    `resolve_bundle_paths` in every branch above - see this module's own
+    docstring for why that ordering, not `resolve_bundle_paths` itself, is
+    what makes provenance resolution dedup-safe for free."""
+    if not deduplicate:
+        return bundle, None
+    result = deduplicate_bundle(bundle)
+    return result.bundle, result
