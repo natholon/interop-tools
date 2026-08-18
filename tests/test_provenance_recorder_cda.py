@@ -131,6 +131,12 @@ def test_ccd_basic_crosswalk_matches_known_field_values():
     assert class_entry.value == "AMB"
     assert class_entry.source_value == "AMB"
 
+    # app/provenance/hl7_field_names.py's "source field name" lookup is
+    # HL7v2-only (see that module's own scope disclosure) - a CDA entry's
+    # xpath_location()-shaped source_location never matches its grammar,
+    # so field_label stays None for every CDA entry, never a guess.
+    assert all(e.field_label is None for e in entries)
+
     period_start_entry = by_path["Bundle.entry[1].resource.period.start"]
     assert period_start_entry.source_location == xpath_location(
         "componentOf/encompassingEncounter/effectiveTime/low/@value"

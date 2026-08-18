@@ -144,6 +144,33 @@ def test_adt_a01_basic_crosswalk_matches_known_field_values():
     assert identifier_entry.value == "MSG00001"
 
 
+def test_adt_a01_crosswalk_entries_carry_a_human_readable_field_label():
+    # app/provenance/hl7_field_names.py's own "source field name" - a
+    # component-level label wins over the whole field's own name when a
+    # source_location carries one (see that module's own docstring).
+    message = parse_message(read_fixture("adt_a01_basic.hl7"))
+    recorder = ProvenanceRecorder(source_format="HL7v2")
+    bundle = AdtA01Mapper().to_bundle(message, recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    by_path = {e.fhir_path: e for e in entries}
+
+    identifier_entry = by_path["Bundle.entry[0].resource.identifier[0].value"]
+    assert identifier_entry.source_location == hl7_location("PID", 3, repetition=0, component=1)
+    assert identifier_entry.field_label == "ID"
+
+    family_entry = by_path["Bundle.entry[0].resource.name[0].family"]
+    assert family_entry.field_label == "Family Name"
+
+    birth_date_entry = by_path["Bundle.entry[0].resource.birthDate"]
+    assert birth_date_entry.field_label == "Date/Time of Birth"
+
+    # An inferred entry has no source_location at all, so it gets no
+    # field_label either - never a guess at one.
+    status_entry = by_path["Bundle.entry[1].resource.status"]
+    assert status_entry.derivation == "inferred"
+    assert status_entry.field_label is None
+
+
 def test_adt_a02_transfer_reindexes_location_provenance_after_insert():
     # AdtA02Mapper inserts the prior location at index 0, shifting the
     # current location (already recorded by build_encounter_core at

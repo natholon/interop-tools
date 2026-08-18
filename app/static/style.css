@@ -545,14 +545,45 @@ pre {
 }
 
 #crosswalk-table td:nth-child(1),
-#crosswalk-table td:nth-child(2) {
+#crosswalk-table td:nth-child(3) {
     font-family: var(--font-mono);
 }
 
-tr.crosswalk-inferred td:nth-child(1) {
+#crosswalk-table td:nth-child(2) {
+    color: var(--ink-soft);
+}
+
+/* Prefixed with #crosswalk-table (not just `tr.crosswalk-inferred
+   td:nth-child(1)`) so this actually wins the cascade: an ID selector's
+   specificity is compared before class/pseudo-class count, so the plain
+   `#crosswalk-table td { white-space: nowrap; }` rule above would
+   otherwise beat a same-or-lower-specificity class selector regardless
+   of how many classes it has - confirmed by direct browser testing
+   (getComputedStyle showed `white-space: nowrap` still winning here
+   without this prefix, silently defeating the whole fix below). */
+#crosswalk-table tr.crosswalk-inferred td:nth-child(1) {
     color: var(--ink-faint);
-    font-style: italic;
     white-space: normal;
+}
+
+/* The reason text itself (wrapped in this element by the JS) is capped
+   to a fixed character budget, not left to grow with content - an
+   inferred row's own `reason` text (shown in this column in place of a
+   source location) can otherwise run to a full sentence and stretch the
+   whole table far wider than every other row needs. `max-width` alone on
+   the <td> isn't reliable here: in the table's own default auto layout,
+   a cell's max-width is only a soft hint to the column-width algorithm,
+   not a hard constraint. `display: inline-block` on this element gives
+   it its own sizing context, so `max-width` actually constrains it
+   regardless of what the table layout algorithm decides for the column
+   itself - but only once it also wins the white-space cascade above,
+   since `white-space: nowrap` alone prevents any wrapping regardless of
+   max-width/overflow-wrap. */
+#crosswalk-table tr.crosswalk-inferred td:nth-child(1) em {
+    display: inline-block;
+    max-width: 40ch;
+    overflow-wrap: break-word;
+    font-style: italic;
 }
 
 .unsupported-banner {

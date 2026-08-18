@@ -184,6 +184,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 locationCell.textContent = entry.source_location || "";
             }
 
+            const fieldNameCell = document.createElement("td");
+            fieldNameCell.textContent = entry.field_label || "";
+
             const pathCell = document.createElement("td");
             pathCell.textContent = entry.fhir_path;
 
@@ -193,7 +196,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const valueCell = document.createElement("td");
             valueCell.textContent = entry.value ?? "";
 
-            tr.append(locationCell, pathCell, sourceValueCell, valueCell);
+            tr.append(locationCell, fieldNameCell, pathCell, sourceValueCell, valueCell);
             tableBody.appendChild(tr);
         }
         if (tableWrapper) tableWrapper.hidden = false;
@@ -278,6 +281,7 @@ document.addEventListener("DOMContentLoaded", () => {
             rows.push(["Inferred", entry.reason || "(no source field)"]);
         } else {
             rows.push(["Source Location", entry.source_location || ""]);
+            if (entry.field_label) rows.push(["Source Field Name", entry.field_label]);
         }
         if (entry.source_value != null) rows.push(["Source Value", entry.source_value]);
         if (entry.value != null) rows.push(["FHIR Value", entry.value]);

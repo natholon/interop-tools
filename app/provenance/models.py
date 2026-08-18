@@ -25,12 +25,18 @@ class ProvenanceEntry(BaseModel):
     `source_location` (there isn't one) - `reason` explains where the value
     actually came from instead, so the crosswalk stays a complete picture
     of the resource rather than silently only showing the directly-copied
-    parts."""
+    parts. `field_label` is a human-readable name for `source_location`
+    (e.g. "Assigning Authority" for `"PID-3[0].4"`) - populated for HL7v2
+    entries via `app/provenance/hl7_field_names.py`, `None` for CDA/EDI
+    entries or any location string outside that module's own scoped
+    table, matching this app's own "map what's confirmed, disclose the
+    rest as absent" precedent rather than guessing at a name."""
 
     source_format: SourceFormat
     fhir_path: str
     derivation: Derivation = "direct"
     source_location: str | None = None
+    field_label: str | None = None
     reason: str | None = None
     source_value: str | None = None
     value: str | None = None

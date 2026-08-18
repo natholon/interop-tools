@@ -6,8 +6,24 @@ accumulated facts is fully assembled."""
 
 from fhir.resources.R4B.bundle import Bundle
 
+from app.provenance.hl7_field_names import resolve_hl7_field_label
+from app.provenance.hl7_locator import parse_hl7_location
 from app.provenance.models import ProvenanceEntry
 from app.provenance.recorder import ProvenanceRecorder
+
+
+def _resolve_field_label(source_format: str, source_location: str | None) -> str | None:
+    """HL7v2-only for now (see app/provenance/hl7_field_names.py's own
+    scope disclosure) - CDA's xpath_location() and EDI's edi_location()
+    produce a structurally different location shape neither this lookup
+    nor parse_hl7_location() understands, so both degrade to no label
+    rather than a guessed or accidentally-mismatched one."""
+    if source_format != "HL7v2" or not source_location:
+        return None
+    parsed = parse_hl7_location(source_location)
+    if parsed is None:
+        return None
+    return resolve_hl7_field_label(parsed)
 
 
 def resolve_bundle_paths(bundle: Bundle, recorder: ProvenanceRecorder) -> list[ProvenanceEntry]:
@@ -45,6 +61,7 @@ def resolve_bundle_paths(bundle: Bundle, recorder: ProvenanceRecorder) -> list[P
                 fhir_path=fhir_path,
                 derivation=fact.derivation,
                 source_location=fact.source_location,
+                field_label=_resolve_field_label(recorder.source_format, fact.source_location),
                 reason=fact.reason,
                 source_value=fact.source_value,
                 value=fact.value,
