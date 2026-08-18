@@ -168,6 +168,20 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    function displayedSourceValue(entry) {
+        // source_value is only recorded when a mapper actually transforms
+        // the field (a date reformatted, a code mapped, ...) - a plain
+        // copy (e.g. a nested component's raw text) never sets it, since
+        // it would just duplicate `value` verbatim. For a direct entry,
+        // the untransformed source value *is* `value` in that case - fall
+        // back to it so "Source Value" isn't inconsistently blank
+        // depending on whether that particular field happened to need
+        // reformatting. Inferred entries have no real source field at
+        // all, so there's nothing to fall back to for them.
+        if (entry.derivation === "inferred") return null;
+        return entry.source_value ?? entry.value ?? null;
+    }
+
     function renderCrosswalkTable(entries) {
         if (!tableBody) return;
         tableBody.innerHTML = "";
@@ -191,7 +205,7 @@ document.addEventListener("DOMContentLoaded", () => {
             pathCell.textContent = entry.fhir_path;
 
             const sourceValueCell = document.createElement("td");
-            sourceValueCell.textContent = entry.source_value ?? "";
+            sourceValueCell.textContent = displayedSourceValue(entry) ?? "";
 
             const valueCell = document.createElement("td");
             valueCell.textContent = entry.value ?? "";
@@ -282,7 +296,8 @@ document.addEventListener("DOMContentLoaded", () => {
             rows.push(["Source Location", entry.source_location || ""]);
             if (entry.field_label) rows.push(["Source Field Name", entry.field_label]);
         }
-        if (entry.source_value != null) rows.push(["Source Value", entry.source_value]);
+        const sourceValue = displayedSourceValue(entry);
+        if (sourceValue != null) rows.push(["Source Value", sourceValue]);
         rows.push(["FHIR Path", entry.fhir_path]);
         if (entry.value != null) rows.push(["FHIR Value", entry.value]);
 
