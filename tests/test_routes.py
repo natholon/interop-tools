@@ -313,6 +313,27 @@ def test_index_transform_target_dropdown_includes_adt_a01():
     assert "HL7 ADT^A01" in response.text
 
 
+def test_index_transform_target_dropdown_is_grouped_like_sample_type_dropdown():
+    # See app/routes/dropdowns.py::grouped_supported_targets - the
+    # "Target format" dropdown now uses the same <optgroup> structure and
+    # per-option "TYPE^TRIGGER - description" label style as "Sample
+    # message type", not a flat list of bare "HL7 ADT^A01"-style values.
+    response = client.get("/")
+    assert response.status_code == 200
+    text = response.text
+    target_select_start = text.index('id="transform-target-select"')
+    target_select_end = text.index("</select>", target_select_start)
+    target_select_html = text[target_select_start:target_select_end]
+    assert '<optgroup label="HL7v2 — ADT (Admit / Discharge / Transfer)">' in target_select_html
+    assert '<optgroup label="C-CDA">' in target_select_html
+    assert '<optgroup label="X12 EDI">' in target_select_html
+    # The value attribute is unchanged (still what transform_form/app.js
+    # parse via partition(" ")/partition("^")) - only the visible text
+    # gained the description.
+    assert 'value="HL7 ADT^A01"' in target_select_html
+    assert ">ADT^A01 - Admit<" in target_select_html
+
+
 def test_index_transform_target_dropdown_includes_all_six_adt_triggers():
     response = client.get("/")
     assert response.status_code == 200

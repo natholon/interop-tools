@@ -10,37 +10,14 @@ from app.dedup import deduplicate_bundle
 from app.generators.registry import generate as generate_sample
 from app.hl7.errors import MappingError
 from app.pipeline import convert_to_bundle, validate_any
-from app.routes.dropdowns import grouped_supported_types
+from app.routes.dropdowns import grouped_supported_targets, grouped_supported_types
 from app.routes.errors import ERROR_STATUS, VALIDATION_ERROR_STATUS, resolve_raw_text
 from app.routes.static_assets import static_url
 from app.transform.pipeline import build_message_from_bundle
-from app.transform.registry import list_supported_targets
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 templates.env.globals["static_url"] = static_url
-
-
-def _transform_target_options() -> list[tuple[str, str, str, str]]:
-    """(target_format, target_type, target_trigger, label) tuples for the
-    reverse-transform target dropdown - mirrors _grouped_supported_types'
-    role for the forward-direction sample dropdown, but flat (not grouped)
-    since app/transform/registry.py has only a couple of targets so far;
-    grouping can be added the same way once there are enough to warrant
-    it. The trigger suffix is omitted entirely for a target with no real
-    trigger-event concept (e.g. "CDA CCD", not "CDA CCD^") - str.partition
-    on a caret-less label still parses back to an empty target_trigger
-    correctly (see transform_form/app.js's own submit handler), so this is
-    purely a display improvement, not a parsing-format change."""
-    return [
-        (
-            target_format,
-            target_type,
-            target_trigger,
-            f"{target_format} {target_type}^{target_trigger}" if target_trigger else f"{target_format} {target_type}",
-        )
-        for target_format, target_type, target_trigger in list_supported_targets()
-    ]
 
 
 class ConvertResult(BaseModel):
@@ -129,7 +106,7 @@ def _default_context() -> dict:
         "supported_types": grouped_supported_types(),
         "transform_bundle_json": "",
         "transform_target": "",
-        "transform_target_options": _transform_target_options(),
+        "transform_target_options": grouped_supported_targets(),
         "transform_result": None,
         "transform_error": None,
     }

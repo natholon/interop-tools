@@ -90,8 +90,12 @@
     <div class="field">
         <label for="transform-target-select">Target format</label>
         <select id="transform-target-select" name="target">
-            {% for target_format, target_type, target_trigger, label in transform_target_options %}
-            <option value="{{ label }}" {% if label == transform_target %}selected{% endif %}>{{ label }}</option>
+            {% for group_label, items in transform_target_options %}
+            <optgroup label="{{ group_label }}">
+                {% for value, label in items %}
+                <option value="{{ value }}" {% if value == transform_target %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </optgroup>
             {% endfor %}
         </select>
     </div>
