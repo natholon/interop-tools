@@ -1,0 +1,230 @@
+"""Plan of Treatment section (templateId 2.16.840.1.113883.10.20.22.2.10,
+also titled "Plan of Care" on History and Physical - see app/cda/
+narrative_sections.py's own docstring for why this is one shared
+templateId, not two) -> DocumentReference+Binary (the narrative) *plus*
+one CarePlan (with one .activity[] per recognized planned entry) - the
+third of narrative_sections.py's own three disclosed "can carry real
+structured entries" sections to gain one, following app/cda/
+social_history.py's and app/cda/family_history.py's own immediately-
+preceding precedent (narrative and structured representations coexist).
+
+**No official "C-CDA on FHIR" mapping page covers Plan of Treatment
+either** (confirmed the same way as Family History - no CF-plan*.md file
+exists in github.com/HL7/ccda-on-fhir/tree/master/input/pagecontent), and
+unlike Family History, the target FHIR resource itself isn't an obvious
+1:1 fit either - C-CDA's own Plan of Treatment section allows a genuinely
+wide variety of entry *classes* (Planned Act/Encounter/Observation/
+Procedure/Medication Activity/Supply, Instruction, Appointment...), most
+of which represent "an activity of some kind that's intended, not yet
+done." **CarePlan.activity[] is the disclosed, deliberate choice**: FHIR's
+own CarePlan resource is explicitly designed to hold a heterogeneous list
+of planned activities without forcing each one into its own separate
+Procedure/ServiceRequest/etc. resource - `CarePlanActivityDetail.kind` (an
+enum of resource types, e.g. ServiceRequest/MedicationRequest/Task) exists
+specifically to hint at what a planned item *would* materialize as without
+this app needing to actually build that separate resource - matching this
+app's own "map the general case now" judgment rather than deferring the
+whole section for want of one clean target type.
+
+**Scoped to exactly the two moodCode-classified entry shapes confirmed
+against real fetched HL7 C-CDA-Examples, not a guess at the rest**:
+Planned Observation (2.16.840.1.113883.10.20.22.4.44, wrapped in
+`<observation moodCode="RQO">`, confirmed directly against the real
+Discharge Summary example's own Plan of Care section - "Colonoscopy",
+LOINC 62959-2, effectiveTime `<center value="20141012"/>` - the fourth
+IVL_TS shape, see app/cda/parser.py::ivl_ts_bounds' own docstring) and
+Planned Procedure (2.16.840.1.113883.10.20.22.4.41, wrapped in
+`<procedure moodCode="RQO">`, confirmed via a second real fetched Guide
+Example - field-for-field identical to Planned Observation's own
+code/statusCode/effectiveTime shape, just a different outer element name).
+Planned Act/Encounter/Medication Activity/Supply, Instruction, and
+Appointment are all deliberately NOT parsed this slice - each has its own
+genuinely different entry shape (Planned Medication Activity, for
+instance, would need its own dosage-reading logic mirroring app/cda/
+medications.py's, not a trivial extension of this module) - disclosed as a
+natural follow-up, the same "map the confirmed/dominant shapes now,
+disclose the rest" precedent app/cda/results.py's own IVL_PQ/ED gap and
+app/cda/procedures.py's own Procedure-Activity-Observation/-Act gap
+already established.
+
+**`.status`/`.intent`/`CarePlanActivityDetail.kind` are all disclosed,
+self-derived choices with no IG crosswalk to verify against** (the same
+"no official crosswalk exists, disclosed local mapping" precedent several
+EDI families already established): the CarePlan itself gets fixed
+`status="active"`/`intent="plan"` (a real, disclosed judgment call - this
+converter has no signal indicating whether the plan is still active or
+superseded, and "active" is the plausible default for a plan appearing in
+a just-generated document); each activity's own `.kind` is fixed to
+`"ServiceRequest"` regardless of whether it came from a Planned
+Observation or Planned Procedure entry, the closest general-purpose fit
+FHIR's own CarePlanActivityKind value set offers for "a planned clinical
+service" without a dedicated resource to materialize. `.status` per
+activity uses a small, disclosed `_STATUS_MAP` from the entry's own
+`statusCode` (not moodCode, which is uniformly RQO/INT for a "planned"
+entry and carries no per-activity distinction) - unrecognized/absent falls
+back to `"unknown"`, matching this app's other STATUS_MAP fallback
+precedents (e.g. Results')."""
+
+import uuid
+
+from fhir.resources.R4B.careplan import CarePlan, CarePlanActivity, CarePlanActivityDetail
+from fhir.resources.R4B.period import Period
+from fhir.resources.R4B.reference import Reference
+
+from app.cda.common import build_codeable_concept_from_cd, effective_time_location, parse_partial_ts
+from app.cda.narrative_sections import PLAN_OF_TREATMENT_TEMPLATE_ID, build_narrative_document_reference
+from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
+from app.provenance.location import xpath_location
+
+SECTION_TEMPLATE_ID = PLAN_OF_TREATMENT_TEMPLATE_ID
+PLANNED_OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.44"
+PLANNED_PROCEDURE_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.41"
+
+_ACTIVITY_KIND = "ServiceRequest"
+
+# Disclosed, self-derived - see module docstring for why no official
+# crosswalk exists to verify this against.
+STATUS_MAP = {
+    "active": "scheduled",
+    "completed": "completed",
+    "cancelled": "cancelled",
+    "aborted": "cancelled",
+    "suspended": "on-hold",
+    "held": "on-hold",
+}
+_DEFAULT_STATUS = "unknown"
+
+# (entry_tag, templateId) - both confirmed real shapes, see module
+# docstring. Order doesn't matter; both feed the identical extraction
+# logic in _build_activity_detail.
+_RECOGNIZED_ENTRY_SHAPES = (
+    ("observation", PLANNED_OBSERVATION_TEMPLATE_ID),
+    ("procedure", PLANNED_PROCEDURE_TEMPLATE_ID),
+)
+
+
+def _resolve_status(element) -> str:
+    status_element = find_child(element, "statusCode")
+    code = (status_element.get("code") or "").strip().lower() if status_element is not None else ""
+    return STATUS_MAP.get(code, _DEFAULT_STATUS)
+
+
+def _build_activity_detail(planned_element, entry_tag: str, index: int, resource_id: str | None = None, recorder=None):
+    code_element = find_child(planned_element, "code")
+    code = build_codeable_concept_from_cd(code_element)
+    if code is None:
+        return None
+
+    status = _resolve_status(planned_element)
+    detail = CarePlanActivityDetail(code=code, status=status, kind=_ACTIVITY_KIND)
+    entry_base = xpath_location(f"entry[{index}]", entry_tag)
+
+    if recorder and resource_id:
+        code_value = code_element.get("code")
+        display_value = code_element.get("displayName")
+        if code_value:
+            recorder.record(
+                resource_id, f"activity[{index}].detail.code.coding[0].code", f"{entry_base}/code/@code", code_value
+            )
+        if display_value:
+            recorder.record(
+                resource_id,
+                f"activity[{index}].detail.code.coding[0].display",
+                f"{entry_base}/code/@displayName",
+                display_value,
+            )
+        status_element = find_child(planned_element, "statusCode")
+        raw_status = status_element.get("code") if status_element is not None else None
+        if raw_status and raw_status.strip().lower() in STATUS_MAP:
+            recorder.record(resource_id, f"activity[{index}].detail.status", f"{entry_base}/statusCode/@code", status)
+        else:
+            recorder.record_inferred(
+                resource_id,
+                f"activity[{index}].detail.status",
+                f'statusCode was absent or not one of the disclosed recognized codes - defaults to "{_DEFAULT_STATUS}".',
+                status,
+            )
+        recorder.record_inferred(
+            resource_id,
+            f"activity[{index}].detail.kind",
+            'Fixed to "ServiceRequest" - the closest general-purpose CarePlanActivityKind fit for a planned clinical activity this app never materializes as its own separate resource.',
+            _ACTIVITY_KIND,
+        )
+
+    effective_time = find_child(planned_element, "effectiveTime")
+    low, high = ivl_ts_bounds(effective_time)
+    low_dt = parse_partial_ts(low)
+    high_dt = parse_partial_ts(high)
+    if low_dt and high_dt and low_dt != high_dt:
+        detail.scheduledPeriod = Period(start=low_dt, end=high_dt)
+        if recorder and resource_id:
+            recorder.record(
+                resource_id,
+                f"activity[{index}].detail.scheduledPeriod.start",
+                effective_time_location(f"{entry_base}/effectiveTime", effective_time, "low"),
+                low_dt,
+            )
+            recorder.record(
+                resource_id,
+                f"activity[{index}].detail.scheduledPeriod.end",
+                effective_time_location(f"{entry_base}/effectiveTime", effective_time, "high"),
+                high_dt,
+            )
+    elif low_dt or high_dt:
+        scheduled = low_dt or high_dt
+        detail.scheduledString = scheduled
+        if recorder and resource_id:
+            recorder.record(
+                resource_id,
+                f"activity[{index}].detail.scheduledString",
+                effective_time_location(f"{entry_base}/effectiveTime", effective_time, "low" if low_dt else "high"),
+                scheduled,
+            )
+
+    return detail
+
+
+def build_plan_of_treatment_resources(section, patient_id: str, recorder=None) -> list:
+    """The narrative DocumentReference+Binary (always built) plus, when at
+    least one recognized planned entry resolves, a single CarePlan wrapping
+    one .activity[] per entry - matching narrative_sections.py's own
+    disclosed "coexist, don't replace" design."""
+    resources = list(build_narrative_document_reference(section, patient_id, recorder=recorder))
+
+    care_plan_id = str(uuid.uuid4())
+    activities = []
+    for index, entry in enumerate(find_all(section, "entry")):
+        for entry_tag, template_id in _RECOGNIZED_ENTRY_SHAPES:
+            planned_element = find_child(entry, entry_tag)
+            if planned_element is None or not has_template_id(planned_element, template_id):
+                continue
+            detail = _build_activity_detail(planned_element, entry_tag, index, resource_id=care_plan_id, recorder=recorder)
+            if detail is not None:
+                activities.append(CarePlanActivity(detail=detail))
+            break
+
+    if not activities:
+        return resources
+
+    care_plan = CarePlan(
+        id=care_plan_id,
+        status="active",
+        intent="plan",
+        subject=Reference(reference=f"urn:uuid:{patient_id}"),
+        activity=activities,
+    )
+    if recorder:
+        recorder.record_inferred(
+            care_plan_id,
+            "status",
+            "Fixed to \"active\" - this converter has no source field indicating whether the plan has since been superseded.",
+            "active",
+        )
+        recorder.record_inferred(
+            care_plan_id,
+            "intent",
+            'Fixed to "plan" - every entry this section recognizes is inherently a planned (not-yet-done) activity.',
+            "plan",
+        )
+    resources.append(care_plan)
+    return resources

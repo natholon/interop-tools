@@ -100,11 +100,17 @@ def ts_value(element: Element | None) -> str | None:
 
 def ivl_ts_bounds(element: Element | None) -> tuple[str | None, str | None]:
     """An IVL_TS (interval of time) element's (low, high) raw @value
-    strings. IVL_TS has three legal shapes in real C-CDA: a bare @value on
+    strings. IVL_TS has four legal shapes in real C-CDA: a bare @value on
     the element itself (single point, both bounds equal), <low>/<high>
     children (a real interval, either bound optionally nullFlavor/absent),
-    or nullFlavor on the element itself (fully unknown). Returns (None,
-    None) for the fully-unknown case rather than raising."""
+    <center> (an approximate single point - confirmed against a real
+    fetched HL7 C-CDA-Examples Plan of Care Activity Observation, whose own
+    effectiveTime uses exactly this shape rather than a bare @value or
+    <low>/<high> pair - app/cda/plan_of_treatment.py's own first real
+    consumer of this fourth branch, treated the same as a bare @value:
+    both bounds equal), or nullFlavor on the element itself (fully
+    unknown). Returns (None, None) for the fully-unknown case rather than
+    raising."""
     if element is None:
         return None, None
     bare_value = element.get("value")
@@ -112,4 +118,9 @@ def ivl_ts_bounds(element: Element | None) -> tuple[str | None, str | None]:
         return bare_value, bare_value
     low = ts_value(find_child(element, "low"))
     high = ts_value(find_child(element, "high"))
-    return low, high
+    if low or high:
+        return low, high
+    center = ts_value(find_child(element, "center"))
+    if center:
+        return center, center
+    return None, None

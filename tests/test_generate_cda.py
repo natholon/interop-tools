@@ -1017,3 +1017,92 @@ def test_history_and_physical_narrative_sections_convert_to_document_reference_a
                 assert " | " in text  # Social History's own table row shape survived
                 found_table_shaped = True
     assert found_table_shaped
+
+
+def test_social_history_structured_observation_varies_present_and_absent_across_seeds():
+    # Social History's own structured entry (see app/cda/social_history.py)
+    # is independently maybe()-gated from the section's own presence -
+    # direct fuzz coverage that a real, category="social-history"
+    # Observation is produced alongside the narrative DocumentReference+
+    # Binary, not just theoretically reachable.
+    present = absent = 0
+    for seed in range(200):
+        xml_text = generate_history_and_physical(random.Random(seed))
+        bundle = convert_cda_to_bundle(xml_text)
+        observations = [
+            e.resource
+            for e in bundle.entry
+            if e.resource.get_resource_type() == "Observation"
+            and e.resource.category
+            and e.resource.category[0].coding[0].code == "social-history"
+        ]
+        if observations:
+            present += 1
+        else:
+            absent += 1
+    assert present > 0 and absent > 0
+
+
+def test_family_history_structured_organizer_varies_present_and_absent_across_seeds():
+    # Family History's own structured entry (see app/cda/family_history.py)
+    # is independently maybe()-gated from the section's own presence -
+    # direct fuzz coverage that a real FamilyMemberHistory is produced
+    # alongside the narrative pair.
+    present = absent = 0
+    deceased_boolean_seen = deceased_date_seen = False
+    contributed_to_death_seen = onset_age_seen = False
+    for seed in range(300):
+        xml_text = generate_history_and_physical(random.Random(seed))
+        bundle = convert_cda_to_bundle(xml_text)
+        histories = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "FamilyMemberHistory"]
+        if histories:
+            present += 1
+        else:
+            absent += 1
+        for history in histories:
+            if history.deceasedBoolean is not None:
+                deceased_boolean_seen = True
+            if history.deceasedDate is not None:
+                deceased_date_seen = True
+            for condition in history.condition:
+                if condition.contributedToDeath:
+                    contributed_to_death_seen = True
+                if condition.onsetAge is not None:
+                    onset_age_seen = True
+    assert present > 0 and absent > 0
+    # Both branches of the deceased[x] choice-type resolution (see
+    # app/cda/family_history.py::_build_family_member_history's own
+    # docstring) occur across seeds, not just one.
+    assert deceased_boolean_seen and deceased_date_seen
+    assert contributed_to_death_seen
+    assert onset_age_seen
+
+
+def test_plan_of_treatment_structured_entry_varies_present_and_absent_and_both_shapes_occur():
+    # Plan of Treatment's own structured entry (see
+    # app/cda/plan_of_treatment.py) splits between a Planned Observation
+    # and a Planned Procedure entry shape - direct fuzz coverage that both
+    # occur, plus the deliberately-unrecognized statusCode's own "unknown"
+    # fallback.
+    present = absent = 0
+    statuses_seen = set()
+    for seed in range(200):
+        for xml_text in (
+            generate_discharge_summary(random.Random(seed)),
+            generate_history_and_physical(random.Random(seed)),
+        ):
+            bundle = convert_cda_to_bundle(xml_text)
+            care_plans = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "CarePlan"]
+            if care_plans:
+                present += 1
+            else:
+                absent += 1
+            for care_plan in care_plans:
+                assert care_plan.status == "active"
+                assert care_plan.intent == "plan"
+                for activity in care_plan.activity:
+                    assert activity.detail.kind == "ServiceRequest"
+                    statuses_seen.add(activity.detail.status)
+    assert present > 0 and absent > 0
+    assert "unknown" in statuses_seen  # the deliberately-unrecognized statusCode branch
+    assert len(statuses_seen) > 1

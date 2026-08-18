@@ -118,7 +118,10 @@
         </section>
       </component>
       <component>
-        <!-- Social History - narrative table shape (row/column association must be preserved by narrative extraction) -->
+        <!-- Social History - narrative table shape (row/column association
+             must be preserved by narrative extraction), plus a structured
+             Smoking Status entry (templateId ...4.78) converting to a real
+             Observation too (see app/cda/social_history.py). -->
         <section>
           <templateId root="2.16.840.1.113883.10.20.22.2.17"/>
           <code code="29762-2" codeSystem="2.16.840.1.113883.6.1" displayName="Social History"/>
@@ -134,10 +137,25 @@
               </tbody>
             </table>
           </text>
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.78" extension="2014-06-09"/>
+              <code code="72166-2" codeSystem="2.16.840.1.113883.6.1" displayName="Tobacco smoking status NHIS"/>
+              <statusCode code="completed"/>
+              <effectiveTime value="20260810"/>
+              <value xsi:type="CD" code="266919005" codeSystem="2.16.840.1.113883.6.96" displayName="Never smoker"/>
+            </observation>
+          </entry>
         </section>
       </component>
       <component>
-        <!-- Family History - narrative-only, plain paragraph shape -->
+        <!-- Family History - narrative-only paragraph shape, plus a
+             structured Family History Organizer entry (templateId ...4.45)
+             for the father's own coronary artery disease, including a
+             nested Age Observation and a Family History Death Observation
+             (typeCode=CAUS) marking it as having contributed to death -
+             converts to a real FamilyMemberHistory (see
+             app/cda/family_history.py). -->
         <section>
           <templateId root="2.16.840.1.113883.10.20.22.2.15"/>
           <code code="10157-6" codeSystem="2.16.840.1.113883.6.1" displayName="Family History"/>
@@ -145,10 +163,56 @@
           <text>
             <paragraph>Mother: osteoarthritis. Father: coronary artery disease.</paragraph>
           </text>
+          <entry>
+            <organizer classCode="CLUSTER" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.45" extension="2015-08-01"/>
+              <statusCode code="completed"/>
+              <subject>
+                <relatedSubject classCode="PRS">
+                  <code code="FTH" displayName="father" codeSystemName="HL7 FamilyMember" codeSystem="2.16.840.1.113883.5.111"/>
+                  <subject>
+                    <administrativeGenderCode code="M" codeSystem="2.16.840.1.113883.5.1" displayName="Male"/>
+                    <birthTime value="1940"/>
+                    <sdtc:deceasedInd value="true" xmlns:sdtc="urn:hl7-org:sdtc"/>
+                    <sdtc:deceasedTime value="1998" xmlns:sdtc="urn:hl7-org:sdtc"/>
+                  </subject>
+                </relatedSubject>
+              </subject>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.46" extension="2015-08-01"/>
+                  <code code="75323-6" codeSystem="2.16.840.1.113883.6.1" displayName="Condition"/>
+                  <statusCode code="completed"/>
+                  <effectiveTime value="1998"/>
+                  <value xsi:type="CD" code="53741008" codeSystem="2.16.840.1.113883.6.96" displayName="Coronary arteriosclerosis"/>
+                  <entryRelationship typeCode="CAUS">
+                    <observation classCode="OBS" moodCode="EVN">
+                      <templateId root="2.16.840.1.113883.10.20.22.4.47"/>
+                      <code code="ASSERTION" codeSystem="2.16.840.1.113883.5.4"/>
+                      <statusCode code="completed"/>
+                      <value xsi:type="CD" code="419099009" codeSystem="2.16.840.1.113883.6.96" displayName="Dead"/>
+                    </observation>
+                  </entryRelationship>
+                  <entryRelationship typeCode="SUBJ" inversionInd="true">
+                    <observation classCode="OBS" moodCode="EVN">
+                      <templateId root="2.16.840.1.113883.10.20.22.4.31"/>
+                      <code code="445518008" codeSystem="2.16.840.1.113883.6.96" displayName="Age At Onset"/>
+                      <statusCode code="completed"/>
+                      <value xsi:type="PQ" value="58" unit="a"/>
+                    </observation>
+                  </entryRelationship>
+                </observation>
+              </component>
+            </organizer>
+          </entry>
         </section>
       </component>
       <component>
-        <!-- Plan of Treatment / "Plan of Care" - the same template Discharge Summary uses, narrative table shape -->
+        <!-- Plan of Treatment / "Plan of Care" - the same template Discharge
+             Summary uses, narrative table shape, plus a structured Planned
+             Procedure entry (templateId ...4.41) converting to a
+             CarePlan.activity[] entry too (see
+             app/cda/plan_of_treatment.py). -->
         <section>
           <templateId root="2.16.840.1.113883.10.20.22.2.10"/>
           <code code="18776-5" codeSystem="2.16.840.1.113883.6.1" displayName="Plan of Treatment"/>
@@ -163,6 +227,14 @@
               </tbody>
             </table>
           </text>
+          <entry>
+            <procedure classCode="PROC" moodCode="RQO">
+              <templateId root="2.16.840.1.113883.10.20.22.4.41" extension="2014-06-09"/>
+              <code code="52734007" codeSystem="2.16.840.1.113883.6.96" displayName="Total knee replacement"/>
+              <statusCode code="active"/>
+              <effectiveTime value="20260902"/>
+            </procedure>
+          </entry>
         </section>
       </component>
     </structuredBody>

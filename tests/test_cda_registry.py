@@ -7,10 +7,13 @@ from app.cda.ccd import CcdBuilder
 from app.cda.discharge_medications import SECTION_TEMPLATE_ID as DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.discharge_medications import build_discharge_medication_requests
 from app.cda.discharge_summary import DischargeSummaryBuilder
+from app.cda import family_history
 from app.cda.hospital_discharge_diagnosis import SECTION_TEMPLATE_ID as HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID
 from app.cda.hospital_discharge_diagnosis import build_hospital_discharge_diagnoses
 from app.cda.history_and_physical import HistoryAndPhysicalBuilder
 from app.cda import narrative_sections
+from app.cda import plan_of_treatment
+from app.cda import social_history
 from app.cda.parser import parse_document
 from app.cda.procedures import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as PROCEDURES_ENTRIES_OPTIONAL
 from app.cda.procedures import build_procedures
@@ -87,9 +90,13 @@ def test_section_builders_registers_all_twelve_narrative_section_templateids():
     # History and Physical-specific narrative sections (Reason for Visit/
     # Chief Complaint in all three of its legal shapes, History of Present
     # Illness, Physical Exam, Assessment, Review of Systems, Social
-    # History, Family History, General Status) all share the one builder -
-    # see app/cda/narrative_sections.py's own docstring for the full
-    # templateId/LOINC sourcing.
+    # History, Family History, General Status) all originate from one
+    # shared builder - see app/cda/narrative_sections.py's own docstring
+    # for the full templateId/LOINC sourcing. Three of the twelve (Social
+    # History, Family History, Plan of Treatment) are overridden with their
+    # own combined builder, which internally reuses the narrative one
+    # alongside real structured-entry parsing - see app/cda/social_history.py/
+    # family_history.py/plan_of_treatment.py.
     narrative_template_ids = [
         narrative_sections.HOSPITAL_COURSE_TEMPLATE_ID,
         narrative_sections.PLAN_OF_TREATMENT_TEMPLATE_ID,
@@ -110,5 +117,13 @@ def test_section_builders_registers_all_twelve_narrative_section_templateids():
     # reuse it, which would make this test tautological against the very
     # registration it's meant to verify.
     assert set(narrative_template_ids) == set(narrative_sections.ALL_TEMPLATE_IDS)
+    overridden_with_structured_entries = {
+        narrative_sections.SOCIAL_HISTORY_TEMPLATE_ID: social_history.build_social_history_resources,
+        narrative_sections.FAMILY_HISTORY_TEMPLATE_ID: family_history.build_family_history_resources,
+        narrative_sections.PLAN_OF_TREATMENT_TEMPLATE_ID: plan_of_treatment.build_plan_of_treatment_resources,
+    }
     for template_id in narrative_template_ids:
-        assert SECTION_BUILDERS[template_id] is narrative_sections.build_narrative_document_reference
+        if template_id in overridden_with_structured_entries:
+            assert SECTION_BUILDERS[template_id] is overridden_with_structured_entries[template_id]
+        else:
+            assert SECTION_BUILDERS[template_id] is narrative_sections.build_narrative_document_reference

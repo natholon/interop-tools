@@ -50,6 +50,18 @@ OID_TO_FHIR_SYSTEM = {
     "2.16.840.1.113883.6.1": "http://loinc.org",
     "2.16.840.1.113883.6.88": "http://www.nlm.nih.gov/research/umls/rxnorm",
     "2.16.840.1.113883.6.90": "http://hl7.org/fhir/sid/icd-10-cm",
+    # HL7 v3 RoleCode - confirmed via a real fetched HL7 C-CDA-Examples
+    # Family History Organizer, whose own relatedSubject/code carries
+    # codeSystemName="HL7 FamilyMember" (a value set drawn from RoleCode,
+    # not a separate code system) - app/cda/family_history.py's first real
+    # consumer.
+    "2.16.840.1.113883.5.111": "http://terminology.hl7.org/CodeSystem/v3-RoleCode",
+    # HL7 AdministrativeGender - a genuinely different table from this
+    # module's own _GENDER_MAP just below (that one converts to FHIR's
+    # Patient.gender *enum string*; this one is for a CD-shaped
+    # administrativeGenderCode reused as a real CodeableConcept elsewhere,
+    # e.g. FamilyMemberHistory.sex).
+    "2.16.840.1.113883.5.1": "http://hl7.org/fhir/administrative-gender",
 }
 CD_FALLBACK_SYSTEM = "urn:interop-tools:coded-value"
 
@@ -426,18 +438,24 @@ RECOGNIZED_ENCOUNTER_CLASSES = {"AMB", "EMER", "IMP", "ACUTE", "NONAC", "PRENC",
 
 
 def effective_time_location(base_path: str, element, bound: str) -> str:
-    """Which of IVL_TS's three legal shapes ivl_ts_bounds() actually read
+    """Which of IVL_TS's four legal shapes ivl_ts_bounds() actually read
     `bound` ("low" or "high") from for a given effectiveTime element - a
-    bare @value (the same value used for both bounds) or a dedicated
-    <low>/<high> child - so the Data Specification crosswalk points at the
-    real shape a given document used, rather than guessing one. Purely for
-    provenance; doesn't change ivl_ts_bounds' own resolution logic. Public
-    (not module-private) - app/cda/problems.py's own onset/abatement dates
-    are a second real consumer of the identical resolution this function's
-    own first caller (build_encounter_from_header's period.start/end)
-    already needed, so it lives here rather than being duplicated."""
+    bare @value (the same value used for both bounds), a dedicated
+    <low>/<high> child, or <center> (an approximate single point, ivl_ts_
+    bounds' own fourth branch - see that function's own docstring) - so the
+    Data Specification crosswalk points at the real shape a given document
+    used, rather than guessing one. Purely for provenance; doesn't change
+    ivl_ts_bounds' own resolution logic. Public (not module-private) -
+    app/cda/problems.py's own onset/abatement dates are a second real
+    consumer of the identical resolution this function's own first caller
+    (build_encounter_from_header's period.start/end) already needed, so it
+    lives here rather than being duplicated."""
     if element is not None and element.get("value"):
         return xpath_location(f"{base_path}/@value")
+    if element is not None and find_child(element, "low") is None and find_child(element, "high") is None:
+        center = find_child(element, "center")
+        if center is not None and center.get("value"):
+            return xpath_location(f"{base_path}/center/@value")
     return xpath_location(f"{base_path}/{bound}/@value")
 
 

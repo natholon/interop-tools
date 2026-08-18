@@ -33,6 +33,12 @@ _PROCEDURES_SECTION_TEMPLATE_ENTRIES_OPTIONAL = '<templateId root="2.16.840.1.11
 _PROCEDURE_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.14"/>'
 _HOSPITAL_COURSE_SECTION_TEMPLATE = '<templateId root="1.3.6.1.4.1.19376.1.5.3.1.3.5"/>'
 _SOCIAL_HISTORY_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.17"/>'
+_SOCIAL_HISTORY_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.38"/>'
+_FAMILY_HISTORY_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.15"/>'
+_FAMILY_HISTORY_ORGANIZER_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.45"/>'
+_FAMILY_HISTORY_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.46"/>'
+_PLAN_OF_TREATMENT_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.10"/>'
+_PLANNED_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.44"/>'
 
 
 def _doc(body: str, ccd: bool = True) -> object:
@@ -894,6 +900,144 @@ def test_narrative_section_rule_applies_generically_across_different_templateids
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.narrative-section-missing-text")
     assert finding.segment == "Social History/text"
+
+
+def _social_history_observation(code: str = "", status: str = "completed", effective_time: str = "") -> str:
+    observation_code = code or '<code code="160573003" codeSystem="2.16.840.1.113883.6.96" displayName="Alcohol intake"/>'
+    return (
+        f'<entry><observation classCode="OBS" moodCode="EVN">{_SOCIAL_HISTORY_OBSERVATION_TEMPLATE}'
+        f'{observation_code}<statusCode code="{status}"/>{effective_time}'
+        '<value xsi:type="PQ" value="12" unit="/d"/></observation></entry>'
+    )
+
+
+def _social_history_section(entries: str) -> str:
+    return (
+        f"<component><structuredBody><component><section>{_SOCIAL_HISTORY_SECTION_TEMPLATE}"
+        '<code code="29762-2" codeSystem="2.16.840.1.113883.6.1" displayName="Social History"/>'
+        f"<title>Social History</title><text>Some narrative.</text>{entries}"
+        "</section></component></structuredBody></component>"
+    )
+
+
+def test_clean_social_history_produces_no_findings():
+    document = _doc(_patient() + _social_history_section(_social_history_observation()))
+    report = validate_document(document)
+    assert report.findings == []
+    assert report.is_valid is True
+
+
+def test_social_history_missing_code_is_info():
+    entry = _social_history_observation(code='<code nullFlavor="UNK"/>')
+    document = _doc(_patient() + _social_history_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.social-history-missing-code")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_social_history_effective_time_in_future_is_warning():
+    entry = _social_history_observation(effective_time='<effectiveTime value="20990101"/>')
+    document = _doc(_patient() + _social_history_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.social-history-effective-time-in-future")
+    assert finding.severity == "warning"
+
+
+def _family_history_organizer(relationship: str = "", condition_value: str = "") -> str:
+    relationship_code = relationship or (
+        '<code code="FTH" displayName="father" codeSystemName="HL7 FamilyMember" codeSystem="2.16.840.1.113883.5.111"/>'
+    )
+    condition = condition_value or (
+        '<value xsi:type="CD" code="22298006" codeSystem="2.16.840.1.113883.6.96" displayName="Myocardial infarction"/>'
+    )
+    return (
+        f'<entry><organizer classCode="CLUSTER" moodCode="EVN">{_FAMILY_HISTORY_ORGANIZER_TEMPLATE}'
+        '<statusCode code="completed"/>'
+        f"<subject><relatedSubject classCode=\"PRS\">{relationship_code}<subject/></relatedSubject></subject>"
+        f'<component><observation classCode="OBS" moodCode="EVN">{_FAMILY_HISTORY_OBSERVATION_TEMPLATE}'
+        '<code code="75323-6" codeSystem="2.16.840.1.113883.6.1" displayName="Condition"/>'
+        f"<statusCode code=\"completed\"/>{condition}</observation></component>"
+        "</organizer></entry>"
+    )
+
+
+def _family_history_section(entries: str) -> str:
+    return (
+        f"<component><structuredBody><component><section>{_FAMILY_HISTORY_SECTION_TEMPLATE}"
+        '<code code="10157-6" codeSystem="2.16.840.1.113883.6.1" displayName="Family History"/>'
+        f"<title>Family History</title><text>Some narrative.</text>{entries}"
+        "</section></component></structuredBody></component>"
+    )
+
+
+def test_clean_family_history_produces_no_findings():
+    document = _doc(_patient() + _family_history_section(_family_history_organizer()))
+    report = validate_document(document)
+    assert report.findings == []
+    assert report.is_valid is True
+
+
+def test_family_history_missing_relationship_is_info():
+    entry = _family_history_organizer(relationship='<code nullFlavor="UNK"/>')
+    document = _doc(_patient() + _family_history_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.family-history-missing-relationship")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_family_history_missing_condition_code_is_info():
+    entry = _family_history_organizer(condition_value='<value xsi:type="CD" nullFlavor="UNK"/>')
+    document = _doc(_patient() + _family_history_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.family-history-missing-condition-code")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def _planned_observation_entry(code: str = "", status: str = "active") -> str:
+    observation_code = code or '<code code="62959-2" codeSystem="2.16.840.1.113883.6.1" displayName="Colonoscopy"/>'
+    return (
+        f'<entry><observation classCode="OBS" moodCode="RQO">{_PLANNED_OBSERVATION_TEMPLATE}'
+        f'{observation_code}<statusCode code="{status}"/>'
+        '<effectiveTime><center value="20260901"/></effectiveTime>'
+        "</observation></entry>"
+    )
+
+
+def _plan_of_treatment_section(entries: str) -> str:
+    return (
+        f"<component><structuredBody><component><section>{_PLAN_OF_TREATMENT_SECTION_TEMPLATE}"
+        '<code code="18776-5" codeSystem="2.16.840.1.113883.6.1" displayName="Plan of Treatment"/>'
+        f"<title>Plan of Care</title><text>Some narrative.</text>{entries}"
+        "</section></component></structuredBody></component>"
+    )
+
+
+def test_clean_plan_of_treatment_produces_no_findings():
+    document = _doc(_patient() + _plan_of_treatment_section(_planned_observation_entry()))
+    report = validate_document(document)
+    assert report.findings == []
+    assert report.is_valid is True
+
+
+def test_plan_of_treatment_missing_code_is_info():
+    entry = _planned_observation_entry(code='<code nullFlavor="UNK"/>')
+    document = _doc(_patient() + _plan_of_treatment_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.plan-of-treatment-missing-code")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_plan_of_treatment_status_unrecognized_is_info():
+    entry = _planned_observation_entry(status="new")
+    document = _doc(_patient() + _plan_of_treatment_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.plan-of-treatment-status-unrecognized")
+    assert finding.severity == "info"
+    assert report.is_valid is True
 
 
 def test_unregistered_document_type_is_info():

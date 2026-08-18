@@ -128,7 +128,10 @@
         <!-- Plan of Treatment Section - narrative table shape (this app's
              own narrative extraction must preserve the row/column
              association, not flatten it into one unlabeled run) - must
-             convert to a DocumentReference+Binary too. -->
+             convert to a DocumentReference+Binary, plus a structured
+             Planned Observation entry (templateId ...4.44) converting to
+             a CarePlan.activity[] entry too (see
+             app/cda/plan_of_treatment.py). -->
         <section>
           <templateId root="2.16.840.1.113883.10.20.22.2.10"/>
           <code code="18776-5" codeSystem="2.16.840.1.113883.6.1" displayName="Plan of Treatment"/>
@@ -144,6 +147,14 @@
               </tbody>
             </table>
           </text>
+          <entry>
+            <observation classCode="OBS" moodCode="RQO">
+              <templateId root="2.16.840.1.113883.10.20.22.4.44" extension="2014-06-09"/>
+              <code code="185389009" codeSystem="2.16.840.1.113883.6.96" displayName="Follow-up visit"/>
+              <statusCode code="active"/>
+              <effectiveTime><center value="20260812"/></effectiveTime>
+            </observation>
+          </entry>
         </section>
       </component>
     </structuredBody>

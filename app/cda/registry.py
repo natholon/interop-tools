@@ -26,13 +26,16 @@ from fhir.resources.R4B.resource import Resource
 from app.cda import (
     allergies,
     discharge_medications,
+    family_history,
     hospital_discharge_diagnosis,
     immunizations,
     medications,
     narrative_sections,
+    plan_of_treatment,
     problems,
     procedures,
     results,
+    social_history,
     vitals,
 )
 from app.cda.base import CdaDocumentBuilder
@@ -67,6 +70,15 @@ SECTION_BUILDERS: dict[str, Callable[..., list[Resource]]] = {
         template_id: narrative_sections.build_narrative_document_reference
         for template_id in narrative_sections.ALL_TEMPLATE_IDS
     },
+    # Three of the twelve narrative-only templateIds above are overridden
+    # here with a combined builder (narrative DocumentReference+Binary
+    # *plus* real structured resources) - dict-literal key ordering means
+    # these three entries win over their own narrative-only counterparts
+    # already unpacked above. See each module's own docstring for its real
+    # structured-entry shape and target FHIR resource.
+    social_history.SECTION_TEMPLATE_ID: social_history.build_social_history_resources,
+    family_history.SECTION_TEMPLATE_ID: family_history.build_family_history_resources,
+    plan_of_treatment.SECTION_TEMPLATE_ID: plan_of_treatment.build_plan_of_treatment_resources,
 }
 
 _DOCUMENT_BUILDERS: dict[str, CdaDocumentBuilder] = {

@@ -33,6 +33,9 @@ from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.discharge_medications import DISCHARGE_MEDICATION_ACT_TEMPLATE_ID
 from app.cda.discharge_medications import SECTION_TEMPLATE_ID as DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
+from app.cda.family_history import ORGANIZER_TEMPLATE_ID as FAMILY_HISTORY_ORGANIZER_TEMPLATE_ID
+from app.cda.family_history import OBSERVATION_TEMPLATE_ID as FAMILY_HISTORY_OBSERVATION_TEMPLATE_ID
+from app.cda.family_history import SECTION_TEMPLATE_ID as FAMILY_HISTORY_SECTION_TEMPLATE_ID
 from app.cda.history_and_physical import HISTORY_AND_PHYSICAL_TEMPLATE_ID
 from app.cda.hospital_discharge_diagnosis import HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID
 from app.cda.hospital_discharge_diagnosis import (
@@ -45,6 +48,9 @@ from app.cda.medications import MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP as M
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.narrative_sections import ALL_TEMPLATE_IDS as NARRATIVE_SECTION_TEMPLATE_IDS, extract_narrative_text
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
+from app.cda.plan_of_treatment import PLANNED_OBSERVATION_TEMPLATE_ID, PLANNED_PROCEDURE_TEMPLATE_ID
+from app.cda.plan_of_treatment import SECTION_TEMPLATE_ID as PLAN_OF_TREATMENT_SECTION_TEMPLATE_ID
+from app.cda.plan_of_treatment import STATUS_MAP as PLAN_OF_TREATMENT_STATUS_MAP
 from app.cda.problems import CONCERN_ACT_TEMPLATE_ID, PROBLEM_OBSERVATION_TEMPLATE_ID
 from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
 from app.cda.procedures import PROCEDURE_TEMPLATE_ID, STATUS_MAP as PROCEDURE_STATUS_MAP
@@ -57,6 +63,9 @@ from app.cda.results import OBSERVATION_TEMPLATE_ID as RESULT_OBSERVATION_TEMPLA
 from app.cda.results import SECTION_TEMPLATE_ID as RESULTS_SECTION_TEMPLATE_ID
 from app.cda.results import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as RESULTS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
 from app.cda.results import STATUS_MAP as RESULT_STATUS_MAP
+from app.cda.social_history import OBSERVATION_TEMPLATE_ID as SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID
+from app.cda.social_history import SECTION_TEMPLATE_ID as SOCIAL_HISTORY_SECTION_TEMPLATE_ID
+from app.cda.social_history import SMOKING_STATUS_TEMPLATE_ID
 from app.cda.vitals import ORGANIZER_TEMPLATE_ID as VITAL_SIGNS_ORGANIZER_TEMPLATE_ID
 from app.cda.vitals import OBSERVATION_TEMPLATE_ID as VITAL_SIGN_OBSERVATION_TEMPLATE_ID
 from app.cda.vitals import SECTION_TEMPLATE_ID as VITALS_SECTION_TEMPLATE_ID
@@ -145,6 +154,18 @@ def _find_procedures_section(document):
 
 def _find_hospital_discharge_diagnosis_section(document):
     return _find_section(document, HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID)
+
+
+def _find_social_history_section(document):
+    return _find_section(document, SOCIAL_HISTORY_SECTION_TEMPLATE_ID)
+
+
+def _find_family_history_section(document):
+    return _find_section(document, FAMILY_HISTORY_SECTION_TEMPLATE_ID)
+
+
+def _find_plan_of_treatment_section(document):
+    return _find_section(document, PLAN_OF_TREATMENT_SECTION_TEMPLATE_ID)
 
 
 def _find_discharge_medications_section(document):
@@ -766,6 +787,135 @@ def _rule_procedures(section, now: datetime) -> list[ValidationFinding]:
     return findings
 
 
+def _iter_social_history_observations(section):
+    """Yield each Social History Observation - either the Smoking-Status-
+    specific templateId or the generic one - via the same walk
+    app.cda.social_history.build_social_history_resources() uses, so
+    validation can never see a different entry set than conversion does."""
+    for entry in find_all(section, "entry"):
+        observation = find_child(entry, "observation")
+        if observation is None:
+            continue
+        if has_template_id(observation, SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID) or has_template_id(
+            observation, SMOKING_STATUS_TEMPLATE_ID
+        ):
+            yield observation
+
+
+def _rule_social_history(section, now: datetime) -> list[ValidationFinding]:
+    findings = []
+    for observation in _iter_social_history_observations(section):
+        if build_codeable_concept_from_cd(find_child(observation, "code")) is None:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.social-history-missing-code",
+                    segment="SocialHistory/.../observation/code",
+                    message="A Social History Observation has no resolvable coded value - the converter will silently skip this entry.",
+                )
+            )
+            continue
+
+        occurrence, _ = ivl_ts_bounds(find_child(observation, "effectiveTime"))
+        occurrence_dt = parse_comparable_datetime(occurrence) if occurrence else None
+        if occurrence_dt is not None and not_in_future(occurrence, now) is False:
+            findings.append(
+                ValidationFinding(
+                    severity="warning",
+                    rule_id="cda.social-history-effective-time-in-future",
+                    segment="SocialHistory/.../observation/effectiveTime",
+                    message="A Social History Observation's effective time is in the future.",
+                )
+            )
+    return findings
+
+
+def _iter_family_history_organizers(section):
+    """Yield each Family History Organizer via the same walk
+    app.cda.family_history.build_family_history_resources() uses, so
+    validation can never see a different entry set than conversion does."""
+    for entry in find_all(section, "entry"):
+        organizer = find_child(entry, "organizer")
+        if organizer is None or not has_template_id(organizer, FAMILY_HISTORY_ORGANIZER_TEMPLATE_ID):
+            continue
+        yield organizer
+
+
+def _rule_family_history(section) -> list[ValidationFinding]:
+    findings = []
+    for organizer in _iter_family_history_organizers(section):
+        subject = find_child(organizer, "subject")
+        related_subject = find_child(subject, "relatedSubject") if subject is not None else None
+        relationship_code = find_child(related_subject, "code") if related_subject is not None else None
+        if related_subject is None or build_codeable_concept_from_cd(relationship_code) is None:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.family-history-missing-relationship",
+                    segment="FamilyHistory/.../organizer/subject/relatedSubject/code",
+                    message="A Family History Organizer has no resolvable relationship code - the converter will silently skip this entry.",
+                )
+            )
+            continue
+
+        for component in find_all(organizer, "component"):
+            observation = find_child(component, "observation")
+            if observation is None or not has_template_id(observation, FAMILY_HISTORY_OBSERVATION_TEMPLATE_ID):
+                continue
+            if build_codeable_concept_from_cd(find_child(observation, "value")) is None:
+                findings.append(
+                    ValidationFinding(
+                        severity="info",
+                        rule_id="cda.family-history-missing-condition-code",
+                        segment="FamilyHistory/.../organizer/component/observation/value",
+                        message="A Family History Observation has no resolvable diagnosis in its own /value - the converter will silently skip this condition entry.",
+                    )
+                )
+    return findings
+
+
+def _iter_plan_of_treatment_entries(section):
+    """Yield each (entry_tag, element) pair for a recognized Planned
+    Observation/Planned Procedure entry, via the same walk
+    app.cda.plan_of_treatment.build_plan_of_treatment_resources() uses, so
+    validation can never see a different entry set than conversion does."""
+    for entry in find_all(section, "entry"):
+        for entry_tag, template_id in (("observation", PLANNED_OBSERVATION_TEMPLATE_ID), ("procedure", PLANNED_PROCEDURE_TEMPLATE_ID)):
+            planned_element = find_child(entry, entry_tag)
+            if planned_element is None or not has_template_id(planned_element, template_id):
+                continue
+            yield entry_tag, planned_element
+            break
+
+
+def _rule_plan_of_treatment(section) -> list[ValidationFinding]:
+    findings = []
+    for entry_tag, planned_element in _iter_plan_of_treatment_entries(section):
+        if build_codeable_concept_from_cd(find_child(planned_element, "code")) is None:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.plan-of-treatment-missing-code",
+                    segment=f"PlanOfTreatment/.../{entry_tag}/code",
+                    message="A planned activity entry has no resolvable coded value - the converter will silently skip this entry.",
+                )
+            )
+            continue
+
+        status_element = find_child(planned_element, "statusCode")
+        status_code = (status_element.get("code") or "").strip().lower() if status_element is not None else ""
+        if status_code and status_code not in PLAN_OF_TREATMENT_STATUS_MAP:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.plan-of-treatment-status-unrecognized",
+                    segment=f"PlanOfTreatment/.../{entry_tag}/statusCode",
+                    message=f"statusCode {status_code!r} is not recognized - the converter will silently default to 'unknown'.",
+                )
+            )
+    return findings
+
+
 def _iter_hospital_discharge_diagnosis_observations(section):
     """Yield each Problem Observation nested under a Hospital Discharge
     Diagnosis Act, via the same walk
@@ -957,6 +1107,18 @@ def validate_document(document) -> ValidationReport:
     discharge_medications_section = _find_discharge_medications_section(document)
     if discharge_medications_section is not None:
         findings.extend(_rule_discharge_medications(discharge_medications_section, now))
+
+    social_history_section = _find_social_history_section(document)
+    if social_history_section is not None:
+        findings.extend(_rule_social_history(social_history_section, now))
+
+    family_history_section = _find_family_history_section(document)
+    if family_history_section is not None:
+        findings.extend(_rule_family_history(family_history_section))
+
+    plan_of_treatment_section = _find_plan_of_treatment_section(document)
+    if plan_of_treatment_section is not None:
+        findings.extend(_rule_plan_of_treatment(plan_of_treatment_section))
 
     findings.extend(_rule_narrative_sections(document))
 

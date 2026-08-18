@@ -54,6 +54,9 @@ from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_T
 from app.cda.immunizations import STATUS_MAP as IMMUNIZATION_STATUS_MAP
 from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
+from app.cda.family_history import AGE_OBSERVATION_TEMPLATE_ID, DEATH_OBSERVATION_TEMPLATE_ID
+from app.cda.family_history import ORGANIZER_TEMPLATE_ID as FAMILY_HISTORY_ORGANIZER_TEMPLATE_ID
+from app.cda.family_history import OBSERVATION_TEMPLATE_ID as FAMILY_HISTORY_OBSERVATION_TEMPLATE_ID
 from app.cda.narrative_sections import (
     ASSESSMENT_TEMPLATE_ID,
     FAMILY_HISTORY_TEMPLATE_ID,
@@ -67,6 +70,9 @@ from app.cda.narrative_sections import (
     SOCIAL_HISTORY_TEMPLATE_ID,
 )
 from app.cda.parser import parse_document
+from app.cda.plan_of_treatment import PLANNED_OBSERVATION_TEMPLATE_ID, PLANNED_PROCEDURE_TEMPLATE_ID
+from app.cda.social_history import OBSERVATION_TEMPLATE_ID as SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID
+from app.cda.social_history import SMOKING_STATUS_TEMPLATE_ID
 from app.cda.problems import (
     CONCERN_ACT_TEMPLATE_ID,
     PROBLEM_OBSERVATION_TEMPLATE_ID,
@@ -919,9 +925,36 @@ _PLAN_OF_TREATMENT_ROWS = [
     ("Complete prescribed medication course", "As directed"),
 ]
 
+# Structured-entry pools for Social History/Family History/Plan of
+# Treatment (see app/cda/social_history.py/family_history.py/
+# plan_of_treatment.py) - each entry's own /code, not the narrative text
+# pools above, direct fuzz coverage of the structured-entry parsing
+# alongside the narrative one every generated document already exercises.
+_SMOKING_STATUS_VALUES = [
+    ("266919005", "Never smoker"),
+    ("8517006", "Former smoker"),
+    ("449868002", "Current every day smoker"),
+]
+_FAMILY_RELATIONSHIPS = [
+    ("FTH", "father"),
+    ("MTH", "mother"),
+    ("BRO", "brother"),
+    ("SIS", "sister"),
+]
+_PLANNED_OBSERVATION_CODES = [
+    ("62959-2", "Colonoscopy"),
+    ("185389009", "Follow-up visit"),
+]
+
 
 def _random_narrative_section(
-    rng: random.Random, template_id: str, code: str, code_display: str, title: str, text_options: list[str]
+    rng: random.Random,
+    template_id: str,
+    code: str,
+    code_display: str,
+    title: str,
+    text_options: list[str],
+    extra_entries: str = "",
 ) -> str:
     """A plain-paragraph narrative section - the shape Hospital Course/
     Reason for Visit/History of Present Illness/Review of Systems/General
@@ -930,12 +963,16 @@ def _random_narrative_section(
     docstring). Always returns real narrative text (this app's own
     established "guarantee convertibility by construction" contract) -
     presence/absence of the whole *section* is decided by the caller via
-    maybe(), not by this function returning None."""
+    maybe(), not by this function returning None. `extra_entries` (default
+    "", every existing caller unaffected) is real structured `<entry>` XML
+    - only Family History's own caller passes one, direct fuzz coverage of
+    app/cda/family_history.py's structured-entry parsing alongside the
+    narrative text this function always produces."""
     text = rng.choice(text_options)
     return (
         f'<component><section><templateId root="{template_id}"/>'
         f'<code code="{code}" codeSystem="2.16.840.1.113883.6.1" displayName="{code_display}"/>'
-        f"<title>{title}</title><text><paragraph>{text}</paragraph></text></section></component>"
+        f"<title>{title}</title><text><paragraph>{text}</paragraph></text>{extra_entries}</section></component>"
     )
 
 
@@ -961,6 +998,7 @@ def _random_table_narrative_section(
     title: str,
     header_cells: tuple[str, str],
     row_pool: list[tuple[str, str]],
+    extra_entries: str = "",
 ) -> str:
     """A `<table>` narrative section - the shape Social History/Family
     History/Plan of Treatment commonly use in real documents (see
@@ -968,7 +1006,11 @@ def _random_table_narrative_section(
     for why this app's own narrative extraction has to be table-aware at
     all). Two rows, direct fuzz coverage of the row/column-preserving
     extraction path every generated Discharge Summary/History and Physical
-    now exercises."""
+    now exercises. `extra_entries` (default "", every existing caller
+    unaffected) is real structured `<entry>` XML - Social History's and
+    Plan of Treatment's own callers each pass one, direct fuzz coverage of
+    app/cda/social_history.py's/plan_of_treatment.py's structured-entry
+    parsing alongside the narrative table this function always produces."""
     rows = rng.sample(row_pool, k=min(2, len(row_pool)))
     header = f"<tr><th>{header_cells[0]}</th><th>{header_cells[1]}</th></tr>"
     body = "".join(f"<tr><td>{left}</td><td>{right}</td></tr>" for left, right in rows)
@@ -976,7 +1018,125 @@ def _random_table_narrative_section(
     return (
         f'<component><section><templateId root="{template_id}"/>'
         f'<code code="{code}" codeSystem="2.16.840.1.113883.6.1" displayName="{code_display}"/>'
-        f"<title>{title}</title><text>{table}</text></section></component>"
+        f"<title>{title}</title><text>{table}</text>{extra_entries}</section></component>"
+    )
+
+
+def _random_social_history_entry(rng: random.Random) -> str:
+    """A structured Social History Observation entry (see
+    app/cda/social_history.py) - direct fuzz coverage of the structured-
+    entry parsing alongside the narrative text every generated Social
+    History section already carries. Splits between the Smoking-Status-
+    specific templateId and the generic Social History Observation one,
+    exercising both templateIds build_social_history_resources()
+    recognizes."""
+    point_in_time, _ = random_time_range(rng, min_days=-400, max_days=5)
+    effective_time = f'<effectiveTime value="{format_hl7_datetime(point_in_time)[:8]}"/>'
+    if maybe(rng, 0.6):
+        code, display = rng.choice(_SMOKING_STATUS_VALUES)
+        return (
+            f'<entry><observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{SMOKING_STATUS_TEMPLATE_ID}"/>'
+            '<code code="72166-2" codeSystem="2.16.840.1.113883.6.1" displayName="Tobacco smoking status NHIS"/>'
+            f'<statusCode code="completed"/>{effective_time}'
+            f'<value xsi:type="CD" code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
+            "</observation></entry>"
+        )
+    return (
+        f'<entry><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID}"/>'
+        '<code code="160573003" codeSystem="2.16.840.1.113883.6.96" displayName="Alcohol intake"/>'
+        f'<statusCode code="completed"/>{effective_time}'
+        f'<value xsi:type="PQ" value="{rng.randint(0, 14)}" unit="/wk"/>'
+        "</observation></entry>"
+    )
+
+
+def _random_family_history_entry(rng: random.Random) -> str:
+    """A structured Family History Organizer entry (see
+    app/cda/family_history.py) - one relative, one condition, with the
+    Age Observation and Family History Death Observation nested
+    entryRelationships, plus the relative's own sdtc:deceasedInd/
+    deceasedTime extension, each independently maybe()-gated - direct fuzz
+    coverage of every branch _build_condition/_build_family_member_history
+    needs to distinguish."""
+    relationship_code, relationship_display = rng.choice(_FAMILY_RELATIONSHIPS)
+    condition_code, condition_display = rng.choice(_PROBLEM_CODES)
+    sex = random_sex(rng)
+    gender = f'<administrativeGenderCode code="{sex}" codeSystem="2.16.840.1.113883.5.1"/>' if maybe(rng, 0.6) else ""
+
+    contributed_to_death = maybe(rng, 0.2)
+    death_relationship = ""
+    deceased_extension = ""
+    if contributed_to_death:
+        death_relationship = (
+            '<entryRelationship typeCode="CAUS"><observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{DEATH_OBSERVATION_TEMPLATE_ID}"/>'
+            '<code code="ASSERTION" codeSystem="2.16.840.1.113883.5.4"/><statusCode code="completed"/>'
+            '<value xsi:type="CD" code="419099009" codeSystem="2.16.840.1.113883.6.96" displayName="Dead"/>'
+            "</observation></entryRelationship>"
+        )
+        # Direct fuzz coverage of _build_family_member_history's own
+        # deceasedDate-over-deceasedBoolean choice-type preference (see
+        # that function's own docstring) - a real deceasedTime is present
+        # ~70% of the time contributed_to_death fires, the rest exercising
+        # the deceasedInd-with-no-date fallback branch instead.
+        deceased_extension = '<sdtc:deceasedInd value="true"/>'
+        if maybe(rng, 0.7):
+            deceased_extension += f'<sdtc:deceasedTime value="{rng.randint(1950, 2020)}"/>'
+
+    age_relationship = ""
+    if maybe(rng, 0.6):
+        age_relationship = (
+            '<entryRelationship typeCode="SUBJ" inversionInd="true"><observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{AGE_OBSERVATION_TEMPLATE_ID}"/>'
+            '<code code="445518008" codeSystem="2.16.840.1.113883.6.96" displayName="Age At Onset"/>'
+            f'<statusCode code="completed"/><value xsi:type="PQ" value="{rng.randint(20, 90)}" unit="a"/>'
+            "</observation></entryRelationship>"
+        )
+
+    return (
+        f'<entry><organizer classCode="CLUSTER" moodCode="EVN">'
+        f'<templateId root="{FAMILY_HISTORY_ORGANIZER_TEMPLATE_ID}"/><statusCode code="completed"/>'
+        '<subject><relatedSubject classCode="PRS" xmlns:sdtc="urn:hl7-org:sdtc">'
+        f'<code code="{relationship_code}" displayName="{relationship_display}" codeSystemName="HL7 FamilyMember" codeSystem="2.16.840.1.113883.5.111"/>'
+        f"<subject>{gender}{deceased_extension}</subject>"
+        "</relatedSubject></subject>"
+        '<component><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{FAMILY_HISTORY_OBSERVATION_TEMPLATE_ID}"/>'
+        '<code code="75323-6" codeSystem="2.16.840.1.113883.6.1" displayName="Condition"/>'
+        '<statusCode code="completed"/>'
+        f'<value xsi:type="CD" code="{condition_code}" codeSystem="2.16.840.1.113883.6.96" displayName="{condition_display}"/>'
+        f"{death_relationship}{age_relationship}"
+        "</observation></component>"
+        "</organizer></entry>"
+    )
+
+
+def _random_plan_of_treatment_entry(rng: random.Random) -> str:
+    """A structured Planned Observation or Planned Procedure entry (see
+    app/cda/plan_of_treatment.py) - splits between the two recognized
+    entry shapes, direct fuzz coverage of both."""
+    point_in_time, _ = random_time_range(rng, min_days=1, max_days=90)
+    status_code = rng.choice(("active", "completed", "cancelled", "suspended")) if maybe(rng, 0.85) else "new"
+    if maybe(rng, 0.5):
+        code, display = rng.choice(_PLANNED_OBSERVATION_CODES)
+        return (
+            f'<entry><observation classCode="OBS" moodCode="RQO">'
+            f'<templateId root="{PLANNED_OBSERVATION_TEMPLATE_ID}"/>'
+            f'<code code="{code}" codeSystem="2.16.840.1.113883.6.1" displayName="{display}"/>'
+            f'<statusCode code="{status_code}"/>'
+            f'<effectiveTime><center value="{format_hl7_datetime(point_in_time)[:8]}"/></effectiveTime>'
+            "</observation></entry>"
+        )
+    code, display = rng.choice(_PROCEDURE_CODES)
+    return (
+        f'<entry><procedure classCode="PROC" moodCode="RQO">'
+        f'<templateId root="{PLANNED_PROCEDURE_TEMPLATE_ID}"/>'
+        f'<code code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
+        f'<statusCode code="{status_code}"/>'
+        f'<effectiveTime value="{format_hl7_datetime(point_in_time)[:8]}"/>'
+        "</procedure></entry>"
     )
 
 
@@ -991,6 +1151,7 @@ def _random_hospital_course_section(rng: random.Random) -> str | None:
 def _random_plan_of_treatment_section(rng: random.Random) -> str | None:
     if not maybe(rng, 0.8):
         return None
+    entries = _random_plan_of_treatment_entry(rng) if maybe(rng, 0.6) else ""
     return _random_table_narrative_section(
         rng,
         PLAN_OF_TREATMENT_TEMPLATE_ID,
@@ -999,6 +1160,7 @@ def _random_plan_of_treatment_section(rng: random.Random) -> str | None:
         "Plan of Care",
         ("Planned Activity", "Timeframe"),
         _PLAN_OF_TREATMENT_ROWS,
+        extra_entries=entries,
     )
 
 
@@ -1044,6 +1206,7 @@ def _random_hp_narrative_sections(rng: random.Random) -> str:
             rng, ASSESSMENT_TEMPLATE_ID, "51848-0", "Assessment", "Assessment", _ASSESSMENT_ITEMS
         )
     if maybe(rng, 0.7):
+        social_history_entries = _random_social_history_entry(rng) if maybe(rng, 0.6) else ""
         sections += _random_table_narrative_section(
             rng,
             SOCIAL_HISTORY_TEMPLATE_ID,
@@ -1052,10 +1215,18 @@ def _random_hp_narrative_sections(rng: random.Random) -> str:
             "Social History",
             ("Social History Element", "Description"),
             _SOCIAL_HISTORY_ROWS,
+            extra_entries=social_history_entries,
         )
     if maybe(rng, 0.7):
+        family_history_entries = _random_family_history_entry(rng) if maybe(rng, 0.6) else ""
         sections += _random_narrative_section(
-            rng, FAMILY_HISTORY_TEMPLATE_ID, "10157-6", "Family history", "Family History", _FAMILY_HISTORY_TEXTS
+            rng,
+            FAMILY_HISTORY_TEMPLATE_ID,
+            "10157-6",
+            "Family history",
+            "Family History",
+            _FAMILY_HISTORY_TEXTS,
+            extra_entries=family_history_entries,
         )
     return sections
 

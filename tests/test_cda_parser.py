@@ -157,5 +157,13 @@ def test_ivl_ts_bounds_null_flavor_returns_none_none():
     assert ivl_ts_bounds(find_child(root, "effectiveTime")) == (None, None)
 
 
+def test_ivl_ts_bounds_center_returns_equal_bounds():
+    # The fourth legal IVL_TS shape - confirmed against a real fetched HL7
+    # C-CDA-Examples Plan of Care Activity Observation, see
+    # app/cda/plan_of_treatment.py.
+    root = parse_document(_doc("<effectiveTime><center value='20141012'/></effectiveTime>"))
+    assert ivl_ts_bounds(find_child(root, "effectiveTime")) == ("20141012", "20141012")
+
+
 def test_ivl_ts_bounds_returns_none_none_for_none_element():
     assert ivl_ts_bounds(None) == (None, None)

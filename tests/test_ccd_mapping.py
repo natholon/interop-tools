@@ -348,7 +348,9 @@ def test_discharge_summary_maps_header_and_all_six_of_its_sections():
     # app/cda/discharge_medications.py) - both must convert now, alongside
     # the plain Problems-shaped Condition. Hospital Course and Plan of
     # Treatment are narrative-only sections that each produce a
-    # DocumentReference+Binary pair (see app/cda/narrative_sections.py).
+    # DocumentReference+Binary pair (see app/cda/narrative_sections.py) -
+    # Plan of Treatment's own structured Planned Observation entry also
+    # produces a real CarePlan (see app/cda/plan_of_treatment.py).
     assert set(entries.keys()) == {
         "Patient",
         "Encounter",
@@ -356,6 +358,7 @@ def test_discharge_summary_maps_header_and_all_six_of_its_sections():
         "MedicationRequest",
         "DocumentReference",
         "Binary",
+        "CarePlan",
     }
     conditions = {c.resource.code.coding[0].display: c.resource for c in entries["Condition"]}
     assert set(conditions) == {"Hypertensive disorder", "Community-acquired pneumonia"}
@@ -391,6 +394,18 @@ def test_discharge_summary_maps_header_and_all_six_of_its_sections():
     assert "Planned Activity | Planned Date" in plan_text
     assert "Follow up with primary care physician | Aug 12, 2026" in plan_text
 
+    # The section's own structured Planned Observation entry produces a
+    # real CarePlan alongside the narrative DocumentReference+Binary - both
+    # representations coexist (see app/cda/plan_of_treatment.py).
+    care_plan = entries["CarePlan"][0].resource
+    assert care_plan.status == "active"
+    assert care_plan.intent == "plan"
+    assert len(care_plan.activity) == 1
+    activity_detail = care_plan.activity[0].detail
+    assert activity_detail.code.coding[0].display == "Follow-up visit"
+    assert activity_detail.status == "scheduled"
+    assert activity_detail.kind == "ServiceRequest"
+
 
 def test_history_and_physical_maps_header_recognized_section_and_all_nine_narrative_sections():
     bundle = convert_cda_to_bundle(read_fixture("history_and_physical_basic.xml"))
@@ -402,11 +417,48 @@ def test_history_and_physical_maps_header_recognized_section_and_all_nine_narrat
     # sections - each now converts to its own DocumentReference+Binary pair
     # (see app/cda/narrative_sections.py) - alongside the Procedures section
     # (using the "entries optional" templateId, the exact shape a real
-    # official HL7 History and Physical example was found using).
-    assert set(entries.keys()) == {"Patient", "Procedure", "DocumentReference", "Binary"}
+    # official HL7 History and Physical example was found using). Social
+    # History's/Family History's/Plan of Treatment's own structured entries
+    # also produce a real Observation/FamilyMemberHistory/CarePlan
+    # alongside their narrative pair (see app/cda/social_history.py/
+    # family_history.py/plan_of_treatment.py).
+    assert set(entries.keys()) == {
+        "Patient",
+        "Procedure",
+        "DocumentReference",
+        "Binary",
+        "Observation",
+        "FamilyMemberHistory",
+        "CarePlan",
+    }
     procedure = entries["Procedure"][0].resource
     assert procedure.code.coding[0].display == "Knee arthroscopy"
     assert procedure.status == "completed"
+
+    smoking_status = entries["Observation"][0].resource
+    assert smoking_status.code.coding[0].display == "Tobacco smoking status NHIS"
+    assert smoking_status.category[0].coding[0].code == "social-history"
+    assert smoking_status.status == "final"
+    assert smoking_status.valueCodeableConcept.coding[0].display == "Never smoker"
+
+    family_member_history = entries["FamilyMemberHistory"][0].resource
+    assert family_member_history.relationship.coding[0].code == "FTH"
+    assert family_member_history.sex.coding[0].code == "M"
+    assert family_member_history.deceasedDate == "1998"
+    assert len(family_member_history.condition) == 1
+    condition = family_member_history.condition[0]
+    assert condition.code.coding[0].display == "Coronary arteriosclerosis"
+    assert condition.onsetAge.value == 58
+    assert condition.onsetAge.unit == "a"
+    assert condition.contributedToDeath is True
+
+    care_plan = entries["CarePlan"][0].resource
+    assert care_plan.status == "active"
+    assert care_plan.intent == "plan"
+    assert len(care_plan.activity) == 1
+    activity_detail = care_plan.activity[0].detail
+    assert activity_detail.code.coding[0].display == "Total knee replacement"
+    assert activity_detail.status == "scheduled"
 
     document_references = entries["DocumentReference"]
     assert len(document_references) == 9
