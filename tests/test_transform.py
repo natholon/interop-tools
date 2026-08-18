@@ -625,8 +625,10 @@ def test_discharge_summary_round_trip_produces_a_convertible_document_again():
     # app/transform/cda_ccd.py::_build_narrative_section now regenerates
     # both on the reverse trip too - see this file's own
     # test_discharge_summary_round_trip_regenerates_narrative_sections for
-    # the dedicated content-fidelity proof.
-    assert {"DocumentReference", "Binary"} <= original_resource_types
+    # the dedicated content-fidelity proof. Plan of Treatment's own
+    # structured Planned Observation entry also produces a real CarePlan
+    # (see app/cda/plan_of_treatment.py) alongside the narrative pair.
+    assert {"DocumentReference", "Binary", "CarePlan"} <= original_resource_types
     original_document_reference_count = sum(
         1 for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference"
     )
@@ -638,7 +640,15 @@ def test_discharge_summary_round_trip_produces_a_convertible_document_again():
 
     round_tripped_bundle = convert_cda_to_bundle(document_text)
     resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
-    assert resource_types == {"Patient", "Encounter", "Condition", "MedicationRequest", "DocumentReference", "Binary"}
+    assert resource_types == {
+        "Patient",
+        "Encounter",
+        "Condition",
+        "MedicationRequest",
+        "DocumentReference",
+        "Binary",
+        "CarePlan",
+    }
     document_reference_count = sum(
         1 for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference"
     )
@@ -779,6 +789,31 @@ def test_discharge_summary_plan_of_treatment_table_flattens_to_paragraphs_and_st
     assert second_binaries[second_binary_id].data.decode("utf-8") == original_text
 
 
+def test_discharge_summary_plan_of_treatment_care_plan_regenerates_as_structured_entry():
+    # The fixture's own structured Planned Observation entry (see
+    # app/cda/plan_of_treatment.py) produces a real CarePlan alongside the
+    # narrative pair - both must survive a full round trip.
+    forward_xml = (FIXTURES / "discharge_summary_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original_care_plan = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "CarePlan")
+
+    document_text = build_message_from_bundle(bundle, "CDA", "DISCHARGESUMMARY", "")
+    # Regenerated as a Planned Observation entry specifically (the
+    # confirmed-primary shape - see _build_care_plan_activity_entry's own
+    # docstring for why this builder can't recover whether the original
+    # was a Planned Observation or Planned Procedure).
+    assert "2.16.840.1.113883.10.20.22.4.44" in document_text
+
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    care_plan = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "CarePlan")
+    assert care_plan.status == "active"
+    assert care_plan.intent == "plan"
+    assert len(care_plan.activity) == len(original_care_plan.activity)
+    assert care_plan.activity[0].detail.code.coding[0].code == original_care_plan.activity[0].detail.code.coding[0].code
+    assert care_plan.activity[0].detail.status == original_care_plan.activity[0].detail.status
+    assert care_plan.activity[0].detail.scheduledString == original_care_plan.activity[0].detail.scheduledString
+
+
 def test_narrative_section_regeneration_skips_document_reference_with_unrecognized_loinc_code():
     # A DocumentReference this app's own forward direction never produces
     # for a C-CDA source (e.g. an MDM-sourced one, with a LOINC code
@@ -829,8 +864,12 @@ def test_history_and_physical_round_trip_produces_a_convertible_document_again()
     # Assessment, Social History, Family History, Plan of Treatment) each
     # convert to a DocumentReference+Binary pair (see app/cda/narrative_
     # sections.py), and app/transform/cda_ccd.py::_build_narrative_section
-    # now regenerates all nine on the reverse trip too.
-    assert {"DocumentReference", "Binary"} <= original_resource_types
+    # now regenerates all nine on the reverse trip too. Social History's/
+    # Family History's/Plan of Treatment's own structured entries also
+    # produce a real Observation/FamilyMemberHistory/CarePlan alongside
+    # their narrative pair (see app/cda/social_history.py/family_history.py/
+    # plan_of_treatment.py).
+    assert {"DocumentReference", "Binary", "Observation", "FamilyMemberHistory", "CarePlan"} <= original_resource_types
     original_document_reference_count = sum(
         1 for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference"
     )
@@ -842,7 +881,15 @@ def test_history_and_physical_round_trip_produces_a_convertible_document_again()
 
     round_tripped_bundle = convert_cda_to_bundle(document_text)
     resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
-    assert resource_types == {"Patient", "Procedure", "DocumentReference", "Binary"}
+    assert resource_types == {
+        "Patient",
+        "Procedure",
+        "DocumentReference",
+        "Binary",
+        "Observation",
+        "FamilyMemberHistory",
+        "CarePlan",
+    }
     document_reference_count = sum(
         1 for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference"
     )
@@ -902,6 +949,43 @@ def test_history_and_physical_round_trip_regenerates_all_nine_narrative_sections
     assert social_history_text == (
         "Social History Element | Description\nTobacco smoking status | Never smoker\nAlcohol use | Occasional"
     )
+
+
+def test_history_and_physical_round_trip_regenerates_structured_social_family_history_and_care_plan():
+    # The fixture's own structured entries for Social History, Family
+    # History, and Plan of Treatment (see app/cda/social_history.py/
+    # family_history.py/plan_of_treatment.py) each produce a real
+    # Observation/FamilyMemberHistory/CarePlan alongside the narrative pair
+    # - all three must survive a full round trip, field values included.
+    forward_xml = (FIXTURES / "history_and_physical_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    original_observation = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Observation")
+    original_history = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "FamilyMemberHistory")
+    original_care_plan = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "CarePlan")
+
+    document_text = build_message_from_bundle(bundle, "CDA", "HISTORYANDPHYSICAL", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+
+    observation = next(
+        e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Observation"
+    )
+    assert observation.code.coding[0].code == original_observation.code.coding[0].code
+    assert observation.category[0].coding[0].code == "social-history"
+    assert observation.valueCodeableConcept.coding[0].code == original_observation.valueCodeableConcept.coding[0].code
+
+    history = next(
+        e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "FamilyMemberHistory"
+    )
+    assert history.relationship.coding[0].code == original_history.relationship.coding[0].code
+    assert history.sex.coding[0].code == original_history.sex.coding[0].code
+    assert str(history.deceasedDate) == str(original_history.deceasedDate)
+    assert history.condition[0].code.coding[0].code == original_history.condition[0].code.coding[0].code
+    assert float(history.condition[0].onsetAge.value) == float(original_history.condition[0].onsetAge.value)
+    assert history.condition[0].contributedToDeath == original_history.condition[0].contributedToDeath
+
+    care_plan = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "CarePlan")
+    assert care_plan.activity[0].detail.code.coding[0].code == original_care_plan.activity[0].detail.code.coding[0].code
+    assert care_plan.activity[0].detail.status == original_care_plan.activity[0].detail.status
 
 
 def test_edi_270_round_trip_with_dependent_produces_a_convertible_interchange_again():

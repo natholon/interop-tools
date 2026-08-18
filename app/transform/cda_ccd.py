@@ -59,8 +59,15 @@ from app.cda.hospital_discharge_diagnosis import CATEGORY_CODE as DISCHARGE_DIAG
 from app.cda.hospital_discharge_diagnosis import CATEGORY_SYSTEM as DISCHARGE_DIAGNOSIS_CATEGORY_SYSTEM
 from app.cda.hospital_discharge_diagnosis import HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID
 from app.cda.hospital_discharge_diagnosis import SECTION_TEMPLATE_ID as HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID
+from app.cda.family_history import AGE_OBSERVATION_TEMPLATE_ID, DEATH_OBSERVATION_TEMPLATE_ID
+from app.cda.family_history import ORGANIZER_TEMPLATE_ID as FAMILY_HISTORY_ORGANIZER_TEMPLATE_ID
+from app.cda.family_history import OBSERVATION_TEMPLATE_ID as FAMILY_HISTORY_OBSERVATION_TEMPLATE_ID
 from app.cda.narrative_sections import CANONICAL_TITLES as NARRATIVE_CANONICAL_TITLES
 from app.cda.narrative_sections import LOINC_TO_TEMPLATE_ID as NARRATIVE_LOINC_TO_TEMPLATE_ID
+from app.cda.plan_of_treatment import PLANNED_OBSERVATION_TEMPLATE_ID
+from app.cda.social_history import CATEGORY_CODE as SOCIAL_HISTORY_CATEGORY_CODE
+from app.cda.social_history import OBSERVATION_TEMPLATE_ID as SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID
+from app.cda.social_history import SMOKING_STATUS_TEMPLATE_ID
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
 from app.transform.common import find_resource, find_resources, format_hl7_date, format_hl7_ts
@@ -123,6 +130,22 @@ _GENDER_TO_CDA_CODE = {"female": "F", "male": "M", "other": "UN"}
 # came from).
 _CLINICAL_STATUS_TO_ACT_STATUS = {"active": "active", "inactive": "suspended", "resolved": "completed"}
 _PLACEHOLDER_ROOT = "2.16.840.1.113883.19.5.99999.1"
+
+# Reverse of app.cda.plan_of_treatment.STATUS_MAP - not a clean bijection
+# (both "aborted"/"cancelled" map forward to "cancelled", both "suspended"/
+# "held" map forward to "on-hold"), so each target value picks one
+# disclosed representative rather than whatever a naive dict-comprehension
+# inversion's key-ordering would produce arbitrarily - the same discipline
+# every other many-to-one STATUS_MAP reversal in this app already
+# establishes (e.g. Results'). "cancelled" prefers its own exact-match
+# source code over "aborted"; "on-hold" has no exact-match candidate on
+# either side, so "suspended" is the disclosed pick over "held".
+_CARE_PLAN_ACTIVITY_STATUS_TO_ACT_STATUS = {
+    "scheduled": "active",
+    "completed": "completed",
+    "cancelled": "cancelled",
+    "on-hold": "suspended",
+}
 
 
 def _esc(value) -> str:
@@ -913,7 +936,192 @@ def _build_procedures_section(procedures) -> str:
     )
 
 
-def _build_narrative_section(document_reference, binaries_by_id: dict) -> str:
+def _is_social_history_observation(observation) -> bool:
+    return bool(
+        observation.category
+        and observation.category[0].coding
+        and observation.category[0].coding[0].code == SOCIAL_HISTORY_CATEGORY_CODE
+    )
+
+
+def _build_social_history_value(observation) -> str:
+    if observation.valueQuantity is not None:
+        unit = f' unit="{_esc(observation.valueQuantity.unit)}"' if observation.valueQuantity.unit else ""
+        return f'<value xsi:type="PQ" value="{observation.valueQuantity.value}"{unit}/>'
+    if observation.valueCodeableConcept is not None and observation.valueCodeableConcept.coding:
+        return f'<value xsi:type="CD" {_build_cd_attrs(observation.valueCodeableConcept.coding[0])}/>'
+    if observation.valueInteger is not None:
+        return f'<value xsi:type="INT" value="{observation.valueInteger}"/>'
+    if observation.valueString is not None:
+        return f'<value xsi:type="ST">{_esc(observation.valueString)}</value>'
+    return ""
+
+
+def _build_social_history_entry(observation) -> str:
+    """Reverses app.cda.social_history._build_social_history_observation.
+    Which of the two recognized templateIds to regenerate is resolved from
+    the coding's own LOINC code (72166-2 -> the Smoking-Status-specific
+    template, matching the forward mapper's own hardcoded code for that
+    template) - not recoverable in general, but this one code is a
+    reliable signal since the forward side only ever emits it from that
+    specific template. .status/.category are never reversed - both are
+    fixed, disclosed literals on the forward side (see that module's own
+    docstring), so this builder regenerates the identical fixed statusCode
+    the template itself requires, not a guess at recovering an
+    unrecoverable source value."""
+    coding = observation.code.coding[0] if observation.code and observation.code.coding else None
+    if coding is None:
+        return ""
+    code_element = f"<code {_build_cd_attrs(coding)}/>"
+    template_id = SMOKING_STATUS_TEMPLATE_ID if coding.code == "72166-2" else SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID
+    effective_time = (
+        f'<effectiveTime value="{format_hl7_ts(observation.effectiveDateTime)}"/>'
+        if observation.effectiveDateTime
+        else ""
+    )
+    value = _build_social_history_value(observation)
+    return (
+        f'<entry><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{template_id}"/>'
+        f"{code_element}"
+        '<statusCode code="completed"/>'
+        f"{effective_time}{value}"
+        "</observation></entry>"
+    )
+
+
+def _build_social_history_entries(observations) -> str:
+    return "".join(
+        entry for o in observations if _is_social_history_observation(o) and (entry := _build_social_history_entry(o))
+    )
+
+
+def _build_family_history_condition(condition) -> str:
+    value = ""
+    if condition.code and condition.code.coding:
+        value = f'<value xsi:type="CD" {_build_cd_attrs(condition.code.coding[0])}/>'
+    age_relationship = ""
+    if condition.onsetAge is not None:
+        unit = _esc(condition.onsetAge.unit) if condition.onsetAge.unit else "a"
+        age_relationship = (
+            '<entryRelationship typeCode="SUBJ" inversionInd="true">'
+            '<observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{AGE_OBSERVATION_TEMPLATE_ID}"/>'
+            '<code code="445518008" codeSystem="2.16.840.1.113883.6.96" displayName="Age At Onset"/>'
+            '<statusCode code="completed"/>'
+            f'<value xsi:type="PQ" value="{condition.onsetAge.value}" unit="{unit}"/>'
+            "</observation></entryRelationship>"
+        )
+    death_relationship = ""
+    if condition.contributedToDeath:
+        death_relationship = (
+            '<entryRelationship typeCode="CAUS">'
+            '<observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{DEATH_OBSERVATION_TEMPLATE_ID}"/>'
+            '<code code="ASSERTION" codeSystem="2.16.840.1.113883.5.4"/>'
+            '<statusCode code="completed"/>'
+            '<value xsi:type="CD" code="419099009" codeSystem="2.16.840.1.113883.6.96" displayName="Dead"/>'
+            "</observation></entryRelationship>"
+        )
+    return (
+        '<component><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{FAMILY_HISTORY_OBSERVATION_TEMPLATE_ID}"/>'
+        '<code code="75323-6" codeSystem="2.16.840.1.113883.6.1" displayName="Condition"/>'
+        '<statusCode code="completed"/>'
+        f"{value}{death_relationship}{age_relationship}"
+        "</observation></component>"
+    )
+
+
+def _build_family_history_entry(history) -> str:
+    """Reverses app.cda.family_history._build_family_member_history.
+    `.status` is never reversed (fixed "completed" per the template
+    itself, the same treatment Social History's own statusCode gets).
+    deceased[x]'s own reverse mirrors the forward choice-type resolution
+    exactly: `.deceasedDate` (whichever precision it carries - format_hl7_
+    date handles a partial-precision string or a full date object the
+    identical way _format_partial_date's own forward output does) implies
+    a real sdtc:deceasedTime plus sdtc:deceasedInd="true"; `.deceasedBoolean`
+    alone reverses to sdtc:deceasedInd only, with no deceasedTime - the
+    same two branches the forward resolver itself distinguishes."""
+    components = "".join(_build_family_history_condition(c) for c in (history.condition or []))
+    if not components:
+        return ""
+    relationship = ""
+    if history.relationship and history.relationship.coding:
+        relationship = f"<code {_build_cd_attrs(history.relationship.coding[0])}/>"
+    gender = ""
+    if history.sex and history.sex.coding:
+        gender = f"<administrativeGenderCode {_build_cd_attrs(history.sex.coding[0])}/>"
+    deceased_extension = ""
+    if history.deceasedDate is not None:
+        deceased_extension = (
+            '<sdtc:deceasedInd value="true"/>'
+            f'<sdtc:deceasedTime value="{format_hl7_date(history.deceasedDate)}"/>'
+        )
+    elif history.deceasedBoolean is not None:
+        deceased_value = "true" if history.deceasedBoolean else "false"
+        deceased_extension = f'<sdtc:deceasedInd value="{deceased_value}"/>'
+    return (
+        '<entry><organizer classCode="CLUSTER" moodCode="EVN">'
+        f'<templateId root="{FAMILY_HISTORY_ORGANIZER_TEMPLATE_ID}"/>'
+        '<statusCode code="completed"/>'
+        '<subject><relatedSubject classCode="PRS" xmlns:sdtc="urn:hl7-org:sdtc">'
+        f"{relationship}<subject>{gender}{deceased_extension}</subject>"
+        "</relatedSubject></subject>"
+        f"{components}"
+        "</organizer></entry>"
+    )
+
+
+def _build_family_history_entries(histories) -> str:
+    return "".join(entry for h in histories if (entry := _build_family_history_entry(h)))
+
+
+def _build_care_plan_activity_entry(activity) -> str:
+    """Reverses app.cda.plan_of_treatment._build_activity_detail.
+    **A genuine, disclosed round-trip ambiguity, not an oversight**:
+    CarePlanActivityDetail.kind is always "ServiceRequest" regardless of
+    whether the source entry was a Planned Observation or a Planned
+    Procedure (see that module's own docstring - both feed the identical
+    fixed kind), so there is no FHIR-side signal telling the two apart -
+    this builder always regenerates the confirmed-primary shape (Planned
+    Observation), the same "pick one disclosed representative, don't
+    guess which one a given resource really came from" precedent this
+    app's every other many-to-one reverse mapping already establishes."""
+    detail = activity.detail
+    if detail is None or not detail.code or not detail.code.coding:
+        return ""
+    code_element = f"<code {_build_cd_attrs(detail.code.coding[0])}/>"
+    status_value = _CARE_PLAN_ACTIVITY_STATUS_TO_ACT_STATUS.get(detail.status)
+    status_element = f'<statusCode code="{status_value}"/>' if status_value else ""
+    effective_time = ""
+    if detail.scheduledPeriod is not None:
+        low = f'<low value="{format_hl7_date(detail.scheduledPeriod.start)}"/>' if detail.scheduledPeriod.start else ""
+        high = f'<high value="{format_hl7_date(detail.scheduledPeriod.end)}"/>' if detail.scheduledPeriod.end else ""
+        if low or high:
+            effective_time = f"<effectiveTime>{low}{high}</effectiveTime>"
+    elif detail.scheduledString:
+        effective_time = f'<effectiveTime value="{format_hl7_date(detail.scheduledString)}"/>'
+    return (
+        '<entry><observation classCode="OBS" moodCode="RQO">'
+        f'<templateId root="{PLANNED_OBSERVATION_TEMPLATE_ID}"/>'
+        f"{code_element}{status_element}{effective_time}"
+        "</observation></entry>"
+    )
+
+
+def _build_plan_of_treatment_entries(care_plans) -> str:
+    entries = []
+    for care_plan in care_plans:
+        for activity in care_plan.activity or []:
+            entry = _build_care_plan_activity_entry(activity)
+            if entry:
+                entries.append(entry)
+    return "".join(entries)
+
+
+def _build_narrative_section(document_reference, binaries_by_id: dict, extra_entries: str = "") -> str:
     """Reverses app.cda.narrative_sections.build_narrative_document_reference
     - the twelve narrative-only Discharge Summary/History and Physical
     sections (Hospital Course, Plan of Treatment, all three Reason for
@@ -977,13 +1185,37 @@ def _build_narrative_section(document_reference, binaries_by_id: dict) -> str:
         f'<component><section><templateId root="{template_id}"/>'
         f'<code code="{_esc(code)}" codeSystem="2.16.840.1.113883.6.1" displayName="{_esc(display)}"/>'
         f"<title>{_esc(title)}</title>"
-        f"<text>{paragraphs}</text>"
+        f"<text>{paragraphs}</text>{extra_entries}"
         "</section></component>"
     )
 
 
-def _build_narrative_sections(document_references, binaries_by_id: dict) -> str:
-    return "".join(_build_narrative_section(dr, binaries_by_id) for dr in document_references)
+# LOINC code -> which structured-entry builder feeds that narrative
+# section's own extra_entries (see _build_narrative_section's own
+# docstring for why these three sections combine a narrative
+# DocumentReference+Binary pair with real structured entries, unlike the
+# other nine which are narrative-only). Keyed the same way
+# NARRATIVE_LOINC_TO_TEMPLATE_ID is, so a DocumentReference's own
+# .type.coding[0].code resolves both which templateId to regenerate AND
+# whether it needs extra structured entries injected.
+_SOCIAL_HISTORY_LOINC = "29762-2"
+_FAMILY_HISTORY_LOINC = "10157-6"
+_PLAN_OF_TREATMENT_LOINC = "18776-5"
+
+
+def _build_narrative_sections(
+    document_references, binaries_by_id: dict, extra_entries_by_loinc: dict[str, str]
+) -> str:
+    parts = []
+    for document_reference in document_references:
+        code = (
+            document_reference.type.coding[0].code
+            if document_reference.type and document_reference.type.coding
+            else None
+        )
+        extra_entries = extra_entries_by_loinc.get(code, "")
+        parts.append(_build_narrative_section(document_reference, binaries_by_id, extra_entries=extra_entries))
+    return "".join(parts)
 
 
 def build_sectioned_document(
@@ -1032,7 +1264,15 @@ def build_sectioned_document(
     produces one), but nothing about resolving them depends on which
     document type is being built, the same "SECTION_BUILDERS itself has no
     document-type awareness" precedent the forward direction already
-    established for these same twelve templateIds."""
+    established for these same twelve templateIds.
+
+    **Three of those twelve additionally get real structured entries
+    injected alongside their narrative pair**: Social History's own
+    category="social-history" Observations, Family History's own
+    FamilyMemberHistory resources, and Plan of Treatment's own CarePlan
+    activities - see `_build_social_history_entries`/`_build_family_history_
+    entries`/`_build_plan_of_treatment_entries`'s own docstrings for each
+    reversal's field mapping and disclosed round-trip ambiguities."""
     patient = find_resource(bundle, "Patient")
     if patient is None:
         raise MappingError("Bundle has no Patient resource - cannot build a CDA document")
@@ -1046,6 +1286,8 @@ def build_sectioned_document(
     procedures = find_resources(bundle, "Procedure")
     document_references = find_resources(bundle, "DocumentReference")
     binaries_by_id = {b.id: b for b in find_resources(bundle, "Binary")}
+    family_member_histories = find_resources(bundle, "FamilyMemberHistory")
+    care_plans = find_resources(bundle, "CarePlan")
 
     document_id = _esc(bundle.identifier.value) if bundle.identifier else "TT000"
     document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
@@ -1066,7 +1308,12 @@ def build_sectioned_document(
     observations_by_id = {o.id: o for o in observations}
     results_section = _build_results_section(diagnostic_reports, observations_by_id)
     procedures_section = _build_procedures_section(procedures)
-    narrative_sections = _build_narrative_sections(document_references, binaries_by_id)
+    extra_entries_by_loinc = {
+        _SOCIAL_HISTORY_LOINC: _build_social_history_entries(observations),
+        _FAMILY_HISTORY_LOINC: _build_family_history_entries(family_member_histories),
+        _PLAN_OF_TREATMENT_LOINC: _build_plan_of_treatment_entries(care_plans),
+    }
+    narrative_sections = _build_narrative_sections(document_references, binaries_by_id, extra_entries_by_loinc)
     sections = (
         f"{hospital_discharge_diagnosis_section}{problems_section}{medications_section}{allergies_section}"
         f"{immunizations_section}{vitals_section}{results_section}{procedures_section}{narrative_sections}"
