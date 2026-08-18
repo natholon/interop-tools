@@ -56,12 +56,17 @@ disclose the special case as a later slice" precedent this app's Vitals/
 Results sections already established for their own deferred grouping
 special cases.
 
-**Provenance instrumentation, bidirectional transform, and new validation
-rules for these sections are all likewise disclosed as deferred, not
-attempted this slice** - every other C-CDA section this app has ever added
-got its own follow-up slice for each of those three pillars, sometimes long
-after the section itself first shipped (see CLAUDE.md's own Data
-Specification section for the C-CDA instrumentation timeline)."""
+**New validation rules for these sections (`cda.narrative-section-missing-
+text`) and provenance instrumentation (`.type`/`.description`/`Binary.data`
+facts) both shipped as immediate follow-up slices** - see
+`app/cda/validation.py`'s and this module's own recorder-aware code for
+each. **Bidirectional transform (regenerating these sections on a FHIR ->
+C-CDA reverse pass) shipped as a third follow-up slice too** - see
+`app/transform/cda_ccd.py::_build_narrative_section`, which resolves which
+of these twelve templateIds to regenerate via `LOINC_TO_TEMPLATE_ID` (this
+module's own reverse lookup, below) keyed off
+`DocumentReference.type.coding[0].code` - the one signal a bare FHIR
+DocumentReference reliably carries back to its real originating section."""
 
 import base64
 import uuid
@@ -121,6 +126,53 @@ ALL_TEMPLATE_IDS = [
     FAMILY_HISTORY_TEMPLATE_ID,
     GENERAL_STATUS_TEMPLATE_ID,
 ]
+
+# Reverse of the templateId->LOINC pairs above - the one real
+# implementation app/transform/cda_ccd.py's own narrative-section
+# regeneration uses to decide which of these twelve templateIds a
+# recovered DocumentReference.type.coding[0].code corresponds to, not a
+# second, independently-drifting copy (the same "one real implementation,
+# not two maintained lists" discipline ALL_TEMPLATE_IDS's own docstring
+# above already established for the forward direction). Every LOINC code
+# here is genuinely distinct, even across the three Reason for Visit/Chief
+# Complaint shapes, so this reverse lookup is unambiguous.
+LOINC_TO_TEMPLATE_ID: dict[str, str] = {
+    "8648-8": HOSPITAL_COURSE_TEMPLATE_ID,
+    "18776-5": PLAN_OF_TREATMENT_TEMPLATE_ID,
+    "46239-0": REASON_FOR_VISIT_CHIEF_COMPLAINT_TEMPLATE_ID,
+    "29299-5": REASON_FOR_VISIT_TEMPLATE_ID,
+    "10154-3": CHIEF_COMPLAINT_TEMPLATE_ID,
+    "10164-2": HISTORY_OF_PRESENT_ILLNESS_TEMPLATE_ID,
+    "29545-1": PHYSICAL_EXAM_TEMPLATE_ID,
+    "51848-0": ASSESSMENT_TEMPLATE_ID,
+    "10187-3": REVIEW_OF_SYSTEMS_TEMPLATE_ID,
+    "29762-2": SOCIAL_HISTORY_TEMPLATE_ID,
+    "10157-6": FAMILY_HISTORY_TEMPLATE_ID,
+    "10210-3": GENERAL_STATUS_TEMPLATE_ID,
+}
+
+# A disclosed fallback title/displayName per templateId, used by the
+# reverse direction only when DocumentReference.description/
+# .type.coding[0].display themselves don't resolve (both are genuinely
+# optional on DocumentReference - build_narrative_document_reference only
+# sets them when <title>/<code displayName> are actually present, unlike
+# the FHIR-required fields every other reverse builder in this app can
+# lean on) - not necessarily the exact original wording, but a real,
+# readable section name rather than a blank one.
+CANONICAL_TITLES: dict[str, str] = {
+    HOSPITAL_COURSE_TEMPLATE_ID: "Hospital Course",
+    PLAN_OF_TREATMENT_TEMPLATE_ID: "Plan of Treatment",
+    REASON_FOR_VISIT_CHIEF_COMPLAINT_TEMPLATE_ID: "Reason for Visit",
+    REASON_FOR_VISIT_TEMPLATE_ID: "Reason for Visit",
+    CHIEF_COMPLAINT_TEMPLATE_ID: "Chief Complaint",
+    HISTORY_OF_PRESENT_ILLNESS_TEMPLATE_ID: "History of Present Illness",
+    PHYSICAL_EXAM_TEMPLATE_ID: "Physical Exam",
+    ASSESSMENT_TEMPLATE_ID: "Assessment",
+    REVIEW_OF_SYSTEMS_TEMPLATE_ID: "Review of Systems",
+    SOCIAL_HISTORY_TEMPLATE_ID: "Social History",
+    FAMILY_HISTORY_TEMPLATE_ID: "Family History",
+    GENERAL_STATUS_TEMPLATE_ID: "General Status",
+}
 
 _TABLE_ROW_TAG = "tr"
 _TABLE_CELL_TAGS = ("th", "td")

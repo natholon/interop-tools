@@ -59,6 +59,8 @@ from app.cda.hospital_discharge_diagnosis import CATEGORY_CODE as DISCHARGE_DIAG
 from app.cda.hospital_discharge_diagnosis import CATEGORY_SYSTEM as DISCHARGE_DIAGNOSIS_CATEGORY_SYSTEM
 from app.cda.hospital_discharge_diagnosis import HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID
 from app.cda.hospital_discharge_diagnosis import SECTION_TEMPLATE_ID as HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID
+from app.cda.narrative_sections import CANONICAL_TITLES as NARRATIVE_CANONICAL_TITLES
+from app.cda.narrative_sections import LOINC_TO_TEMPLATE_ID as NARRATIVE_LOINC_TO_TEMPLATE_ID
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
 from app.transform.common import find_resource, find_resources, format_hl7_date, format_hl7_ts
@@ -911,6 +913,79 @@ def _build_procedures_section(procedures) -> str:
     )
 
 
+def _build_narrative_section(document_reference, binaries_by_id: dict) -> str:
+    """Reverses app.cda.narrative_sections.build_narrative_document_reference
+    - the twelve narrative-only Discharge Summary/History and Physical
+    sections (Hospital Course, Plan of Treatment, all three Reason for
+    Visit/Chief Complaint shapes, History of Present Illness, Physical
+    Exam, Assessment, Review of Systems, Social History, Family History,
+    General Status), each converted forward to a DocumentReference+Binary
+    pair rather than a structured entry (see that module's own docstring
+    for why).
+
+    **Which of the twelve templateIds to regenerate is resolved from
+    DocumentReference.type.coding[0].code alone**, via
+    NARRATIVE_LOINC_TO_TEMPLATE_ID (the reverse of the forward module's own
+    templateId->LOINC table) - the one signal a bare FHIR DocumentReference
+    reliably carries back to its real originating section, the same
+    "resolve the real signal, don't guess from Bundle order" spirit every
+    other cross-cutting resolver in this app already follows. A
+    DocumentReference with no resolvable/recognized LOINC code - never
+    produced by this app's own forward direction, but a hand-built or
+    third-party Bundle legitimately could carry one (e.g. an HL7v2 MDM-
+    sourced DocumentReference, whose own LOINC vocabulary is unrelated) -
+    is silently skipped rather than guessed at, the same "no signal, no way
+    to know which section this belongs to" precedent this app's every other
+    unresolvable-input case already establishes.
+
+    **A genuine, disclosed lossy simplification, distinct from every other
+    reverse mapping in this app**: the forward direction's own
+    `extract_narrative_text` collapses `<paragraph>`/`<list>`/`<table>`
+    shapes all down to one joined, newline-separated plain-text string with
+    no marker distinguishing which original shape produced which line (a
+    table's own row/column structure becomes indistinguishable from an
+    ordinary paragraph run once flattened) - so this reverse builder always
+    regenerates one `<paragraph>` per line, never a `<table>`/`<list>`,
+    regardless of the original section's own shape. This is round-trip
+    *stable* from the second pass onward (re-running the forward extractor
+    over N `<paragraph>` elements rejoins them with the identical newlines,
+    reproducing the exact same Binary.data every time), even though the
+    very first reverse pass can't recover a table's own original visual
+    structure - the same "recoverable content, not recoverable original
+    shape" tradeoff MDM's own OBX-5 join and SIU's own NTE-3 join already
+    disclose for an analogous many-lines-to-one-field forward collapse."""
+    if not document_reference.type or not document_reference.type.coding:
+        return ""
+    code = document_reference.type.coding[0].code
+    template_id = NARRATIVE_LOINC_TO_TEMPLATE_ID.get(code)
+    if not template_id:
+        return ""
+    if not document_reference.content:
+        return ""
+    url = document_reference.content[0].attachment.url or ""
+    binary_id = url[len("urn:uuid:") :] if url.startswith("urn:uuid:") else ""
+    binary = binaries_by_id.get(binary_id)
+    if binary is None or not binary.data:
+        return ""
+
+    narrative_text = binary.data.decode("utf-8")
+    display = document_reference.type.coding[0].display or NARRATIVE_CANONICAL_TITLES.get(template_id, "")
+    title = document_reference.description or NARRATIVE_CANONICAL_TITLES.get(template_id, "")
+    paragraphs = "".join(f"<paragraph>{_esc(line)}</paragraph>" for line in narrative_text.split("\n") if line)
+
+    return (
+        f'<component><section><templateId root="{template_id}"/>'
+        f'<code code="{_esc(code)}" codeSystem="2.16.840.1.113883.6.1" displayName="{_esc(display)}"/>'
+        f"<title>{_esc(title)}</title>"
+        f"<text>{paragraphs}</text>"
+        "</section></component>"
+    )
+
+
+def _build_narrative_sections(document_references, binaries_by_id: dict) -> str:
+    return "".join(_build_narrative_section(dr, binaries_by_id) for dr in document_references)
+
+
 def build_sectioned_document(
     bundle: Bundle,
     template_id: str,
@@ -944,7 +1019,20 @@ def build_sectioned_document(
     docstring, not assumed) - so every `MedicationRequest` in the Bundle
     continues to route into the plain Medications section regardless of
     which document type is being reversed, since there is no FHIR-side
-    signal this builder could reverse even in principle."""
+    signal this builder could reverse even in principle.
+
+    **Also regenerates any of the twelve narrative-only sections** (Hospital
+    Course, Plan of Treatment, Reason for Visit/Chief Complaint, History of
+    Present Illness, Physical Exam, Assessment, Review of Systems, Social
+    History, Family History, General Status) found as a DocumentReference+
+    Binary pair in the Bundle - see `_build_narrative_section`'s own
+    docstring for the full reasoning. Unconditional, not gated by
+    `include_discharge_specific_sections` - `CcdReverseBuilder` itself never
+    encounters one of these in practice (this app's own CCD generator never
+    produces one), but nothing about resolving them depends on which
+    document type is being built, the same "SECTION_BUILDERS itself has no
+    document-type awareness" precedent the forward direction already
+    established for these same twelve templateIds."""
     patient = find_resource(bundle, "Patient")
     if patient is None:
         raise MappingError("Bundle has no Patient resource - cannot build a CDA document")
@@ -956,6 +1044,8 @@ def build_sectioned_document(
     observations = find_resources(bundle, "Observation")
     diagnostic_reports = find_resources(bundle, "DiagnosticReport")
     procedures = find_resources(bundle, "Procedure")
+    document_references = find_resources(bundle, "DocumentReference")
+    binaries_by_id = {b.id: b for b in find_resources(bundle, "Binary")}
 
     document_id = _esc(bundle.identifier.value) if bundle.identifier else "TT000"
     document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
@@ -976,9 +1066,10 @@ def build_sectioned_document(
     observations_by_id = {o.id: o for o in observations}
     results_section = _build_results_section(diagnostic_reports, observations_by_id)
     procedures_section = _build_procedures_section(procedures)
+    narrative_sections = _build_narrative_sections(document_references, binaries_by_id)
     sections = (
         f"{hospital_discharge_diagnosis_section}{problems_section}{medications_section}{allergies_section}"
-        f"{immunizations_section}{vitals_section}{results_section}{procedures_section}"
+        f"{immunizations_section}{vitals_section}{results_section}{procedures_section}{narrative_sections}"
     )
     body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
 

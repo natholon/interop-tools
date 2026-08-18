@@ -1,7 +1,9 @@
+import base64
 from pathlib import Path
 
 import pytest
 from fhir.resources.R4B.appointment import Appointment
+from fhir.resources.R4B.binary import Binary
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
 from fhir.resources.R4B.claim import Claim, ClaimInsurance
 from fhir.resources.R4B.condition import Condition
@@ -618,14 +620,17 @@ def test_discharge_summary_round_trip_produces_a_convertible_document_again():
     assert "Encounter" in original_resource_types
     assert "Condition" in original_resource_types
     assert "MedicationRequest" in original_resource_types
-    # The fixture's own Hospital Course/Plan of Treatment sections now
-    # convert to DocumentReference+Binary (see app/cda/narrative_
-    # sections.py) - a disclosed, deliberate gap in the *reverse* direction
-    # specifically: this reverse builder only regenerates the header + the
-    # seven general-purpose sections plus Hospital Discharge Diagnosis/
-    # Discharge Medications, not narrative-only sections, so these two
-    # resource types are expected to NOT survive the round trip below.
+    # The fixture's own Hospital Course/Plan of Treatment sections convert
+    # to DocumentReference+Binary (see app/cda/narrative_sections.py), and
+    # app/transform/cda_ccd.py::_build_narrative_section now regenerates
+    # both on the reverse trip too - see this file's own
+    # test_discharge_summary_round_trip_regenerates_narrative_sections for
+    # the dedicated content-fidelity proof.
     assert {"DocumentReference", "Binary"} <= original_resource_types
+    original_document_reference_count = sum(
+        1 for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference"
+    )
+    assert original_document_reference_count == 2  # Hospital Course + Plan of Treatment
 
     document_text = build_message_from_bundle(bundle, "CDA", "DISCHARGESUMMARY", "")
     assert document_text.startswith('<?xml version="1.0"')
@@ -633,7 +638,11 @@ def test_discharge_summary_round_trip_produces_a_convertible_document_again():
 
     round_tripped_bundle = convert_cda_to_bundle(document_text)
     resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
-    assert resource_types == {"Patient", "Encounter", "Condition", "MedicationRequest"}
+    assert resource_types == {"Patient", "Encounter", "Condition", "MedicationRequest", "DocumentReference", "Binary"}
+    document_reference_count = sum(
+        1 for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference"
+    )
+    assert document_reference_count == 2
 
     original_encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
     encounter = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Encounter")
@@ -696,6 +705,105 @@ def test_discharge_summary_round_trip_splits_discharge_diagnosis_from_plain_prob
     assert "10183-2" not in document_text  # Discharge Medications section LOINC code - never regenerated
 
 
+def test_discharge_summary_round_trip_regenerates_hospital_course_narrative():
+    # Hospital Course's own real shape (plain mixed text, no <paragraph>
+    # wrapper at all) - the LOINC code, title, and narrative text itself
+    # all round-trip exactly.
+    forward_xml = (FIXTURES / "discharge_summary_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    document_text = build_message_from_bundle(bundle, "CDA", "DISCHARGESUMMARY", "")
+    assert "8648-8" in document_text
+    assert "Hospital Course" in document_text
+    assert "Patient admitted with fever and productive cough" in document_text
+
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    document_references = [
+        e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference"
+    ]
+    binaries = {e.resource.id: e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Binary"}
+    hospital_course_doc = next(d for d in document_references if d.type.coding[0].code == "8648-8")
+    assert hospital_course_doc.description == "Hospital Course"
+    binary_id = hospital_course_doc.content[0].attachment.url[len("urn:uuid:") :]
+    assert binaries[binary_id].data.decode("utf-8") == (
+        "Patient admitted with fever and productive cough, diagnosed with community-acquired "
+        "pneumonia. Treated with IV antibiotics and responded well. Afebrile for 48 hours prior "
+        "to discharge, tolerating oral intake, ambulating without difficulty."
+    )
+
+
+def test_discharge_summary_plan_of_treatment_table_flattens_to_paragraphs_and_stays_stable():
+    # Plan of Treatment's own real shape is a <table> - the row/column
+    # structure isn't recoverable on the reverse trip (see
+    # _build_narrative_section's own docstring), but the flattened,
+    # pipe-joined text content is preserved exactly and stays stable across
+    # a second round trip.
+    forward_xml = (FIXTURES / "discharge_summary_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    document_references = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference"]
+    plan_doc = next(d for d in document_references if d.type.coding[0].code == "18776-5")
+    binaries = {e.resource.id: e.resource for e in bundle.entry if e.resource.get_resource_type() == "Binary"}
+    original_text = binaries[plan_doc.content[0].attachment.url[len("urn:uuid:") :]].data.decode("utf-8")
+    assert original_text == (
+        "Planned Activity | Planned Date\n"
+        "Follow up with primary care physician | Aug 12, 2026\n"
+        "Complete oral antibiotic course | Aug 15, 2026"
+    )
+
+    document_text = build_message_from_bundle(bundle, "CDA", "DISCHARGESUMMARY", "")
+    assert "<table" not in document_text
+    assert document_text.count("<paragraph>") >= 3
+
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    round_tripped_docs = [
+        e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference"
+    ]
+    round_tripped_binaries = {
+        e.resource.id: e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Binary"
+    }
+    round_tripped_plan_doc = next(d for d in round_tripped_docs if d.type.coding[0].code == "18776-5")
+    round_tripped_binary_id = round_tripped_plan_doc.content[0].attachment.url[len("urn:uuid:") :]
+    assert round_tripped_binaries[round_tripped_binary_id].data.decode("utf-8") == original_text
+
+    # A second reverse pass reproduces the identical flattened text again -
+    # not a further-mutated one.
+    second_document_text = build_message_from_bundle(round_tripped_bundle, "CDA", "DISCHARGESUMMARY", "")
+    second_round_tripped_bundle = convert_cda_to_bundle(second_document_text)
+    second_docs = [
+        e.resource for e in second_round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference"
+    ]
+    second_binaries = {
+        e.resource.id: e.resource for e in second_round_tripped_bundle.entry if e.resource.get_resource_type() == "Binary"
+    }
+    second_plan_doc = next(d for d in second_docs if d.type.coding[0].code == "18776-5")
+    second_binary_id = second_plan_doc.content[0].attachment.url[len("urn:uuid:") :]
+    assert second_binaries[second_binary_id].data.decode("utf-8") == original_text
+
+
+def test_narrative_section_regeneration_skips_document_reference_with_unrecognized_loinc_code():
+    # A DocumentReference this app's own forward direction never produces
+    # for a C-CDA source (e.g. an MDM-sourced one, with a LOINC code
+    # outside the twelve narrative-section codes) must not be guessed into
+    # one of them.
+    patient = Patient(id="p1", name=[{"family": "Solo"}])
+    binary = Binary(id="b1", contentType="text/plain", data=base64.b64encode(b"Some other document").decode("ascii"))
+    doc = DocumentReference(
+        id="d1",
+        status="current",
+        type={"coding": [{"system": "http://loinc.org", "code": "11488-4", "display": "Consult note"}]},
+        content=[{"attachment": {"contentType": "text/plain", "url": "urn:uuid:b1"}}],
+        subject={"reference": "urn:uuid:p1"},
+    )
+    bundle = Bundle(id="test", type="collection")
+    bundle.entry = [
+        BundleEntry(fullUrl="urn:uuid:p1", resource=patient),
+        BundleEntry(fullUrl="urn:uuid:d1", resource=doc),
+        BundleEntry(fullUrl="urn:uuid:b1", resource=binary),
+    ]
+    document_text = build_message_from_bundle(bundle, "CDA", "DISCHARGESUMMARY", "")
+    assert "11488-4" not in document_text
+    assert "Some other document" not in document_text
+
+
 def test_ccd_round_trip_never_splits_out_hospital_discharge_diagnosis_section():
     # CCD's own reverse builder must not pass include_discharge_specific_sections
     # - any Condition it encounters (even one carrying a stray
@@ -716,13 +824,17 @@ def test_history_and_physical_round_trip_produces_a_convertible_document_again()
     bundle = convert_cda_to_bundle(forward_xml)
     original_resource_types = {e.resource.get_resource_type() for e in bundle.entry}
     assert "Procedure" in original_resource_types
-    # The fixture's own Reason for Visit section now converts to a
-    # DocumentReference+Binary (see app/cda/narrative_sections.py) - a
-    # disclosed, deliberate gap in the *reverse* direction specifically:
-    # this reverse builder only regenerates the header + the seven
-    # general-purpose sections, not narrative-only ones, so these two
-    # resource types are expected to NOT survive the round trip below.
+    # The fixture's own nine H&P-specific narrative sections (Reason for
+    # Visit, HPI, Review of Systems, Physical Exam, General Status,
+    # Assessment, Social History, Family History, Plan of Treatment) each
+    # convert to a DocumentReference+Binary pair (see app/cda/narrative_
+    # sections.py), and app/transform/cda_ccd.py::_build_narrative_section
+    # now regenerates all nine on the reverse trip too.
     assert {"DocumentReference", "Binary"} <= original_resource_types
+    original_document_reference_count = sum(
+        1 for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference"
+    )
+    assert original_document_reference_count == 9
 
     document_text = build_message_from_bundle(bundle, "CDA", "HISTORYANDPHYSICAL", "")
     assert document_text.startswith('<?xml version="1.0"')
@@ -730,7 +842,11 @@ def test_history_and_physical_round_trip_produces_a_convertible_document_again()
 
     round_tripped_bundle = convert_cda_to_bundle(document_text)
     resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
-    assert resource_types == {"Patient", "Procedure"}
+    assert resource_types == {"Patient", "Procedure", "DocumentReference", "Binary"}
+    document_reference_count = sum(
+        1 for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference"
+    )
+    assert document_reference_count == 9
 
     original_procedure = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Procedure")
     procedure = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Procedure")
@@ -742,6 +858,50 @@ def test_history_and_physical_missing_patient_raises_mapping_error():
     empty_bundle = Bundle(id="test", type="collection")
     with pytest.raises(MappingError):
         build_message_from_bundle(empty_bundle, "CDA", "HISTORYANDPHYSICAL", "")
+
+
+def test_history_and_physical_round_trip_regenerates_all_nine_narrative_sections_with_correct_loinc_codes():
+    forward_xml = (FIXTURES / "history_and_physical_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    document_text = build_message_from_bundle(bundle, "CDA", "HISTORYANDPHYSICAL", "")
+
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+    document_references = [
+        e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DocumentReference"
+    ]
+    round_tripped_codes = {d.type.coding[0].code for d in document_references}
+    assert round_tripped_codes == {
+        "29299-5",  # Reason for Visit
+        "10164-2",  # History of Present Illness
+        "10187-3",  # Review of Systems
+        "29545-1",  # Physical Exam
+        "10210-3",  # General Status
+        "51848-0",  # Assessment
+        "29762-2",  # Social History
+        "10157-6",  # Family History
+        "18776-5",  # Plan of Treatment
+    }
+
+    # Physical Exam's own real shape is an ordered <list>/<item> - flattens
+    # to one line per item and survives the round trip.
+    binaries = {e.resource.id: e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Binary"}
+    physical_exam_doc = next(d for d in document_references if d.type.coding[0].code == "29545-1")
+    physical_exam_text = binaries[physical_exam_doc.content[0].attachment.url[len("urn:uuid:") :]].data.decode("utf-8")
+    assert physical_exam_text == (
+        "HEENT: Normal to examination.\n"
+        "Heart: Regular rate and rhythm, no murmur.\n"
+        "Right knee: Decreased range of motion, crepitus on flexion, no effusion."
+    )
+
+    # Social History's own real shape is a <table> - flattens to
+    # pipe-joined rows and survives the round trip.
+    social_history_doc = next(d for d in document_references if d.type.coding[0].code == "29762-2")
+    social_history_text = binaries[social_history_doc.content[0].attachment.url[len("urn:uuid:") :]].data.decode(
+        "utf-8"
+    )
+    assert social_history_text == (
+        "Social History Element | Description\nTobacco smoking status | Never smoker\nAlcohol use | Occasional"
+    )
 
 
 def test_edi_270_round_trip_with_dependent_produces_a_convertible_interchange_again():
