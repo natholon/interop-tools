@@ -276,7 +276,6 @@ document.addEventListener("DOMContentLoaded", () => {
         const entry = findEntryForMatchId(matchId);
         if (!entry) return;
         const rows = [];
-        rows.push(["FHIR Path", entry.fhir_path]);
         if (entry.derivation === "inferred") {
             rows.push(["Inferred", entry.reason || "(no source field)"]);
         } else {
@@ -284,6 +283,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (entry.field_label) rows.push(["Source Field Name", entry.field_label]);
         }
         if (entry.source_value != null) rows.push(["Source Value", entry.source_value]);
+        rows.push(["FHIR Path", entry.fhir_path]);
         if (entry.value != null) rows.push(["FHIR Value", entry.value]);
 
         const dl = document.createElement("dl");
