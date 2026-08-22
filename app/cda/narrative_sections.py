@@ -48,13 +48,20 @@ History, Family History - can carry real structured entries in the wild**
 Observations, a Family History Organizer with member Observations,
 confirmed by inspecting the real fetched examples' own entry content) -
 this slice deliberately does not parse any of them; the narrative
-DocumentReference is the only representation added here. A future slice
-could add real structured resources (Observation/FamilyMemberHistory/etc.)
-alongside this narrative one without conflict - disclosed as a natural
-next slice, not attempted here, the same "map the general case now,
-disclose the special case as a later slice" precedent this app's Vitals/
-Results sections already established for their own deferred grouping
-special cases.
+DocumentReference is the only representation added here, disclosed as a
+natural next slice rather than attempted, the same "map the general case
+now, disclose the special case as a later slice" precedent this app's
+Vitals/Results sections already established for their own deferred
+grouping special cases. **That follow-up slice has since shipped**: see
+`app/cda/social_history.py`/`family_history.py`/`plan_of_treatment.py`,
+each of which overrides this module's own `SECTION_BUILDERS` registration
+for its one templateId with a combined builder that still calls
+`build_narrative_document_reference` internally (the narrative pair keeps
+being built unconditionally) *and* parses the section's own real
+structured entries into `Observation`/`FamilyMemberHistory`/
+`CarePlan.activity[]` resources alongside it, with full provenance
+recording - not a redesign of this module, just a second registration
+layered on top of it for those three templateIds specifically.
 
 **New validation rules for these sections (`cda.narrative-section-missing-
 text`) and provenance instrumentation (`.type`/`.description`/`Binary.data`
