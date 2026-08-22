@@ -430,6 +430,38 @@ def test_procedures_basic_fixture_maps_completed_and_negated_entries():
     assert colonoscopy_practitioner.name is None
     assert colonoscopy_practitioner.identifier[0].value == "urn:oid:2.16.840.1.113883.19.5"
 
+    # entryRelationship[typeCode=RSON] -> a nested Indication Observation's
+    # own <value> -> Procedure.reasonCode.
+    assert len(appendectomy.reasonCode) == 1
+    assert appendectomy.reasonCode[0].coding[0].code == "85189001"
+    assert appendectomy.reasonCode[0].coding[0].display == "Acute appendicitis"
+
+    # entryRelationship[typeCode=SUBJ, inversionInd=true] -> a Comment
+    # Activity act -> Procedure.note, with its own nested author (a plain
+    # Practitioner, not a PractitionerRole - see module docstring for why).
+    assert len(appendectomy.note) == 1
+    note = appendectomy.note[0]
+    assert note.text == "Patient tolerated the procedure well, no complications."
+    assert note.time.isoformat() == "2026-06-15T12:30:00-05:00"
+    comment_author = _resolve_reference(bundle, note.authorReference.reference)
+    assert comment_author.get_resource_type() == "Practitioner"
+    assert comment_author.name[0].family == "Commenter"
+    assert comment_author.name[0].given == ["Jamie"]
+
+    # <author> as a direct child of the procedure element (Author
+    # Participation) -> Procedure.recorder, a plain Practitioner reference
+    # distinct from the Comment Activity's own author.
+    recorder_practitioner = _resolve_reference(bundle, appendectomy.recorder.reference)
+    assert recorder_practitioner.get_resource_type() == "Practitioner"
+    assert recorder_practitioner.name[0].family == "Recorder"
+    assert recorder_practitioner is not comment_author
+
+    # The negated Colonoscopy entry carries none of these - confirming
+    # they're each genuinely optional, not always populated.
+    assert colonoscopy.reasonCode is None
+    assert colonoscopy.note is None
+    assert colonoscopy.recorder is None
+
 
 def test_discharge_summary_maps_header_and_all_six_of_its_sections():
     bundle = convert_cda_to_bundle(read_fixture("discharge_summary_basic.xml"))

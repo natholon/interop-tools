@@ -40,14 +40,56 @@ directly to `Procedure.location` - a separate `Location`, unrelated to the
 performer's own machinery, since `Procedure.location` is a plain
 `Reference`, confirmed via `model_fields` introspection.
 
-**Disclosed scope limits, decided up front**: `author`->Provenance is
-still deferred - this app has no CDA-side Provenance builder anywhere.
-The Indication (`entryRelationship[RSON]`) and Comment Activity
-(`entryRelationship` wrapping a Comment Activity act) cross-references are
-also deferred - both require resolving a *nested* entry into a separate
-field (reasonCode, note) rather than reading an attribute directly off the
-procedure element itself, more complexity than this app's own performer/
-participant slice covers. No cross-performer/cross-procedure
+**Indication and Comment Activity cross-references, and `author` ->
+`Procedure.recorder`, shipped as a follow-up slice** once each was
+actually researched against a primary source (not guessed at from the
+CSV's own terse row labels): `entryRelationship[typeCode="RSON"]` wraps a
+nested Indication Observation (templateId `2.16.840.1.113883.10.20.22.4.19`
+- confirmed a general-purpose C-CDA template "used by many templates in
+C-CDA R2.1", not Procedure-specific, and directly observed in a real
+fetched example nested under an unrelated act's own RSON relationship)
+whose own `<value>` maps to `Procedure.reasonCode`, per the real
+`Procedure.csv` row (`entryRelationship[Indication].value ->
+Procedure.reasonCode`) - the CSV's own second target, `reasonReference`
+(resolving the Indication to a separate already-materialized resource),
+is deliberately not attempted, the same "map the direct value, disclose
+the reference case" precedent this app's every other partial mapping
+already establishes. `entryRelationship[typeCode="SUBJ",
+inversionInd="true"]` wraps a Comment Activity act (templateId
+`2.16.840.1.113883.10.20.22.4.64`, fixed LOINC code `48767-8` "Annotation
+Comment") - the typeCode/inversionInd combo is the standard IHE
+PCC/C-CDA convention for "this act's own subject is the containing act",
+i.e. a comment *about* the parent, confirmed via the same combination
+this app's own Allergies Criticality Observation already uses for an
+unrelated nested observation, not guessed at. Per the C-CDA on FHIR IG's
+own `mappingGuidance.html` Comment Activity table (fetched directly, the
+IG page this reason string points readers to): `<text>` (plain inline
+text - a `<reference value="#...">`-anchored, narrative-only comment with
+no inline text is a disclosed, deferred shape, the dominant real-world
+case being inline text per the IG's own worked example) -> `.text` (FHIR-
+required at construction, confirmed by direct `Annotation()` construction
+despite `model_fields` not flagging it - a Comment Activity with no
+resolvable text is skipped entirely), `author/time` -> `.time`,
+`author/assignedAuthor` -> `.authorReference`. `author` (the general
+"Author Participation" template, `2.16.840.1.113883.10.20.22.4.119`,
+confirmed "appropriate at any place CDA allows an author... CDA Entry")
+as a **direct child of the procedure element itself** maps to
+`Procedure.recorder` the same way, reusing the identical assignedAuthor
+shape (id/assignedPerson/addr/telecom - confirmed against a real fetched
+CCD document's own header `<author>`, byte-for-byte the same shape as
+performer's own `assignedEntity`) - built as a plain `Practitioner`, not
+the `PractitionerRole` the IG's own prose loosely suggests for
+`Annotation.authorReference` ("ideally...", not a hard requirement),
+since direct `fhir.resources` introspection confirms `Annotation.
+authorReference`'s own real `enum_reference_types` is `Practitioner`/
+`Patient`/`RelatedPerson`/`Organization` - no `PractitionerRole` at all -
+so the base FHIR R4 resource's own actual binding overrides the IG's
+looser suggestion, the same "verify by construction, don't trust prose
+alone" discipline this app applies everywhere. `Procedure.recorder`'s own
+CSV row has no `[PractitionerRole]` bracket annotation either (unlike
+`performer.actor`'s), confirming a plain `Practitioner` is the correct,
+disclosed target for this field specifically, not an inconsistency with
+performer's own richer shape. No cross-performer/cross-procedure
 deduplication of the Practitioner/Organization/Location resources
 materialized here is attempted - this app's existing opt-in
 `app/dedup.py::deduplicate_bundle` already covers the cross-resource case
@@ -57,6 +99,8 @@ rendering-provider duplication."""
 import uuid
 
 from fhir.resources.R4B.address import Address
+from fhir.resources.R4B.annotation import Annotation
+from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.location import Location
 from fhir.resources.R4B.organization import Organization
@@ -108,6 +152,14 @@ PROCEDURE_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.14"
 # Discharged to Rehab Location), which reuses this exact generic CDA
 # datatype rather than something Procedure-specific.
 SERVICE_DELIVERY_LOCATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.32"
+# Indication - a general-purpose C-CDA template (confirmed "used by many
+# templates in C-CDA R2.1", not Procedure-specific) wrapped by
+# entryRelationship[typeCode=RSON] - see module docstring.
+INDICATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.19"
+# Comment Activity - see module docstring for the full typeCode/
+# inversionInd/fixed-code shape confirmed against the C-CDA on FHIR IG's
+# own mappingGuidance.html and a real fetched worked example.
+COMMENT_ACTIVITY_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.64"
 
 # ConceptMap-CF-ProcedureStatus (github.com/HL7/ccda-on-fhir/blob/master/
 # input/maps/ConceptMap-CF-ProcedureStatus.xml, fetched and confirmed
@@ -478,6 +530,123 @@ def _build_service_delivery_location(participant_element, index: int, recorder=N
     return location
 
 
+def _build_reason_codes(procedure_element, recorder=None, procedure_id: str = "") -> list[CodeableConcept]:
+    """entryRelationship[typeCode=RSON] wraps a nested Indication
+    Observation (templateId INDICATION_TEMPLATE_ID) whose own <value> is
+    the actual coded reason - per the real Procedure.csv mapping table row
+    ("entryRelationship[Indication].value -> Procedure.reasonCode"), see
+    module docstring. reasonReference (the CSV's own second target) is
+    deliberately not attempted - see module docstring. The xml-position
+    index used for each fact's own source location comes from enumerating
+    every entryRelationship, not just the RSON-typed ones, so it stays
+    accurate even when a Comment Activity relationship sits at an earlier
+    or later physical position - the same collision this app's own 837I
+    multi-HI-segment fix and Allergies' multi-reaction fix both already
+    guard against."""
+    reason_codes: list[CodeableConcept] = []
+    for index, entry_relationship in enumerate(find_all(procedure_element, "entryRelationship")):
+        if entry_relationship.get("typeCode") != "RSON":
+            continue
+        observation = find_child(entry_relationship, "observation")
+        if observation is None or not has_template_id(observation, INDICATION_TEMPLATE_ID):
+            continue
+        value_element = find_child(observation, "value")
+        reason = build_codeable_concept_from_cd(value_element)
+        if reason is None:
+            continue
+        reason_codes.append(reason)
+        if recorder:
+            reason_index = len(reason_codes) - 1
+            value_location = xpath_location(_ENTRY_BASE, f"entryRelationship[{index}]", "observation", "value")
+            if value_element.get("code"):
+                recorder.record(
+                    procedure_id,
+                    f"reasonCode[{reason_index}].coding[0].code",
+                    xpath_location(value_location, "@code"),
+                    value_element.get("code"),
+                )
+            if value_element.get("displayName"):
+                recorder.record(
+                    procedure_id,
+                    f"reasonCode[{reason_index}].coding[0].display",
+                    xpath_location(value_location, "@displayName"),
+                    value_element.get("displayName"),
+                )
+    return reason_codes
+
+
+def _build_notes(procedure_element, recorder=None, procedure_id: str = "") -> tuple[list[Annotation], list[Resource]]:
+    """entryRelationship[typeCode=SUBJ, inversionInd=true] wraps a Comment
+    Activity act (COMMENT_ACTIVITY_TEMPLATE_ID) - see module docstring for
+    the full confirmed shape. A Comment Activity with no resolvable
+    <text> is skipped entirely - Annotation.text is required at
+    construction. The nested author (if present) reuses
+    _build_practitioner_from_assigned_entity directly, the same
+    assignedAuthor/assignedEntity shape equivalence the module docstring
+    confirms."""
+    notes: list[Annotation] = []
+    extra_resources: list[Resource] = []
+    for index, entry_relationship in enumerate(find_all(procedure_element, "entryRelationship")):
+        if entry_relationship.get("typeCode") != "SUBJ" or entry_relationship.get("inversionInd") != "true":
+            continue
+        act = find_child(entry_relationship, "act")
+        if act is None or not has_template_id(act, COMMENT_ACTIVITY_TEMPLATE_ID):
+            continue
+        text_element = find_child(act, "text")
+        text = (text_element.text or "").strip() if text_element is not None else ""
+        if not text:
+            continue
+
+        note_index = len(notes)
+        act_location = xpath_location(_ENTRY_BASE, f"entryRelationship[{index}]", "act")
+        annotation = Annotation(text=text)
+        if recorder:
+            recorder.record(procedure_id, f"note[{note_index}].text", xpath_location(act_location, "text"), text)
+
+        author_element = find_child(act, "author")
+        if author_element is not None:
+            assigned_author = find_child(author_element, "assignedAuthor")
+            if assigned_author is not None:
+                author_location = xpath_location(act_location, "author", "assignedAuthor")
+                practitioner = _build_practitioner_from_assigned_entity(assigned_author, author_location, recorder=recorder)
+                if practitioner is not None:
+                    extra_resources.append(practitioner)
+                    annotation.authorReference = Reference(reference=f"urn:uuid:{practitioner.id}")
+
+            time_element = find_child(author_element, "time")
+            author_time = parse_partial_ts(ts_value(time_element)) if time_element is not None else None
+            if author_time:
+                annotation.time = author_time
+                if recorder:
+                    recorder.record(
+                        procedure_id, f"note[{note_index}].time", xpath_location(act_location, "author", "time", "@value"), author_time
+                    )
+
+        notes.append(annotation)
+    return notes, extra_resources
+
+
+def _build_procedure_recorder(procedure_element, recorder=None, procedure_id: str = "") -> tuple[Reference, list[Resource]] | None:
+    """<author> as a DIRECT CHILD of the procedure element (Author
+    Participation, sibling to <performer>/<participant>, not nested inside
+    an entryRelationship) -> Procedure.recorder - see module docstring for
+    why this is a plain Practitioner, not the PractitionerRole performer's
+    own slice builds. Only the first <author> is used - Procedure.recorder
+    is a singular Reference, the same "first-only, disclosed" precedent
+    Procedure.location's own participant handling already established."""
+    author_element = find_child(procedure_element, "author")
+    if author_element is None:
+        return None
+    assigned_author = find_child(author_element, "assignedAuthor")
+    if assigned_author is None:
+        return None
+    location = xpath_location(_ENTRY_BASE, "author", "assignedAuthor")
+    practitioner = _build_practitioner_from_assigned_entity(assigned_author, location, recorder=recorder)
+    if practitioner is None:
+        return None
+    return Reference(reference=f"urn:uuid:{practitioner.id}"), [practitioner]
+
+
 def _build_procedure(procedure_element, patient_id: str, recorder=None) -> tuple[Procedure, list[Resource]]:
     procedure_id = str(uuid.uuid4())
     status = _resolve_status(procedure_element)
@@ -586,6 +755,21 @@ def _build_procedure(procedure_element, patient_id: str, recorder=None) -> tuple
             procedure.location = Reference(reference=f"urn:uuid:{location.id}")
             extra_resources.append(location)
             break  # Procedure.location is singular - only the first LOC participant is used
+
+    reason_codes = _build_reason_codes(procedure_element, recorder=recorder, procedure_id=procedure_id)
+    if reason_codes:
+        procedure.reasonCode = reason_codes
+
+    notes, note_resources = _build_notes(procedure_element, recorder=recorder, procedure_id=procedure_id)
+    if notes:
+        procedure.note = notes
+        extra_resources.extend(note_resources)
+
+    recorder_result = _build_procedure_recorder(procedure_element, recorder=recorder, procedure_id=procedure_id)
+    if recorder_result is not None:
+        recorder_reference, recorder_resources = recorder_result
+        procedure.recorder = recorder_reference
+        extra_resources.extend(recorder_resources)
 
     return procedure, extra_resources
 

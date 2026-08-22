@@ -87,6 +87,7 @@ from app.cda.procedures import (
 )
 from app.cda.procedures import STATUS_MAP as PROCEDURE_STATUS_MAP
 from app.cda.procedures import SERVICE_DELIVERY_LOCATION_TEMPLATE_ID
+from app.cda.procedures import INDICATION_TEMPLATE_ID, COMMENT_ACTIVITY_TEMPLATE_ID
 from app.cda.results import ORGANIZER_TEMPLATE_ID as RESULT_ORGANIZER_TEMPLATE_ID
 from app.cda.results import OBSERVATION_TEMPLATE_ID as RESULT_OBSERVATION_TEMPLATE_ID
 from app.cda.results import SECTION_TEMPLATE_ID as RESULTS_SECTION_TEMPLATE_ID
@@ -960,6 +961,69 @@ def _random_participant_location(rng: random.Random) -> str:
     )
 
 
+def _random_procedure_author(rng: random.Random) -> str:
+    """A direct-child <author> (Author Participation) - direct fuzz
+    coverage of app/cda/procedures.py's own _build_procedure_recorder ->
+    Procedure.recorder."""
+    given, family = random_person_name(rng)
+    return (
+        "<author><time value=\"20260615113000-0500\"/><assignedAuthor>"
+        f'<id root="2.16.840.1.113883.19.5" extension="{_random_uuid_like(rng)[:9]}"/>'
+        f"<assignedPerson><name><given>{given}</given><family>{family}</family></name></assignedPerson>"
+        "</assignedAuthor></author>"
+    )
+
+
+def _random_indication(rng: random.Random) -> str:
+    """entryRelationship[typeCode=RSON] wrapping an Indication Observation
+    - direct fuzz coverage of app/cda/procedures.py's own
+    _build_reason_codes -> Procedure.reasonCode. Reuses _PROBLEM_CODES -
+    an Indication is a clinical finding, the identical SNOMED vocabulary
+    Problems already uses, not a Procedure-specific code list."""
+    code, display = rng.choice(_PROBLEM_CODES)
+    return (
+        '<entryRelationship typeCode="RSON"><observation classCode="OBS" moodCode="EVN">'
+        f'<templateId root="{INDICATION_TEMPLATE_ID}"/>'
+        '<code code="75321-0" codeSystem="2.16.840.1.113883.6.1" displayName="Clinical finding"/>'
+        f'<value xsi:type="CD" code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
+        "</observation></entryRelationship>"
+    )
+
+
+_COMMENT_TEXTS = [
+    "Patient tolerated the procedure well, no complications.",
+    "Follow-up scheduled to assess healing.",
+    "Mild discomfort reported post-procedure, resolved without intervention.",
+]
+
+
+def _random_comment_activity(rng: random.Random) -> str:
+    """entryRelationship[typeCode=SUBJ, inversionInd=true] wrapping a
+    Comment Activity act - direct fuzz coverage of app/cda/procedures.py's
+    own _build_notes -> Procedure.note, including its own nested author
+    (~70% present, mirroring _random_performer's own name-vs-id-only
+    split, since the mapper builds a Practitioner only when the nested
+    author resolves)."""
+    text = rng.choice(_COMMENT_TEXTS)
+    author = ""
+    if maybe(rng, 0.7):
+        given, family = random_person_name(rng)
+        author = (
+            f'<author><templateId root="2.16.840.1.113883.10.20.22.4.119"/>'
+            '<time value="20260615123000-0500"/><assignedAuthor>'
+            f'<id root="2.16.840.1.113883.19.5" extension="{_random_uuid_like(rng)[:9]}"/>'
+            f"<assignedPerson><name><given>{given}</given><family>{family}</family></name></assignedPerson>"
+            "</assignedAuthor></author>"
+        )
+    return (
+        '<entryRelationship typeCode="SUBJ" inversionInd="true"><act classCode="ACT" moodCode="EVN">'
+        f'<templateId root="{COMMENT_ACTIVITY_TEMPLATE_ID}"/>'
+        '<code code="48767-8" codeSystem="2.16.840.1.113883.6.1" displayName="Annotation Comment"/>'
+        f"<text>{text}</text>{author}"
+        "</act></entryRelationship>"
+    )
+
+
 def _random_procedure_entry(rng: random.Random) -> str:
     proc_id = _random_uuid_like(rng)
     code, display = rng.choice(_PROCEDURE_CODES)
@@ -993,13 +1057,20 @@ def _random_procedure_entry(rng: random.Random) -> str:
     # own performer/participant handling.
     performer = _random_performer(rng) if maybe(rng, 0.5) else ""
     participant = _random_participant_location(rng) if maybe(rng, 0.4) else ""
+    # ~50% chance of a direct-child <author> (recorder), ~50% chance of an
+    # Indication, ~40% chance of a Comment Activity - each independently
+    # gated, direct fuzz coverage of app/cda/procedures.py's own
+    # _build_procedure_recorder/_build_reason_codes/_build_notes.
+    author = _random_procedure_author(rng) if maybe(rng, 0.5) else ""
+    indication = _random_indication(rng) if maybe(rng, 0.5) else ""
+    comment = _random_comment_activity(rng) if maybe(rng, 0.4) else ""
 
     return (
         f'<entry typeCode="DRIV"><procedure classCode="PROC" moodCode="EVN"{negation_attr}>'
         f'<templateId root="{PROCEDURE_TEMPLATE_ID}"/><id root="{proc_id}"/>'
         f'<code code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
         f'<statusCode code="{status_code}"/>'
-        f"{effective_time}{body_site}{performer}{participant}"
+        f"{effective_time}{body_site}{performer}{participant}{author}{indication}{comment}"
         "</procedure></entry>"
     )
 

@@ -85,6 +85,45 @@
                   </playingEntity>
                 </participantRole>
               </participant>
+              <author>
+                <time value="20260615113000-0500"/>
+                <assignedAuthor>
+                  <id root="2.16.840.1.113883.19.5" extension="REC-001"/>
+                  <assignedPerson>
+                    <name>
+                      <given>Alice</given>
+                      <family>Recorder</family>
+                    </name>
+                  </assignedPerson>
+                </assignedAuthor>
+              </author>
+              <entryRelationship typeCode="RSON">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.19"/>
+                  <code code="75321-0" codeSystem="2.16.840.1.113883.6.1" displayName="Clinical finding"/>
+                  <value xsi:type="CD" code="85189001" codeSystem="2.16.840.1.113883.6.96" displayName="Acute appendicitis"/>
+                </observation>
+              </entryRelationship>
+              <entryRelationship typeCode="SUBJ" inversionInd="true">
+                <act classCode="ACT" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.64"/>
+                  <code code="48767-8" codeSystem="2.16.840.1.113883.6.1" displayName="Annotation Comment"/>
+                  <text>Patient tolerated the procedure well, no complications.</text>
+                  <author>
+                    <templateId root="2.16.840.1.113883.10.20.22.4.119"/>
+                    <time value="20260615123000-0500"/>
+                    <assignedAuthor>
+                      <id root="2.16.840.1.113883.19.5" extension="COM-002"/>
+                      <assignedPerson>
+                        <name>
+                          <given>Jamie</given>
+                          <family>Commenter</family>
+                        </name>
+                      </assignedPerson>
+                    </assignedAuthor>
+                  </author>
+                </act>
+              </entryRelationship>
             </procedure>
           </entry>
           <entry typeCode="DRIV">

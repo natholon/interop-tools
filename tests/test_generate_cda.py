@@ -851,6 +851,61 @@ def test_procedure_participant_location_varies_across_seeds():
     assert present > 0 and absent > 0
 
 
+def test_procedure_recorder_author_presence_varies_across_seeds():
+    # Direct fuzz coverage of app/cda/procedures.py's own
+    # _build_procedure_recorder -> Procedure.recorder.
+    present = absent = 0
+    for seed in range(120):
+        for procedure in _procedure_entries(_document(seed)):
+            if find_child(procedure, "author") is not None:
+                present += 1
+            else:
+                absent += 1
+    assert present > 0 and absent > 0
+
+
+def test_procedure_indication_presence_varies_across_seeds():
+    # Direct fuzz coverage of app/cda/procedures.py's own
+    # _build_reason_codes -> Procedure.reasonCode.
+    present = absent = 0
+    for seed in range(120):
+        for procedure in _procedure_entries(_document(seed)):
+            relationships = [
+                r for r in find_all(procedure, "entryRelationship") if r.get("typeCode") == "RSON"
+            ]
+            if relationships:
+                present += 1
+            else:
+                absent += 1
+    assert present > 0 and absent > 0
+
+
+def test_procedure_comment_activity_presence_and_author_varies_across_seeds():
+    # Direct fuzz coverage of app/cda/procedures.py's own _build_notes ->
+    # Procedure.note, including the present/absent branch of its own
+    # nested author.
+    present = absent = with_author = without_author = 0
+    for seed in range(150):
+        for procedure in _procedure_entries(_document(seed)):
+            comments = [
+                r
+                for r in find_all(procedure, "entryRelationship")
+                if r.get("typeCode") == "SUBJ" and r.get("inversionInd") == "true"
+            ]
+            if not comments:
+                absent += 1
+                continue
+            present += 1
+            for relationship in comments:
+                act = find_child(relationship, "act")
+                if find_child(act, "author") is not None:
+                    with_author += 1
+                else:
+                    without_author += 1
+    assert present > 0 and absent > 0
+    assert with_author > 0 and without_author > 0
+
+
 def test_round_trips_through_real_converter():
     for seed in range(1000, 1020):
         xml_text = generate_ccd(random.Random(seed))

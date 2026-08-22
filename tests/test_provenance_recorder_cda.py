@@ -7,17 +7,21 @@ test_validation_*.py files.
 
 Scope: the document header (Patient + optional Encounter), all seven
 general-purpose sections (Problems, Medications, Allergies, Immunizations,
-Vital Signs, Results, Procedures), Discharge Summary's own Hospital
-Discharge Diagnosis/Discharge Medications sections, and now all twelve
-narrative-section templateIds app/cda/narrative_sections.py registers
-(Discharge Summary's Hospital Course/Plan of Treatment, History and
-Physical's own nine) - see app/provenance/dispatch.py's own
-_CDA_UNSUPPORTED_REASON for why no CDA document type is "fully
-instrumented" yet despite all of this producing real facts: the still-
-deferred structured-entry parsing for Plan of Treatment/Social History/
-Family History (see app/cda/narrative_sections.py's own docstring) has
-nothing to instrument in the first place, and a handful of narrower
-per-field gaps disclosed elsewhere remain."""
+Vital Signs, Results, Procedures - including Procedures' own Indication/
+Comment Activity cross-references and `author`->`Procedure.recorder`),
+Discharge Summary's own Hospital Discharge Diagnosis/Discharge
+Medications sections, all twelve narrative-section templateIds
+app/cda/narrative_sections.py registers (Discharge Summary's Hospital
+Course/Plan of Treatment, History and Physical's own nine), and the real
+structured entries Plan of Treatment/Social History/Family History can
+carry beneath their own narrative text (app/cda/social_history.py/
+family_history.py/plan_of_treatment.py) - see app/provenance/dispatch.py's
+own _CDA_UNSUPPORTED_REASON for why no CDA document type is "fully
+instrumented" yet despite all of this producing real facts: this app has
+no CDA-side Provenance resource builder anywhere (so a real Provenance
+*resource* is never produced, though `Procedure.recorder` - a plain
+Reference field - now is), and a handful of narrower per-field gaps
+disclosed elsewhere remain."""
 
 import itertools
 import uuid
@@ -794,6 +798,52 @@ def test_ccd_procedures_basic_crosswalk_matches_known_field_values():
     assert sdloc_name_entry.value == "Community Medical Center"
     sdloc_type_entry = by_path[f"{sdloc_prefix}.type[0].coding[0].code"]
     assert sdloc_type_entry.value == "1060-3"
+
+    # entryRelationship[typeCode=RSON] -> a nested Indication Observation's
+    # own <value> -> Procedure.reasonCode.
+    reason_code_entry = by_path[f"{completed_prefix}.reasonCode[0].coding[0].code"]
+    assert reason_code_entry.value == "85189001"
+    assert reason_code_entry.source_location == xpath_location(
+        "procedure", "entryRelationship[0]", "observation", "value", "@code"
+    )
+    reason_display_entry = by_path[f"{completed_prefix}.reasonCode[0].coding[0].display"]
+    assert reason_display_entry.value == "Acute appendicitis"
+
+    # entryRelationship[typeCode=SUBJ, inversionInd=true] -> a Comment
+    # Activity act -> Procedure.note, with its own nested author recorded
+    # against a real, independently-resolved Practitioner (its family
+    # name distinguishes it from the performer's own Practitioner and the
+    # recorder's own, below).
+    note_text_entry = by_path[f"{completed_prefix}.note[0].text"]
+    assert note_text_entry.value == "Patient tolerated the procedure well, no complications."
+    assert note_text_entry.source_location == xpath_location("procedure", "entryRelationship[1]", "act", "text")
+    note_time_entry = by_path[f"{completed_prefix}.note[0].time"]
+    assert note_time_entry.value == "2026-06-15T12:30:00-05:00"
+
+    comment_author_index = next(
+        i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Practitioner" and e.resource.name and e.resource.name[0].family == "Commenter"
+    )
+    comment_author_prefix = f"Bundle.entry[{comment_author_index}].resource"
+    comment_author_family_entry = by_path[f"{comment_author_prefix}.name[0].family"]
+    assert comment_author_family_entry.value == "Commenter"
+    assert comment_author_family_entry.source_location == xpath_location(
+        "procedure", "entryRelationship[1]", "act", "author", "assignedAuthor", "assignedPerson", "name", "family"
+    )
+
+    # <author> as a direct child of the procedure element -> Procedure.
+    # recorder, a plain Practitioner reference distinct from both the
+    # performer's own PractitionerRole-wrapped Practitioner and the
+    # Comment Activity's own author.
+    recorder_practitioner_index = next(
+        i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Practitioner" and e.resource.name and e.resource.name[0].family == "Recorder"
+    )
+    recorder_practitioner_prefix = f"Bundle.entry[{recorder_practitioner_index}].resource"
+    recorder_family_entry = by_path[f"{recorder_practitioner_prefix}.name[0].family"]
+    assert recorder_family_entry.value == "Recorder"
+    assert recorder_family_entry.source_location == xpath_location(
+        "procedure", "author", "assignedAuthor", "assignedPerson", "name", "family"
+    )
+    assert recorder_practitioner_index != comment_author_index
 
 
 def test_discharge_medications_reuses_medications_own_recorder_instrumentation():
