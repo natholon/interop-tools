@@ -102,18 +102,28 @@ PANEL_CODE = "85353-1"
 # statusCode.
 _FIXED_STATUS = "final"
 
-_LOINC_OID = "2.16.840.1.113883.6.1"
+# Public (not module-private) - app/cda/validation.py became a real
+# second consumer, needing the identical "only a genuinely LOINC-coded
+# value is trusted" check for its own incomplete-pair/orphaned-sibling
+# detection rules.
+LOINC_OID = "2.16.840.1.113883.6.1"
 
 # Blood Pressure Panel (CF-vitals.md's own construction guidance, fetched
-# directly) - see module docstring for the full shape.
-_BP_SYSTOLIC_CODE = "8480-6"
-_BP_DIASTOLIC_CODE = "8462-4"
-_BP_PANEL_CODE = "85354-9"
+# directly) - see module docstring for the full shape. Public (not
+# module-private) - both app/cda/validation.py (detecting an incomplete
+# pair) and app/transform/cda_ccd.py (reversing a panel's own .component
+# list back into two flat observations) became real second/third
+# consumers, the same "promote once reused" discipline PANEL_CODE itself
+# already established.
+BP_SYSTOLIC_CODE = "8480-6"
+BP_DIASTOLIC_CODE = "8462-4"
+BP_PANEL_CODE = "85354-9"
 
-# Pulse Oximetry Panel - see module docstring for the full shape.
-_PULSE_OX_PRIMARY_CODES = {"59408-5", "2708-6"}
-_PULSE_OX_CONCENTRATION_CODE = "3150-0"
-_PULSE_OX_FLOW_RATE_CODE = "3151-8"
+# Pulse Oximetry Panel - see module docstring for the full shape. Public
+# for the identical reason the Blood Pressure Panel constants above are.
+PULSE_OX_PRIMARY_CODES = {"59408-5", "2708-6"}
+PULSE_OX_CONCENTRATION_CODE = "3150-0"
+PULSE_OX_FLOW_RATE_CODE = "3151-8"
 
 
 def _category() -> CodeableConcept:
@@ -158,7 +168,7 @@ def _loinc_code(observation_element) -> str | None:
     code_element = find_child(observation_element, "code")
     if code_element is None:
         return None
-    if code_element.get("codeSystem") != _LOINC_OID:
+    if code_element.get("codeSystem") != LOINC_OID:
         return None
     return code_element.get("code")
 
@@ -283,7 +293,7 @@ def _build_blood_pressure_panel(systolic, diastolic, patient_id: str, recorder=N
         id=panel_id,
         status=_FIXED_STATUS,
         category=[_category()],
-        code=CodeableConcept(coding=[Coding(system=PANEL_CODE_SYSTEM, code=_BP_PANEL_CODE)]),
+        code=CodeableConcept(coding=[Coding(system=PANEL_CODE_SYSTEM, code=BP_PANEL_CODE)]),
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
         component=[ObservationComponent(code=code, valueQuantity=value) for _, _, code, _, value in resolved],
     )
@@ -293,7 +303,7 @@ def _build_blood_pressure_panel(systolic, diastolic, patient_id: str, recorder=N
             panel_id,
             "code.coding[0].code",
             'CF-vitals.md\'s own Blood Pressure Panel construction guidance fixes this to "85354-9" regardless of the source systolic/diastolic codes themselves.',
-            _BP_PANEL_CODE,
+            BP_PANEL_CODE,
         )
         for component_index, (index, code_element, code, value_element, value) in enumerate(resolved):
             member_base = _member_base(index)
@@ -331,7 +341,7 @@ def _build_pulse_oximetry_panel(primary, concentration, flow_rate, patient_id: s
         id=panel_id,
         status=_FIXED_STATUS,
         category=[_category()],
-        code=CodeableConcept(coding=[Coding(system=PANEL_CODE_SYSTEM, code=code) for code in sorted(_PULSE_OX_PRIMARY_CODES)]),
+        code=CodeableConcept(coding=[Coding(system=PANEL_CODE_SYSTEM, code=code) for code in sorted(PULSE_OX_PRIMARY_CODES)]),
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
         valueQuantity=value,
     )
@@ -343,7 +353,7 @@ def _build_pulse_oximetry_panel(primary, concentration, flow_rate, patient_id: s
             "code.coding[0].code",
             "CF-vitals.md's own Pulse Oximetry Panel construction guidance fixes this to carry both IG-documented "
             'synonymous LOINC codes ("59408-5" and "2708-6") regardless of which single one the source used.',
-            "+".join(sorted(_PULSE_OX_PRIMARY_CODES)),
+            "+".join(sorted(PULSE_OX_PRIMARY_CODES)),
         )
         recorder.record(panel_id, "valueQuantity.value", f"{member_base}/value/@value", value_element.get("value"))
         if value.unit:
@@ -423,15 +433,15 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
             if observation_element is None or not has_template_id(observation_element, OBSERVATION_TEMPLATE_ID):
                 continue
             code = _loinc_code(observation_element)
-            if code == _BP_SYSTOLIC_CODE and systolic is None:
+            if code == BP_SYSTOLIC_CODE and systolic is None:
                 systolic = (index, observation_element)
-            elif code == _BP_DIASTOLIC_CODE and diastolic is None:
+            elif code == BP_DIASTOLIC_CODE and diastolic is None:
                 diastolic = (index, observation_element)
-            elif code in _PULSE_OX_PRIMARY_CODES and pulse_ox_primary is None:
+            elif code in PULSE_OX_PRIMARY_CODES and pulse_ox_primary is None:
                 pulse_ox_primary = (index, observation_element)
-            elif code == _PULSE_OX_CONCENTRATION_CODE and pulse_ox_concentration is None:
+            elif code == PULSE_OX_CONCENTRATION_CODE and pulse_ox_concentration is None:
                 pulse_ox_concentration = (index, observation_element)
-            elif code == _PULSE_OX_FLOW_RATE_CODE and pulse_ox_flow_rate is None:
+            elif code == PULSE_OX_FLOW_RATE_CODE and pulse_ox_flow_rate is None:
                 pulse_ox_flow_rate = (index, observation_element)
             else:
                 plain.append((index, observation_element))

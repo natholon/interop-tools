@@ -486,14 +486,6 @@ def test_ccd_round_trip_preserves_immunization_fields():
 
 
 def test_ccd_round_trip_preserves_vital_signs_panel_and_members():
-    # ccd_vitals_basic.xml also carries a Blood Pressure Panel and a Pulse
-    # Oximetry Panel (see app/cda/vitals.py) - this reverse builder does
-    # NOT yet reconstruct either grouping (a disclosed, separate follow-up
-    # slice, out of scope for the forward-conversion-only work that added
-    # them), so this test scopes its own round-trip assertions to the two
-    # plain vitals (heart rate, temperature) it was originally written to
-    # cover, the same fields this reverse builder has always correctly
-    # round-tripped.
     forward_xml = (FIXTURES / "ccd_vitals_basic.xml").read_text()
     bundle = convert_cda_to_bundle(forward_xml)
     original_observations = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Observation"]
@@ -503,6 +495,8 @@ def test_ccd_round_trip_preserves_vital_signs_panel_and_members():
     document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
     round_tripped_bundle = convert_cda_to_bundle(document_text)
     observations = [e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Observation"]
+    round_tripped_panel = next(o for o in observations if o.code.coding and o.code.coding[0].code == "85353-1")
+    assert len(round_tripped_panel.hasMember) == 4
 
     plain_codes = {"8867-4", "8310-5"}
     original_members = sorted(
@@ -519,16 +513,27 @@ def test_ccd_round_trip_preserves_vital_signs_panel_and_members():
         if original.interpretation:
             assert member.interpretation[0].coding[0].code == original.interpretation[0].coding[0].code
 
+    # Blood Pressure Panel: reverses to two flat <observation> elements
+    # (one per .component), then re-groups back into the identical panel
+    # shape on the second forward pass.
+    bp_panel = next(o for o in observations if o.code.coding and o.code.coding[0].code == "85354-9")
+    assert bp_panel.valueQuantity is None
+    bp_components = {c.code.coding[0].code: c for c in bp_panel.component}
+    assert float(bp_components["8480-6"].valueQuantity.value) == 120
+    assert float(bp_components["8462-4"].valueQuantity.value) == 80
+
+    # Pulse Oximetry Panel: the primary reading's own value round-trips
+    # exactly, and its one present optional component (flow rate) survives
+    # too - both IG-documented synonymous codings are regenerated
+    # regardless of which single one this fixture's own source used.
+    pulse_ox_panel = next(o for o in observations if o.code.coding and {c.code for c in o.code.coding} == {"59408-5", "2708-6"})
+    assert float(pulse_ox_panel.valueQuantity.value) == 97
+    assert len(pulse_ox_panel.component) == 1
+    assert pulse_ox_panel.component[0].code.coding[0].code == "3151-8"
+    assert float(pulse_ox_panel.component[0].valueQuantity.value) == 2
+
 
 def test_ccd_round_trip_preserves_result_report_and_observations():
-    # ccd_results_basic.xml also carries an organizer-level Specimen and an
-    # IVL_PQ-valued observation (see app/cda/results.py) - this reverse
-    # builder does NOT yet reconstruct Specimen resources or IVL_PQ/valueRange
-    # values (a disclosed, separate follow-up slice, out of scope for the
-    # forward-conversion-only work that added them), so this test scopes its
-    # own round-trip assertions to the two observations (WBC/culture) it was
-    # originally written to cover, the same fields this reverse builder has
-    # always correctly round-tripped.
     forward_xml = (FIXTURES / "ccd_results_basic.xml").read_text()
     bundle = convert_cda_to_bundle(forward_xml)
     original_report = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "DiagnosticReport")
@@ -539,6 +544,7 @@ def test_ccd_round_trip_preserves_result_report_and_observations():
     report = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "DiagnosticReport")
     assert report.code.coding[0].code == original_report.code.coding[0].code
     assert report.status == original_report.status
+    assert len(report.result) == 4
 
     original_codes = {"6690-2", "33747-0"}
     original_observations = sorted(
@@ -569,6 +575,33 @@ def test_ccd_round_trip_preserves_result_report_and_observations():
     st_original = next(o for o in original_observations if o.valueString is not None)
     st = next(o for o in observations if o.valueString is not None)
     assert st.valueString == st_original.valueString
+
+    # IVL_PQ (both bounds) round-trips as .valueRange, not .valueQuantity -
+    # creatinine/color are outside original_codes above, so re-fetch them
+    # directly from the full observation lists.
+    all_round_tripped = [e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Observation"]
+    all_original = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Observation"]
+    creatinine_original = next(o for o in all_original if o.code.coding[0].code == "2160-0")
+    creatinine = next(o for o in all_round_tripped if o.code.coding and o.code.coding[0].code == "2160-0")
+    assert creatinine.valueQuantity is None
+    assert float(creatinine.valueRange.low.value) == float(creatinine_original.valueRange.low.value) == 0.6
+    assert float(creatinine.valueRange.high.value) == float(creatinine_original.valueRange.high.value) == 1.3
+
+    # ED's own plain-text case reverses to ST (a disclosed, permanent
+    # simplification - see _build_result_value_element's own docstring),
+    # so it survives a second round trip stably even though the very first
+    # reverse pass can't recover which xsi:type the source originally used.
+    color = next(o for o in all_round_tripped if o.code.coding and o.code.coding[0].code == "5778-6")
+    assert color.valueString == "Yellow"
+
+    # The organizer-level Specimen itself round-trips too, referenced from
+    # both the report and every result Observation.
+    specimen = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Specimen")
+    assert report.specimen[0].reference == f"urn:uuid:{specimen.id}"
+    assert specimen.type.coding[0].code == "119297000"
+    assert float(specimen.collection.quantity.value) == 5
+    assert specimen.note[0].text == "Drawn via venipuncture"
+    assert specimen.collection.bodySite.coding[0].code == "368225008"
 
 
 def test_ccd_round_trip_preserves_procedure_fields():
@@ -609,6 +642,54 @@ def test_ccd_round_trip_preserves_procedure_fields():
     negated = next(p for p in procedures if p.status == "not-done")
     assert negated.identifier[0].value == "urn:oid:d1e2f3a4-0002-4a1a-8a1a-000000000002"
     assert negated.identifier[0].system == "urn:ietf:rfc:3986"
+
+
+def test_ccd_round_trip_preserves_procedure_performer_and_participant():
+    # ccd_procedures_basic.xml's own completed entry carries a
+    # fully-populated performer (PractitionerRole wrapping a Practitioner
+    # with a name, an Organization, and an address-only Location) and a
+    # Service Delivery Location participant; its negated entry carries an
+    # id-only performer with no name at all.
+    forward_xml = (FIXTURES / "ccd_procedures_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+
+    def _resolve(bundle_, reference: str):
+        resource_id = reference.removeprefix("urn:uuid:")
+        return next(e.resource for e in bundle_.entry if e.resource.id == resource_id)
+
+    procedures = {p.code.coding[0].code: p for p in (e.resource for e in round_tripped_bundle.entry) if p.get_resource_type() == "Procedure"}
+    appendectomy = procedures["80146002"]
+    colonoscopy = procedures["73761001"]
+
+    assert len(appendectomy.performer) == 1
+    role = _resolve(round_tripped_bundle, appendectomy.performer[0].actor.reference)
+    assert role.get_resource_type() == "PractitionerRole"
+    practitioner = _resolve(round_tripped_bundle, role.practitioner.reference)
+    assert practitioner.name[0].family == "Smith"
+    assert practitioner.name[0].given == ["John"]
+    assert practitioner.identifier[0].value == "333444555"
+    organization = _resolve(round_tripped_bundle, role.organization.reference)
+    assert organization.name == "General Hospital"
+    performer_location = _resolve(round_tripped_bundle, role.location[0].reference)
+    assert performer_location.address.city == "Portland"
+    assert performer_location.address.line == ["100 Main St"]
+    assert role.telecom[0].value == "+1-555-555-1234"
+
+    sdloc = _resolve(round_tripped_bundle, appendectomy.location.reference)
+    assert sdloc.get_resource_type() == "Location"
+    assert sdloc.name == "Community Medical Center"
+    assert sdloc.type[0].coding[0].code == "1060-3"
+    assert sdloc.address.city == "Portland"
+    assert sdloc.address.postalCode == "99123"
+
+    # The id-only performer survives too - no fabricated name.
+    assert len(colonoscopy.performer) == 1
+    colonoscopy_role = _resolve(round_tripped_bundle, colonoscopy.performer[0].actor.reference)
+    colonoscopy_practitioner = _resolve(round_tripped_bundle, colonoscopy_role.practitioner.reference)
+    assert colonoscopy_practitioner.name is None
+    assert colonoscopy_practitioner.identifier[0].value == "urn:oid:2.16.840.1.113883.19.5"
 
 
 def test_ccd_missing_patient_raises_mapping_error():

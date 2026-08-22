@@ -26,6 +26,7 @@ alone still produces a valid `effectiveTime` with only the corresponding
 child present, matching `ivl_ts_bounds`' own tolerance for a partial pair."""
 
 from fhir.resources.R4B.bundle import Bundle
+from fhir.resources.R4B.codeableconcept import CodeableConcept
 
 from app.cda.allergies import ALLERGY_CONCERN_ACT_TEMPLATE_ID, ALLERGY_OBSERVATION_TEMPLATE_ID
 from app.cda.allergies import ALLERGY_STATUS_OBSERVATION_TEMPLATE_ID, CRITICALITY_OBSERVATION_TEMPLATE_ID
@@ -42,13 +43,16 @@ from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_T
 from app.cda.results import ORGANIZER_TEMPLATE_ID as RESULTS_ORGANIZER_TEMPLATE_ID
 from app.cda.results import OBSERVATION_TEMPLATE_ID as RESULTS_OBSERVATION_TEMPLATE_ID
 from app.cda.results import SECTION_TEMPLATE_ID as RESULTS_SECTION_TEMPLATE_ID
+from app.cda.results import SPECIMEN_COLLECTION_PROCEDURE_CODE, SPECIMEN_COLLECTION_PROCEDURE_CODE_SYSTEM
 from app.cda.vitals import ORGANIZER_TEMPLATE_ID as VITALS_ORGANIZER_TEMPLATE_ID
 from app.cda.vitals import OBSERVATION_TEMPLATE_ID as VITALS_OBSERVATION_TEMPLATE_ID
 from app.cda.vitals import PANEL_CODE as VITALS_PANEL_CODE
 from app.cda.vitals import SECTION_TEMPLATE_ID as VITALS_SECTION_TEMPLATE_ID
+from app.cda.vitals import BP_PANEL_CODE, PULSE_OX_PRIMARY_CODES
 from app.cda.procedures import PROCEDURE_TEMPLATE_ID
 from app.cda.procedures import STATUS_MAP as PROCEDURE_STATUS_MAP
 from app.cda.procedures import SECTION_TEMPLATE_ID as PROCEDURES_SECTION_TEMPLATE_ID
+from app.cda.procedures import SERVICE_DELIVERY_LOCATION_TEMPLATE_ID
 from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID
 from app.cda.medications import STATUS_MAP as MEDICATION_STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
@@ -696,10 +700,95 @@ def _build_vital_sign_observation_element(observation) -> str:
     )
 
 
+def _reverse_bp_panel_elements(panel) -> str:
+    """Reverse of app.cda.vitals._build_blood_pressure_panel - a Blood
+    Pressure Panel Observation has no independent existence on the CDA
+    side (it's a grouping of two ordinary Vital Sign Observations, not a
+    genuinely distinct source shape), so this expands its own two
+    required `.component` entries back into two flat `<observation>`
+    elements - one per component, using that component's own real
+    code+value - rather than the single element every other panel member
+    reverses to. **A disclosed round-trip gap, not a bug**: the forward
+    builder never records an `effectiveDateTime` on either the panel or
+    its components (see that function's own docstring), so neither
+    reconstructed observation gets an `<effectiveTime>` either - the same
+    "regenerate what was actually kept, don't fabricate a fake timestamp"
+    precedent this app's every other lossy reversal already establishes."""
+    elements = []
+    for component in panel.component or []:
+        coding = component.code.coding[0] if component.code and component.code.coding else None
+        code_element = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
+        value = ""
+        if component.valueQuantity is not None:
+            unit = f' unit="{_esc(component.valueQuantity.unit)}"' if component.valueQuantity.unit else ""
+            value = f'<value xsi:type="PQ" value="{component.valueQuantity.value}"{unit}/>'
+        elements.append(
+            '<component><observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{VITALS_OBSERVATION_TEMPLATE_ID}"/>'
+            '<statusCode code="completed"/>'
+            f"{code_element}{value}"
+            "</observation></component>"
+        )
+    return "".join(elements)
+
+
+def _reverse_pulse_ox_panel_elements(panel) -> str:
+    """Reverse of app.cda.vitals._build_pulse_oximetry_panel - the O2
+    saturation reading itself becomes the panel on the forward side, so
+    this reverses it back into one flat `<observation>` (reusing
+    `_build_vital_sign_observation_element` via a shallow `model_copy`
+    that swaps in just the primary reading's own single coding - "59408-5",
+    the disclosed representative regenerated regardless of which one or
+    both of the two IG-documented synonymous codings the panel's own
+    `.code` carries, since the source can never be recovered from the FHIR
+    side alone, the same "pick one, don't guess which the source really
+    used" precedent this app's every other many-to-one reversal already
+    establishes), plus one further flat `<observation>` per `.component`
+    (concentration/flow rate) - each built with **only** its own code and
+    value, since the forward builder never carries the panel's own
+    effectiveDateTime/interpretation/method/bodySite onto those specific
+    sibling readings either (see that function's own docstring)."""
+    primary_coding = next(
+        (c for c in (panel.code.coding or []) if c.code in PULSE_OX_PRIMARY_CODES),
+        panel.code.coding[0] if panel.code and panel.code.coding else None,
+    )
+    primary_code = CodeableConcept(coding=[primary_coding]) if primary_coding else None
+    primary_as_flat = panel.model_copy(update={"code": primary_code, "component": None})
+    elements = [_build_vital_sign_observation_element(primary_as_flat)]
+    for component in panel.component or []:
+        component_as_flat = panel.model_copy(
+            update={
+                "code": component.code,
+                "component": None,
+                "valueQuantity": component.valueQuantity,
+                "interpretation": None,
+                "method": None,
+                "bodySite": None,
+            }
+        )
+        elements.append(_build_vital_sign_observation_element(component_as_flat))
+    return "".join(elements)
+
+
+def _build_vital_signs_member_elements(member) -> str:
+    """Dispatches a Vital Signs Panel's own `.hasMember` entry to the
+    right reverse builder - a plain flat Vital Sign Observation, a Blood
+    Pressure Panel (own `.component`, no top-level value - reverses to
+    TWO flat observations), or a Pulse Oximetry Panel (own top-level
+    value, optional `.component` - reverses to one-plus-N flat
+    observations). Detection mirrors the forward side's own detection
+    exactly (fixed codes, not structural guessing)."""
+    if member.code and member.code.coding and member.code.coding[0].code == BP_PANEL_CODE:
+        return _reverse_bp_panel_elements(member)
+    if member.code and any(c.code in PULSE_OX_PRIMARY_CODES for c in (member.code.coding or [])):
+        return _reverse_pulse_ox_panel_elements(member)
+    return _build_vital_sign_observation_element(member)
+
+
 def _build_vital_signs_organizer(panel, members_by_id: dict) -> str:
     member_ids = [ref.reference.removeprefix("urn:uuid:") for ref in (panel.hasMember or [])]
     member_elements = "".join(
-        _build_vital_sign_observation_element(members_by_id[member_id])
+        _build_vital_signs_member_elements(members_by_id[member_id])
         for member_id in member_ids
         if member_id in members_by_id
     )
@@ -755,10 +844,39 @@ def _build_result_value_element(observation) -> str:
     forward side (both branches call the identical build_quantity_from_pq
     with no REAL-specific behavior), so this always emits xsi:type="PQ"
     regardless of whether the original was PQ or REAL - the choice is
-    provably inert for round-trip correctness, not a corner cut."""
+    provably inert for round-trip correctness, not a corner cut.
+
+    **`valueQuantity` with a `comparator`** reverses back to a single-bound
+    `IVL_PQ` (`<high>` for `<=`/`<`, `<low>` for `>=`/`>`, `@inclusive`
+    omitted for the inclusive pair and set to `"false"` for the exclusive
+    one) - the exact inverse of `_build_ivl_pq_value`'s own forward
+    assignment, per `mappingGuidance.md`'s own "Ranges of Physical
+    Quantities" section. **`valueRange`** (both bounds originally present)
+    reverses to a two-bound `IVL_PQ` directly. **`valueString`** always
+    reverses to `xsi:type="ST"`, never `"ED"` - a disclosed, permanent
+    round-trip simplification (the forward side already collapses ED's
+    own plain-text case into the identical `valueString` field ST uses,
+    with no FHIR-side marker distinguishing which one the source
+    originally was)."""
     if observation.valueQuantity is not None:
-        unit = f' unit="{_esc(observation.valueQuantity.unit)}"' if observation.valueQuantity.unit else ""
-        return f'<value xsi:type="PQ" value="{observation.valueQuantity.value}"{unit}/>'
+        quantity = observation.valueQuantity
+        unit = f' unit="{_esc(quantity.unit)}"' if quantity.unit else ""
+        if quantity.comparator:
+            bound_tag = "high" if quantity.comparator in ("<=", "<") else "low"
+            inclusive_attr = "" if quantity.comparator in ("<=", ">=") else ' inclusive="false"'
+            return f'<value xsi:type="IVL_PQ"><{bound_tag} value="{quantity.value}"{unit}{inclusive_attr}/></value>'
+        return f'<value xsi:type="PQ" value="{quantity.value}"{unit}/>'
+    if observation.valueRange is not None:
+        range_value = observation.valueRange
+        low = ""
+        if range_value.low is not None:
+            low_unit = f' unit="{_esc(range_value.low.unit)}"' if range_value.low.unit else ""
+            low = f'<low value="{range_value.low.value}"{low_unit}/>'
+        high = ""
+        if range_value.high is not None:
+            high_unit = f' unit="{_esc(range_value.high.unit)}"' if range_value.high.unit else ""
+            high = f'<high value="{range_value.high.value}"{high_unit}/>'
+        return f'<value xsi:type="IVL_PQ">{low}{high}</value>'
     if observation.valueCodeableConcept is not None and observation.valueCodeableConcept.coding:
         return f'<value xsi:type="CD" {_build_cd_attrs(observation.valueCodeableConcept.coding[0])}/>'
     if observation.valueInteger is not None:
@@ -766,6 +884,53 @@ def _build_result_value_element(observation) -> str:
     if observation.valueString is not None:
         return f'<value xsi:type="ST">{_esc(observation.valueString)}</value>'
     return ""
+
+
+def _reverse_specimen_elements(specimen) -> tuple[str, str]:
+    """Reverse of app.cda.results._build_specimen/_apply_collection_body_site
+    - specimenPlayingEntity/code (falling back to a text-only /name when
+    no code resolved, the same "one disclosed representative shape when
+    two source shapes could produce the identical FHIR field" precedent
+    every other reversal in this app already establishes for a many-to-one
+    forward mapping), /quantity, /desc. `.collection.bodySite` reverses to
+    a **separate** sibling Specimen Collection Procedure component (the
+    fixed SNOMED `17636008` code) - it lives at a different nesting depth
+    than <specimen> itself (a sibling <component> of the organizer, not
+    nested inside <specimen>), so this returns both pieces as a tuple
+    rather than one combined string, letting the caller place each at its
+    own real position."""
+    identifiers = "".join(
+        f'<id root="{_reverse_identifier_root(identifier)}" extension="{_esc(identifier.value)}"/>'
+        for identifier in (specimen.identifier or [])
+    )
+    code_element = ""
+    name_element = ""
+    if specimen.type and specimen.type.coding:
+        code_element = f"<code {_build_cd_attrs(specimen.type.coding[0])}/>"
+    elif specimen.type and specimen.type.text:
+        name_element = f"<name>{_esc(specimen.type.text)}</name>"
+    quantity_element = ""
+    if specimen.collection and specimen.collection.quantity is not None:
+        quantity = specimen.collection.quantity
+        unit = f' unit="{_esc(quantity.unit)}"' if quantity.unit else ""
+        quantity_element = f'<quantity value="{quantity.value}"{unit}/>'
+    desc_element = f"<desc>{_esc(specimen.note[0].text)}</desc>" if specimen.note else ""
+    specimen_element = (
+        '<specimen typeCode="SPC"><specimenRole classCode="SPEC">'
+        f"{identifiers}"
+        f'<specimenPlayingEntity classCode="ENT">{code_element}{name_element}{quantity_element}{desc_element}</specimenPlayingEntity>'
+        "</specimenRole></specimen>"
+    )
+    collection_procedure_element = ""
+    if specimen.collection and specimen.collection.bodySite and specimen.collection.bodySite.coding:
+        body_site_attrs = _build_cd_attrs(specimen.collection.bodySite.coding[0])
+        collection_procedure_element = (
+            '<component><procedure classCode="PROC" moodCode="EVN">'
+            f'<code code="{SPECIMEN_COLLECTION_PROCEDURE_CODE}" codeSystem="{SPECIMEN_COLLECTION_PROCEDURE_CODE_SYSTEM}" displayName="Specimen collection"/>'
+            f"<targetSiteCode {body_site_attrs}/>"
+            "</procedure></component>"
+        )
+    return specimen_element, collection_procedure_element
 
 
 def _build_reference_range_element(observation) -> str:
@@ -813,7 +978,7 @@ def _build_result_observation_element(observation) -> str:
     )
 
 
-def _build_result_organizer(report, observations_by_id: dict) -> str:
+def _build_result_organizer(report, observations_by_id: dict, specimens_by_id: dict) -> str:
     result_ids = [ref.reference.removeprefix("urn:uuid:") for ref in (report.result or [])]
     member_elements = "".join(
         _build_result_observation_element(observations_by_id[result_id])
@@ -828,17 +993,31 @@ def _build_result_organizer(report, observations_by_id: dict) -> str:
     effective_time = (
         f'<effectiveTime value="{format_hl7_ts(report.effectiveDateTime)}"/>' if report.effectiveDateTime else ""
     )
+    # DiagnosticReport.specimen[0] is the organizer-level Specimen the
+    # forward builder propagates as the default onto every result
+    # Observation - reversed here at organizer level only; a genuine
+    # observation-level-only override is a disclosed round-trip gap this
+    # builder doesn't attempt to distinguish (see module docstring).
+    specimen_element = ""
+    collection_procedure_element = ""
+    if report.specimen:
+        specimen_id = report.specimen[0].reference.removeprefix("urn:uuid:")
+        specimen = specimens_by_id.get(specimen_id)
+        if specimen is not None:
+            specimen_element, collection_procedure_element = _reverse_specimen_elements(specimen)
     return (
         f'<entry typeCode="DRIV"><organizer classCode="BATTERY" moodCode="EVN">'
         f'<templateId root="{RESULTS_ORGANIZER_TEMPLATE_ID}"/>'
         f"{organizer_code}"
-        f'<statusCode code="{act_status}"/>{effective_time}{member_elements}'
+        f'<statusCode code="{act_status}"/>{effective_time}{specimen_element}{member_elements}{collection_procedure_element}'
         "</organizer></entry>"
     )
 
 
-def _build_results_section(reports, observations_by_id: dict) -> str:
-    entries = "".join(entry for report in reports if (entry := _build_result_organizer(report, observations_by_id)))
+def _build_results_section(reports, observations_by_id: dict, specimens_by_id: dict) -> str:
+    entries = "".join(
+        entry for report in reports if (entry := _build_result_organizer(report, observations_by_id, specimens_by_id))
+    )
     if not entries:
         return ""
     return (
@@ -886,7 +1065,110 @@ def _reverse_generic_identifier(identifier) -> str:
     return f'<id extension="{_esc(identifier.value or "")}"/>'
 
 
-def _build_procedure_entry(procedure) -> str:
+def _reverse_address_element(address) -> str:
+    """Reverse of app.cda.procedures._build_address - shared by both a
+    performer's own Location (referenced via PractitionerRole.location)
+    and a Service Delivery Location, the same two CDA-side consumers
+    app.cda.procedures._build_address itself already serves on the
+    forward side."""
+    lines = "".join(f"<streetAddressLine>{_esc(line)}</streetAddressLine>" for line in (address.line or []))
+    city = f"<city>{_esc(address.city)}</city>" if address.city else ""
+    state = f"<state>{_esc(address.state)}</state>" if address.state else ""
+    postal_code = f"<postalCode>{_esc(address.postalCode)}</postalCode>" if address.postalCode else ""
+    country = f"<country>{_esc(address.country)}</country>" if address.country else ""
+    return f"<addr>{lines}{city}{state}{postal_code}{country}</addr>"
+
+
+def _reverse_performer_element(
+    performer, practitioner_roles_by_id: dict, practitioners_by_id: dict, organizations_by_id: dict, locations_by_id: dict
+) -> str:
+    """Reverse of app.cda.procedures._build_performer - resolves the
+    PractitionerRole's own chain of references (practitioner/organization/
+    location) back into one <assignedEntity>, the CDA shape a
+    PractitionerRole has no direct forward-side equivalent for (it's
+    purely a wrapper this app's own forward mapper assembles, per the real
+    Procedure.csv mapping table - see that function's own docstring) -
+    the one place in this app's C-CDA reverse direction that walks two
+    levels of Reference resolution to reconstruct a single source
+    element. Returns "" (this performer is silently dropped) when the
+    referenced PractitionerRole itself can't be resolved - defensive, not
+    currently reachable against this app's own forward output."""
+    role_id = performer.actor.reference.removeprefix("urn:uuid:") if performer.actor and performer.actor.reference else None
+    role = practitioner_roles_by_id.get(role_id) if role_id else None
+    if role is None:
+        return ""
+
+    ids = "".join(
+        f'<id root="{_reverse_identifier_root(identifier)}" extension="{_esc(identifier.value)}"/>'
+        for identifier in (role.identifier or [])
+    )
+
+    addr = ""
+    if role.location:
+        location_id = role.location[0].reference.removeprefix("urn:uuid:")
+        location = locations_by_id.get(location_id)
+        if location is not None and location.address:
+            addr = _reverse_address_element(location.address)
+
+    telecom = ""
+    if role.telecom:
+        telecom = f'<telecom use="WP" value="tel:{_esc(role.telecom[0].value)}"/>'
+
+    assigned_person = ""
+    if role.practitioner:
+        practitioner_id = role.practitioner.reference.removeprefix("urn:uuid:")
+        practitioner = practitioners_by_id.get(practitioner_id)
+        if practitioner is not None and practitioner.name:
+            name = practitioner.name[0]
+            family = f"<family>{_esc(name.family)}</family>" if name.family else ""
+            given = "".join(f"<given>{_esc(g)}</given>" for g in (name.given or []))
+            assigned_person = f"<assignedPerson><name>{given}{family}</name></assignedPerson>"
+
+    represented_organization = ""
+    if role.organization:
+        organization_id = role.organization.reference.removeprefix("urn:uuid:")
+        organization = organizations_by_id.get(organization_id)
+        if organization is not None and organization.name:
+            represented_organization = f"<representedOrganization><name>{_esc(organization.name)}</name></representedOrganization>"
+
+    return (
+        '<performer typeCode="PRF"><assignedEntity>'
+        f"{ids}{addr}{telecom}{assigned_person}{represented_organization}"
+        "</assignedEntity></performer>"
+    )
+
+
+def _reverse_participant_location_element(procedure, locations_by_id: dict) -> str:
+    """Reverse of app.cda.procedures._build_service_delivery_location -
+    Procedure.location is a direct Reference, unrelated to a performer's
+    own PractitionerRole machinery. Returns "" when Procedure.location is
+    absent or the referenced Location can't be resolved."""
+    if procedure.location is None or not procedure.location.reference:
+        return ""
+    location_id = procedure.location.reference.removeprefix("urn:uuid:")
+    location = locations_by_id.get(location_id)
+    if location is None:
+        return ""
+
+    code_element = ""
+    if location.type and location.type[0].coding:
+        code_element = f"<code {_build_cd_attrs(location.type[0].coding[0])}/>"
+    addr = _reverse_address_element(location.address) if location.address else ""
+    telecom = f'<telecom use="WP" value="tel:{_esc(location.telecom[0].value)}"/>' if location.telecom else ""
+    name = f"<name>{_esc(location.name)}</name>" if location.name else ""
+
+    return (
+        '<participant typeCode="LOC"><participantRole classCode="SDLOC">'
+        f'<templateId root="{SERVICE_DELIVERY_LOCATION_TEMPLATE_ID}"/>'
+        f"{code_element}{addr}{telecom}"
+        f'<playingEntity classCode="PLC">{name}</playingEntity>'
+        "</participantRole></participant>"
+    )
+
+
+def _build_procedure_entry(
+    procedure, practitioner_roles_by_id: dict, practitioners_by_id: dict, organizations_by_id: dict, locations_by_id: dict
+) -> str:
     ids = "".join(_reverse_generic_identifier(i) for i in (procedure.identifier or []))
 
     code = ""
@@ -917,18 +1199,29 @@ def _build_procedure_entry(procedure) -> str:
     if procedure.bodySite and procedure.bodySite[0].coding:
         body_site = f"<targetSiteCode {_build_cd_attrs(procedure.bodySite[0].coding[0])}/>"
 
+    performers = "".join(
+        _reverse_performer_element(p, practitioner_roles_by_id, practitioners_by_id, organizations_by_id, locations_by_id)
+        for p in (procedure.performer or [])
+    )
+    participant = _reverse_participant_location_element(procedure, locations_by_id)
+
     return (
         '<entry typeCode="DRIV"><procedure classCode="PROC" moodCode="EVN">'
         f'<templateId root="{PROCEDURE_TEMPLATE_ID}"/>'
-        f"{ids}{code}{status_element}{effective_time}{body_site}"
+        f"{ids}{code}{status_element}{effective_time}{body_site}{performers}{participant}"
         "</procedure></entry>"
     )
 
 
-def _build_procedures_section(procedures) -> str:
+def _build_procedures_section(
+    procedures, practitioner_roles_by_id: dict, practitioners_by_id: dict, organizations_by_id: dict, locations_by_id: dict
+) -> str:
     if not procedures:
         return ""
-    entries = "".join(_build_procedure_entry(p) for p in procedures)
+    entries = "".join(
+        _build_procedure_entry(p, practitioner_roles_by_id, practitioners_by_id, organizations_by_id, locations_by_id)
+        for p in procedures
+    )
     return (
         f'<component><section><templateId root="{PROCEDURES_SECTION_TEMPLATE_ID}"/>'
         '<code code="47519-4" codeSystem="2.16.840.1.113883.6.1" displayName="History of Procedures"/>'
@@ -1283,7 +1576,12 @@ def build_sectioned_document(
     immunizations = find_resources(bundle, "Immunization")
     observations = find_resources(bundle, "Observation")
     diagnostic_reports = find_resources(bundle, "DiagnosticReport")
+    specimens_by_id = {s.id: s for s in find_resources(bundle, "Specimen")}
     procedures = find_resources(bundle, "Procedure")
+    practitioner_roles_by_id = {r.id: r for r in find_resources(bundle, "PractitionerRole")}
+    practitioners_by_id = {p.id: p for p in find_resources(bundle, "Practitioner")}
+    organizations_by_id = {o.id: o for o in find_resources(bundle, "Organization")}
+    locations_by_id = {loc.id: loc for loc in find_resources(bundle, "Location")}
     document_references = find_resources(bundle, "DocumentReference")
     binaries_by_id = {b.id: b for b in find_resources(bundle, "Binary")}
     family_member_histories = find_resources(bundle, "FamilyMemberHistory")
@@ -1306,8 +1604,10 @@ def build_sectioned_document(
     immunizations_section = _build_immunizations_section(immunizations)
     vitals_section = _build_vitals_section(observations)
     observations_by_id = {o.id: o for o in observations}
-    results_section = _build_results_section(diagnostic_reports, observations_by_id)
-    procedures_section = _build_procedures_section(procedures)
+    results_section = _build_results_section(diagnostic_reports, observations_by_id, specimens_by_id)
+    procedures_section = _build_procedures_section(
+        procedures, practitioner_roles_by_id, practitioners_by_id, organizations_by_id, locations_by_id
+    )
     extra_entries_by_loinc = {
         _SOCIAL_HISTORY_LOINC: _build_social_history_entries(observations),
         _FAMILY_HISTORY_LOINC: _build_family_history_entries(family_member_histories),

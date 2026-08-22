@@ -55,6 +55,7 @@ from app.cda.problems import CONCERN_ACT_TEMPLATE_ID, PROBLEM_OBSERVATION_TEMPLA
 from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
 from app.cda.procedures import PROCEDURE_TEMPLATE_ID, STATUS_MAP as PROCEDURE_STATUS_MAP
 from app.cda.procedures import SECTION_TEMPLATE_ID as PROCEDURES_SECTION_TEMPLATE_ID
+from app.cda.procedures import SERVICE_DELIVERY_LOCATION_TEMPLATE_ID
 from app.cda.procedures import (
     SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as PROCEDURES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL,
 )
@@ -70,6 +71,14 @@ from app.cda.vitals import ORGANIZER_TEMPLATE_ID as VITAL_SIGNS_ORGANIZER_TEMPLA
 from app.cda.vitals import OBSERVATION_TEMPLATE_ID as VITAL_SIGN_OBSERVATION_TEMPLATE_ID
 from app.cda.vitals import SECTION_TEMPLATE_ID as VITALS_SECTION_TEMPLATE_ID
 from app.cda.vitals import SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as VITALS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
+from app.cda.vitals import (
+    BP_SYSTOLIC_CODE,
+    BP_DIASTOLIC_CODE,
+    LOINC_OID,
+    PULSE_OX_PRIMARY_CODES,
+    PULSE_OX_CONCENTRATION_CODE,
+    PULSE_OX_FLOW_RATE_CODE,
+)
 from app.hl7.errors import MappingError, MissingSegmentError
 from app.validation.common import is_before, not_in_future, parse_comparable_datetime
 from app.validation.models import ValidationFinding, ValidationReport
@@ -646,20 +655,46 @@ def _rule_immunizations(section, patient, now: datetime) -> list[ValidationFindi
     return findings
 
 
+def _iter_vital_signs_organizers(section):
+    """Yield each Vital Signs Organizer element - the same organizer-level
+    granularity app.cda.vitals.build_vital_signs()'s own Blood Pressure/
+    Pulse Oximetry Panel detection needs (a pair/sibling relationship
+    across an organizer's own component list, not a per-observation
+    property _iter_vital_sign_observations' own flat walk can see)."""
+    for entry in find_all(section, "entry"):
+        organizer = find_child(entry, "organizer")
+        if organizer is not None and has_template_id(organizer, VITAL_SIGNS_ORGANIZER_TEMPLATE_ID):
+            yield organizer
+
+
 def _iter_vital_sign_observations(section):
     """Yield each Vital Sign Observation element found via the same
     organizer/component walk app.cda.vitals.build_vital_signs() uses, so
     validation can never see a different set of entries than conversion
     does."""
-    for entry in find_all(section, "entry"):
-        organizer = find_child(entry, "organizer")
-        if organizer is None or not has_template_id(organizer, VITAL_SIGNS_ORGANIZER_TEMPLATE_ID):
-            continue
+    for organizer in _iter_vital_signs_organizers(section):
         for component in find_all(organizer, "component"):
             observation = find_child(component, "observation")
             if observation is None or not has_template_id(observation, VITAL_SIGN_OBSERVATION_TEMPLATE_ID):
                 continue
             yield observation
+
+
+def _organizer_loinc_codes(organizer) -> set[str]:
+    """The set of genuinely LOINC-coded values among an organizer's own
+    Vital Sign Observations - mirrors app.cda.vitals._loinc_code's own
+    "only a real LOINC code is trusted" check, so this rule can never
+    false-positive on a coincidentally identical code string in some
+    other vocabulary."""
+    codes = set()
+    for observation in find_all(organizer, "component"):
+        inner = find_child(observation, "observation")
+        if inner is None or not has_template_id(inner, VITAL_SIGN_OBSERVATION_TEMPLATE_ID):
+            continue
+        code_element = find_child(inner, "code")
+        if code_element is not None and code_element.get("codeSystem") == LOINC_OID:
+            codes.add(code_element.get("code"))
+    return codes
 
 
 def _rule_vitals(section, now: datetime) -> list[ValidationFinding]:
@@ -687,7 +722,49 @@ def _rule_vitals(section, now: datetime) -> list[ValidationFinding]:
                     message="A Vital Sign Observation's effective time is in the future.",
                 )
             )
+
+    # Surfaces what app.cda.vitals.build_vital_signs()'s own grouping
+    # detection silently falls back on - an incomplete Blood Pressure pair
+    # or an orphaned Pulse Oximetry sibling maps as an ordinary flat vital
+    # sign rather than the grouped panel a reader might expect, mirroring
+    # this app's own "surface what the mapper silently defaults/skips"
+    # philosophy every other section's rules already establish.
+    for organizer in _iter_vital_signs_organizers(section):
+        codes = _organizer_loinc_codes(organizer)
+        has_systolic = BP_SYSTOLIC_CODE in codes
+        has_diastolic = BP_DIASTOLIC_CODE in codes
+        if has_systolic != has_diastolic:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.vitals-incomplete-blood-pressure-pair",
+                    segment="Vital Signs/.../organizer",
+                    message="A Blood Pressure reading (systolic or diastolic) is present without its own pair - the converter will map it as an ordinary flat Vital Sign Observation, not a grouped Blood Pressure Panel.",
+                )
+            )
+        has_primary = bool(codes & PULSE_OX_PRIMARY_CODES)
+        has_sibling = PULSE_OX_CONCENTRATION_CODE in codes or PULSE_OX_FLOW_RATE_CODE in codes
+        if has_sibling and not has_primary:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.vitals-orphaned-pulse-oximetry-component",
+                    segment="Vital Signs/.../organizer",
+                    message="An inhaled oxygen concentration/flow rate reading is present without its own primary O2 saturation reading - the converter will map it as an ordinary flat Vital Sign Observation, not a Pulse Oximetry Panel component.",
+                )
+            )
     return findings
+
+
+def _iter_result_organizers(section):
+    """Yield each Result Organizer element - the granularity
+    app.cda.results._build_specimen's own organizer-level attachment check
+    needs, distinct from _iter_result_observations' own flat per-
+    observation walk."""
+    for entry in find_all(section, "entry"):
+        organizer = find_child(entry, "organizer")
+        if organizer is not None and has_template_id(organizer, RESULT_ORGANIZER_TEMPLATE_ID):
+            yield organizer
 
 
 def _iter_result_observations(section):
@@ -695,15 +772,29 @@ def _iter_result_observations(section):
     organizer/component walk app.cda.results.build_diagnostic_reports()
     uses, so validation can never see a different set of entries than
     conversion does."""
-    for entry in find_all(section, "entry"):
-        organizer = find_child(entry, "organizer")
-        if organizer is None or not has_template_id(organizer, RESULT_ORGANIZER_TEMPLATE_ID):
-            continue
+    for organizer in _iter_result_organizers(section):
         for component in find_all(organizer, "component"):
             observation = find_child(component, "observation")
             if observation is None or not has_template_id(observation, RESULT_OBSERVATION_TEMPLATE_ID):
                 continue
             yield observation
+
+
+def _iter_result_specimens(section):
+    """Yield each <specimen> element found at either attachment level
+    (organizer-level or an individual observation's own) - the same two
+    places app.cda.results._build_specimen is called from."""
+    for organizer in _iter_result_organizers(section):
+        specimen = find_child(organizer, "specimen")
+        if specimen is not None:
+            yield specimen
+        for component in find_all(organizer, "component"):
+            observation = find_child(component, "observation")
+            if observation is None or not has_template_id(observation, RESULT_OBSERVATION_TEMPLATE_ID):
+                continue
+            own_specimen = find_child(observation, "specimen")
+            if own_specimen is not None:
+                yield own_specimen
 
 
 def _rule_results(section, now: datetime) -> list[ValidationFinding]:
@@ -741,6 +832,20 @@ def _rule_results(section, now: datetime) -> list[ValidationFinding]:
                     rule_id="cda.result-effective-time-in-future",
                     segment="Results/.../observation/effectiveTime",
                     message="A Result Observation's effective time is in the future.",
+                )
+            )
+
+    # Surfaces app.cda.results._build_specimen's own silent skip: a
+    # <specimen> present but missing its own <specimenRole> child never
+    # produces a Specimen resource at all.
+    for specimen in _iter_result_specimens(section):
+        if find_child(specimen, "specimenRole") is None:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.result-specimen-missing-role",
+                    segment="Results/.../specimen",
+                    message="A <specimen> element has no resolvable specimenRole - the converter will silently skip building a Specimen resource for it.",
                 )
             )
     return findings
@@ -784,6 +889,54 @@ def _rule_procedures(section, now: datetime) -> list[ValidationFinding]:
                     message="A Procedure's effective time is in the future.",
                 )
             )
+
+        # Surfaces app.cda.procedures._build_practitioner_from_assigned_
+        # entity's own silent skip: a performer with neither a resolvable
+        # id nor a name never materializes a Practitioner (and so is
+        # dropped from Procedure.performer entirely).
+        for performer in find_all(procedure, "performer"):
+            assigned_entity = find_child(performer, "assignedEntity")
+            if assigned_entity is None:
+                continue
+            has_id = find_child(assigned_entity, "id") is not None
+            assigned_person = find_child(assigned_entity, "assignedPerson")
+            name_element = find_child(assigned_person, "name") if assigned_person is not None else None
+            has_name = name_element is not None and (
+                find_child(name_element, "family") is not None or find_all(name_element, "given")
+            )
+            if not has_id and not has_name:
+                findings.append(
+                    ValidationFinding(
+                        severity="info",
+                        rule_id="cda.procedure-performer-missing-identity",
+                        segment="Procedures/.../procedure/performer",
+                        message="A performer has neither a resolvable id nor a name - the converter will silently skip it.",
+                    )
+                )
+
+        # Surfaces app.cda.procedures._build_service_delivery_location's
+        # own silent skip: a Service Delivery Location participant with
+        # neither a resolvable name nor a coded type never materializes a
+        # Location (and so Procedure.location stays unset).
+        for participant in find_all(procedure, "participant"):
+            if participant.get("typeCode") != "LOC":
+                continue
+            participant_role = find_child(participant, "participantRole")
+            if participant_role is None or not has_template_id(participant_role, SERVICE_DELIVERY_LOCATION_TEMPLATE_ID):
+                continue
+            playing_entity = find_child(participant_role, "playingEntity")
+            name_element = find_child(playing_entity, "name") if playing_entity is not None else None
+            has_name = name_element is not None and (name_element.text or "").strip()
+            has_type = build_codeable_concept_from_cd(find_child(participant_role, "code")) is not None
+            if not has_name and not has_type:
+                findings.append(
+                    ValidationFinding(
+                        severity="info",
+                        rule_id="cda.procedure-participant-missing-identity",
+                        segment="Procedures/.../procedure/participant",
+                        message="A Service Delivery Location participant has neither a resolvable name nor a coded type - the converter will silently skip it.",
+                    )
+                )
     return findings
 
 

@@ -629,6 +629,63 @@ def test_vitals_rules_also_run_against_entries_optional_section_variant():
     assert finding.severity == "info"
 
 
+def test_vitals_incomplete_blood_pressure_pair_is_info():
+    # Systolic present without its own diastolic pair - the converter will
+    # map it as an ordinary flat Vital Sign Observation, not a grouped
+    # Blood Pressure Panel (see app.cda.vitals's own BP_SYSTOLIC_CODE/
+    # BP_DIASTOLIC_CODE pairing requirement).
+    systolic = _vital_sign_observation(
+        code='<code code="8480-6" codeSystem="2.16.840.1.113883.6.1" displayName="Systolic blood pressure"/>'
+    )
+    entry = _vitals_organizer(systolic)
+    document = _doc(_patient() + _vitals_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.vitals-incomplete-blood-pressure-pair")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_vitals_complete_blood_pressure_pair_produces_no_finding():
+    systolic = _vital_sign_observation(
+        code='<code code="8480-6" codeSystem="2.16.840.1.113883.6.1" displayName="Systolic blood pressure"/>'
+    )
+    diastolic = _vital_sign_observation(
+        code='<code code="8462-4" codeSystem="2.16.840.1.113883.6.1" displayName="Diastolic blood pressure"/>'
+    )
+    entry = _vitals_organizer(systolic + diastolic)
+    document = _doc(_patient() + _vitals_section(entry))
+    report = validate_document(document)
+    assert not any(f.rule_id == "cda.vitals-incomplete-blood-pressure-pair" for f in report.findings)
+
+
+def test_vitals_orphaned_pulse_oximetry_component_is_info():
+    # An inhaled oxygen flow rate reading present without its own primary
+    # O2 saturation reading - nothing for the converter to attach it to as
+    # a Pulse Oximetry Panel component.
+    flow_rate = _vital_sign_observation(
+        code='<code code="3151-8" codeSystem="2.16.840.1.113883.6.1" displayName="Inhaled oxygen flow rate"/>'
+    )
+    entry = _vitals_organizer(flow_rate)
+    document = _doc(_patient() + _vitals_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.vitals-orphaned-pulse-oximetry-component")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_vitals_pulse_oximetry_with_primary_produces_no_finding():
+    primary = _vital_sign_observation(
+        code='<code code="59408-5" codeSystem="2.16.840.1.113883.6.1" displayName="Oxygen saturation"/>'
+    )
+    flow_rate = _vital_sign_observation(
+        code='<code code="3151-8" codeSystem="2.16.840.1.113883.6.1" displayName="Inhaled oxygen flow rate"/>'
+    )
+    entry = _vitals_organizer(primary + flow_rate)
+    document = _doc(_patient() + _vitals_section(entry))
+    report = validate_document(document)
+    assert not any(f.rule_id == "cda.vitals-orphaned-pulse-oximetry-component" for f in report.findings)
+
+
 def _result_observation(code: str = "", status: str = "completed", effective_time: str = "") -> str:
     observation_code = code or '<code code="6690-2" codeSystem="2.16.840.1.113883.6.1" displayName="Leukocytes"/>'
     return (
@@ -693,12 +750,34 @@ def test_result_rules_also_run_against_entries_optional_section_variant():
     assert finding.severity == "info"
 
 
-def _procedure_entry(status: str = "completed", effective_time: str = "", negation: str = "") -> str:
+def test_result_specimen_missing_role_is_info():
+    # Mirrors app.cda.results._build_specimen's own skip condition: a
+    # <specimen> with no resolvable specimenRole never materializes a
+    # Specimen resource.
+    specimen = "<specimen><notSpecimenRole/></specimen>"
+    entry = _results_organizer(specimen + _result_observation())
+    document = _doc(_patient() + _results_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.result-specimen-missing-role")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_result_specimen_with_role_produces_no_finding():
+    specimen = '<specimen><specimenRole><id root="2.16.840.1.113883.19.5.1" extension="S-001"/></specimenRole></specimen>'
+    entry = _results_organizer(specimen + _result_observation())
+    document = _doc(_patient() + _results_section(entry))
+    report = validate_document(document)
+    assert not any(f.rule_id == "cda.result-specimen-missing-role" for f in report.findings)
+
+
+def _procedure_entry(status: str = "completed", effective_time: str = "", negation: str = "", extra: str = "") -> str:
     effective_time = effective_time or '<effectiveTime value="20260615120000-0500"/>'
     return (
         f'<entry><procedure classCode="PROC" moodCode="EVN"{negation}>{_PROCEDURE_TEMPLATE}'
         '<code code="80146002" codeSystem="2.16.840.1.113883.6.96" displayName="Appendectomy"/>'
         f'<statusCode code="{status}"/>{effective_time}'
+        f"{extra}"
         "</procedure></entry>"
     )
 
@@ -755,6 +834,73 @@ def test_procedure_rules_also_run_against_entries_optional_section_variant():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.procedure-status-unrecognized")
     assert finding.severity == "info"
+
+
+def test_procedure_performer_missing_identity_is_info():
+    # Mirrors app.cda.procedures._build_practitioner_from_assigned_entity's
+    # own skip condition exactly: neither an id nor a resolvable
+    # assignedPerson/name means the mapper silently drops this performer.
+    performer = '<performer typeCode="PRF"><assignedEntity><addr><city>Portland</city></addr></assignedEntity></performer>'
+    entry = _procedure_entry(extra=performer)
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.procedure-performer-missing-identity")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_procedure_performer_with_id_only_produces_no_finding():
+    # The mapper's own "id or family or given" rule means an id-only
+    # performer still resolves - no finding should fire for it.
+    performer = '<performer typeCode="PRF"><assignedEntity><id root="2.16.840.1.113883.19.5" extension="12345"/></assignedEntity></performer>'
+    entry = _procedure_entry(extra=performer)
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    assert not any(f.rule_id == "cda.procedure-performer-missing-identity" for f in report.findings)
+
+
+def test_procedure_participant_missing_identity_is_info():
+    # Mirrors app.cda.procedures._build_service_delivery_location's own
+    # skip condition: a Service Delivery Location participant with
+    # neither a resolvable name nor a coded type means the mapper
+    # silently drops it (Procedure.location stays unset).
+    participant = (
+        '<participant typeCode="LOC"><participantRole classCode="SDLOC">'
+        '<templateId root="2.16.840.1.113883.10.20.22.4.32"/>'
+        "</participantRole></participant>"
+    )
+    entry = _procedure_entry(extra=participant)
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.procedure-participant-missing-identity")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_procedure_participant_with_type_only_produces_no_finding():
+    # A coded type alone (no name) still resolves per the mapper's own
+    # "name or type" rule - no finding should fire for it.
+    participant = (
+        '<participant typeCode="LOC"><participantRole classCode="SDLOC">'
+        '<templateId root="2.16.840.1.113883.10.20.22.4.32"/>'
+        '<code code="1060-3" codeSystem="2.16.840.1.113883.6.259" displayName="Emergency Department"/>'
+        "</participantRole></participant>"
+    )
+    entry = _procedure_entry(extra=participant)
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    assert not any(f.rule_id == "cda.procedure-participant-missing-identity" for f in report.findings)
+
+
+def test_procedure_participant_wrong_type_code_is_not_checked():
+    # Only typeCode="LOC" participants are checked - an unrelated
+    # participant typeCode is out of scope for this rule, mirroring the
+    # mapper's own identical typeCode gate.
+    participant = '<participant typeCode="CON"><participantRole classCode="SDLOC"></participantRole></participant>'
+    entry = _procedure_entry(extra=participant)
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    assert not any(f.rule_id == "cda.procedure-participant-missing-identity" for f in report.findings)
 
 
 def _hospital_discharge_diagnosis_entry(effective_time: str = "", value: str = "") -> str:

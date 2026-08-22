@@ -125,9 +125,13 @@ _CATEGORY_CODE = "laboratory"
 
 _SPECIMEN_ID_FALLBACK_SYSTEM = "urn:interop-tools:cda-specimen-id"
 # Specimen Collection Procedure's own fixed SNOMED CT code, per
-# CF-results.md's own "C-CDA Specimen to FHIR Specimen" table.
-_SPECIMEN_COLLECTION_PROCEDURE_CODE = "17636008"
-_SPECIMEN_COLLECTION_PROCEDURE_CODE_SYSTEM = "2.16.840.1.113883.6.96"
+# CF-results.md's own "C-CDA Specimen to FHIR Specimen" table. Public (not
+# module-private) - app/transform/cda_ccd.py became a real reverse-
+# direction consumer, reusing this same fixed code to regenerate the
+# sibling Specimen Collection Procedure component rather than a second,
+# independently-drifting copy.
+SPECIMEN_COLLECTION_PROCEDURE_CODE = "17636008"
+SPECIMEN_COLLECTION_PROCEDURE_CODE_SYSTEM = "2.16.840.1.113883.6.96"
 
 
 def _resolve_status(element) -> str:
@@ -414,8 +418,8 @@ def _find_specimen_collection_procedure(organizer):
         if code_element is None:
             continue
         if (
-            code_element.get("code") == _SPECIMEN_COLLECTION_PROCEDURE_CODE
-            and code_element.get("codeSystem") == _SPECIMEN_COLLECTION_PROCEDURE_CODE_SYSTEM
+            code_element.get("code") == SPECIMEN_COLLECTION_PROCEDURE_CODE
+            and code_element.get("codeSystem") == SPECIMEN_COLLECTION_PROCEDURE_CODE_SYSTEM
         ):
             return index, procedure_element
     return None
