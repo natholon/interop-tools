@@ -381,12 +381,19 @@ def test_procedures_basic_fixture_maps_completed_and_negated_entries():
     appendectomy = procedures["80146002"]
     assert appendectomy.status == "completed"
     assert appendectomy.subject.reference == f"urn:uuid:{patient.id}"
+    # originalText -> CodeableConcept.text, per the C-CDA on FHIR IG.
+    # The appendectomy uses the narrative-reference shape (resolved via
+    # build_sectioned_bundle's own resolve_narrative_references pre-pass,
+    # with the <content> markup flattened); the colonoscopy below uses the
+    # inline shape - both real-world shapes exercised in one fixture.
+    assert appendectomy.code.text == "Appendectomy of the appendix"
     assert appendectomy.performedDateTime.isoformat() == "2026-06-15T12:00:00-05:00"
     assert appendectomy.performedPeriod is None
     assert appendectomy.bodySite[0].coding[0].display == "Appendix structure"
     assert appendectomy.identifier[0].value == "PROC001"
 
     colonoscopy = procedures["73761001"]
+    assert colonoscopy.code.text == "Screening colonoscopy"
     # negationInd="true" overrides statusCode unconditionally.
     assert colonoscopy.status == "not-done"
     assert colonoscopy.performedDateTime is None

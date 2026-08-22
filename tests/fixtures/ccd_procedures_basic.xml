@@ -33,7 +33,7 @@
           <text>
             <table>
               <tbody>
-                <tr><td>Appendectomy - completed 2026-06-15</td></tr>
+                <tr><td ID="Proc1">Appendectomy of the <content styleCode="Bold">appendix</content></td></tr>
                 <tr><td>Colonoscopy - not performed</td></tr>
               </tbody>
             </table>
@@ -42,7 +42,9 @@
             <procedure classCode="PROC" moodCode="EVN">
               <templateId root="2.16.840.1.113883.10.20.22.4.14"/>
               <id root="d1e2f3a4-0001-4a1a-8a1a-000000000001" extension="PROC001"/>
-              <code code="80146002" codeSystem="2.16.840.1.113883.6.96" displayName="Appendectomy"/>
+              <code code="80146002" codeSystem="2.16.840.1.113883.6.96" displayName="Appendectomy">
+                <originalText><reference value="#Proc1"/></originalText>
+              </code>
               <statusCode code="completed"/>
               <effectiveTime value="20260615120000-0500"/>
               <targetSiteCode code="66754008" codeSystem="2.16.840.1.113883.6.96" displayName="Appendix structure"/>
@@ -130,7 +132,9 @@
             <procedure classCode="PROC" moodCode="EVN" negationInd="true">
               <templateId root="2.16.840.1.113883.10.20.22.4.14"/>
               <id root="d1e2f3a4-0002-4a1a-8a1a-000000000002"/>
-              <code code="73761001" codeSystem="2.16.840.1.113883.6.96" displayName="Colonoscopy"/>
+              <code code="73761001" codeSystem="2.16.840.1.113883.6.96" displayName="Colonoscopy">
+                <originalText>Screening colonoscopy</originalText>
+              </code>
               <statusCode code="completed"/>
               <effectiveTime xsi:type="IVL_TS">
                 <low value="20260201"/>

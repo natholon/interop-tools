@@ -95,29 +95,29 @@ _INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835", "837
 # follow-up slice shipped real structured-entry parsing (Observation/
 # FamilyMemberHistory/CarePlan) for the three sections that can carry one,
 # and again once app/cda/procedures.py's own Indication/Comment Activity/
-# `author`->`Procedure.recorder` follow-up shipped - the reason below no
-# longer names any of these. What remains genuinely true: this app has no
-# CDA-side Provenance resource builder anywhere (a real, separate
-# Provenance *resource*, distinct from a plain `recorder` Reference field
-# on a resource itself, which DOES now get recorded), so `author` never
-# produces a Provenance fact for any section that reads one; and a
-# structured section's own coded field falls back to code-only when
-# `displayName` is absent, without resolving `originalText`/narrative
-# `<text>` the way a fuller implementation might. Marking any document
-# type "fully supported" here would still overclaim relative to what
-# conversion itself actually guarantees for it - see CLAUDE.md's own
-# C-CDA subsection for the current, accurate list of what remains
-# deferred.
+# `author`->`Procedure.recorder` follow-up shipped, and a fourth time once
+# app/cda/common.py's own originalText -> CodeableConcept.text resolution
+# shipped (both the inline and the narrative-anchor `<reference
+# value="#ID"/>` shapes) - the reason below no longer names any of these.
+# What remains genuinely true: this app has no CDA-side Provenance
+# resource builder anywhere (a real, separate Provenance *resource*,
+# distinct from a plain `recorder` Reference field on a resource itself,
+# which DOES now get recorded), so `author` never produces a Provenance
+# fact for any section that reads one. Note this reason string covers
+# *provenance* coverage specifically - a separate, disclosed
+# reverse-direction gap (app/transform/cda_ccd.py doesn't regenerate
+# <originalText> from CodeableConcept.text) is tracked in CLAUDE.md's own
+# C-CDA subsection instead, since it doesn't affect what this pillar
+# records. Marking any document type "fully supported" here would still
+# overclaim relative to what conversion itself actually guarantees for it.
 _CDA_UNSUPPORTED_REASON = (
     "Field-level provenance for C-CDA covers the document header, all "
     "seven general-purpose sections, every narrative-only section either "
     "document type's own IG requires, the structured entries Plan of "
     "Treatment/Social History/Family History can carry, and Procedures' "
     "own Indication/Comment Activity cross-references and recorder - but "
-    "this app has no CDA-side Provenance resource builder, and a "
-    "structured coded field with no displayName falls back to code-only "
-    "rather than resolving narrative text, so no C-CDA document type is "
-    "ever reported fully supported."
+    "this app has no CDA-side Provenance resource builder, so no C-CDA "
+    "document type is ever reported fully supported."
 )
 
 # Message types with real, complete field-level instrumentation. Extended

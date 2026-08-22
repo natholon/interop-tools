@@ -23,7 +23,7 @@ from fhir.resources.R4B.quantity import Quantity
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.resource import Resource
 
-from app.cda.parser import find_all, find_child, coded_value, has_template_id, ivl_ts_bounds, ts_value
+from app.cda.parser import CDA_NS, find_all, find_child, coded_value, has_template_id, ivl_ts_bounds, ts_value
 from app.fhir_models.builders import parse_hl7_date, parse_hl7_datetime
 from app.hl7.errors import MissingSegmentError
 from app.provenance.location import xpath_location
@@ -88,16 +88,86 @@ def parse_partial_ts(raw_value: str | None) -> str | None:
     return parse_hl7_datetime(raw_value) or parse_hl7_date(raw_value)
 
 
+def narrative_anchor_text(section) -> dict[str, str]:
+    """{ID: plain text} for every anchor-carrying element in a section's own
+    narrative <text> block - the lookup behind resolve_narrative_references
+    below. C-CDA's own "entries derive from narrative" pattern puts the
+    human-readable text in the narrative and points at it from an entry via
+    <originalText><reference value="#ID"/></originalText> (confirmed
+    against a real HL7 C-CDA-Examples CCD, whose Encounters section carries
+    exactly this shape: <td ID="Encounter1"> Checkup Examination </td>).
+    Note the attribute is capital-`ID`, CDA's own spelling, not xml:id or
+    lowercase id. itertext() flattens any nested inline markup (<sub>,
+    <content>, ...) the same way app/cda/narrative_sections.py's own
+    extraction already does - the IG requires markup be removed and the
+    result stored as plain text."""
+    text_element = find_child(section, "text")
+    if text_element is None:
+        return {}
+    anchors = {}
+    for element in text_element.iter():
+        anchor_id = element.get("ID")
+        if not anchor_id:
+            continue
+        content = " ".join("".join(element.itertext()).split())
+        if content:
+            anchors[anchor_id] = content
+    return anchors
+
+
+def resolve_narrative_references(section) -> None:
+    """Resolve every <originalText><reference value="#ID"/></originalText>
+    in a section's own entries into inline text, in place, so downstream
+    entry builders never need narrative context of their own.
+
+    **Why an in-place pre-pass rather than threading a lookup dict through
+    every builder**: build_codeable_concept_from_cd has ~60 call sites
+    across 13 modules, most of them several frames below the section
+    element, and stdlib ElementTree has no parent pointers to walk back up
+    with (see app/cda/parser.py's own notes on that constraint). Resolving
+    once per section - at the one choke point that genuinely has both the
+    narrative and the entries in scope - converts the reference shape into
+    the inline shape build_codeable_concept_from_cd already handles with no
+    extra parameter, so not one of those call sites changes.
+
+    The mutation is deliberately **additive**: the <reference> child stays
+    exactly where it was, and only originalText's own `.text` (empty for
+    the reference shape) is filled in. Nothing is removed, so a provenance
+    source_location pointing at code/originalText stays accurate and any
+    future consumer wanting the raw reference can still read it. The parsed
+    tree is this app's own per-request copy (app/cda/pipeline.py parses
+    fresh each time) and validation parses its own separate document, so no
+    other pillar observes the mutation."""
+    anchors = narrative_anchor_text(section)
+    if not anchors:
+        return
+    for original_text in section.iter(f"{{{CDA_NS}}}originalText"):
+        if (original_text.text or "").strip():
+            continue  # Already inline - nothing to resolve.
+        reference = find_child(original_text, "reference")
+        raw_value = reference.get("value") if reference is not None else None
+        if not raw_value or not raw_value.startswith("#"):
+            continue
+        resolved = anchors.get(raw_value[1:])
+        if resolved:
+            original_text.text = resolved
+
+
 def build_codeable_concept_from_cd(element) -> CodeableConcept | None:
     """Build a CodeableConcept from a CD-shaped element (a <code .../> or
     <value xsi:type="CD" .../> - both carry the same @code/@codeSystem/
     @displayName attributes). Returns None when the element is absent or
     has no @code, matching the established "no code -> None" convention
     (see app/fhir_models/builders.py::build_codeable_concept_from_cwe).
-    Does not attempt to resolve originalText/reference back into narrative
-    <text> - falls back to "code only, no display" when @displayName is
-    absent, which real-world senders commonly omit in favor of that
-    narrative-reference pattern."""
+
+    A nested <originalText> maps to CodeableConcept.text, per the C-CDA on
+    FHIR IG's own mappingGuidance.html ("when converting to a FHIR data
+    type that contains a text field, like CodeableConcept, this is a direct
+    map"). Only the *inline* text shape is read here - the sibling
+    <reference value="#ID"/> shape is converted to inline text up front by
+    resolve_narrative_references above, so both real-world shapes land here
+    identically without this function needing narrative context of its
+    own."""
     result = coded_value(element)
     if result is None:
         return None
@@ -108,7 +178,14 @@ def build_codeable_concept_from_cd(element) -> CodeableConcept | None:
     coding = Coding(system=system, code=code)
     if display_name:
         coding.display = display_name
-    return CodeableConcept(coding=[coding])
+    concept = CodeableConcept(coding=[coding])
+
+    original_text = find_child(element, "originalText")
+    if original_text is not None:
+        text = " ".join((original_text.text or "").split())
+        if text:
+            concept.text = text
+    return concept
 
 
 def iter_nested_observations(parent, type_code: str):
@@ -640,6 +717,12 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
     for section in find_all(document, "component/structuredBody/component/section"):
         for section_template_id, builder in SECTION_BUILDERS.items():
             if has_template_id(section, section_template_id):
+                # Convert this section's own narrative-referenced
+                # originalText into inline text before its entries are
+                # walked - the one place with both the narrative and the
+                # entries in scope. See that function's own docstring for
+                # why a pre-pass rather than threading a lookup dict.
+                resolve_narrative_references(section)
                 resources.extend(builder(section, patient.id, recorder=recorder))
                 break
         # An unrecognized section is silently skipped - disclosed, not a
