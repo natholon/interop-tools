@@ -81,6 +81,14 @@
                   <statusCode code="completed"/>
                   <effectiveTime value="20260803070000-0500"/>
                   <value xsi:type="ST">No growth after 48 hours</value>
+                  <specimen typeCode="SPC">
+                    <specimenRole classCode="SPEC">
+                      <id root="c1d2e3f4-0010-4a1a-8a1a-000000000010"/>
+                      <specimenPlayingEntity classCode="ENT">
+                        <code code="122575003" codeSystem="2.16.840.1.113883.6.96" displayName="Urine specimen"/>
+                      </specimenPlayingEntity>
+                    </specimenRole>
+                  </specimen>
                 </observation>
               </component>
               <component>

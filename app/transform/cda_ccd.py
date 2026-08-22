@@ -295,6 +295,41 @@ def _build_cd_attrs(coding) -> str:
     return f'code="{_esc(coding.code)}"{code_system_attr}{display}'
 
 
+def _build_cd_element(tag: str, concept, prefix_attrs: str = "") -> str:
+    """A complete CD-shaped element from a whole `CodeableConcept`, rather
+    than the bare attribute string `_build_cd_attrs` builds from a single
+    `Coding` - the difference is `CodeableConcept.text`, which lives one
+    level up from the coding and reverses to a nested `<originalText>`
+    (the reverse of `app.cda.common.build_codeable_concept_from_cd`'s own
+    originalText -> `.text` mapping). Emits a self-closing element when
+    there's no `.text` to carry, so output is byte-identical to the
+    pre-existing `f"<tag {_build_cd_attrs(...)}/>"` shape for every
+    concept that doesn't have one.
+
+    **Always regenerates the inline `<originalText>text</originalText>`
+    shape, never the `<reference value="#ID"/>` one** - a disclosed,
+    deliberate simplification, not an oversight: `CodeableConcept.text`
+    is a plain string with no record of whether it was originally inline
+    or de-referenced from a narrative anchor (the forward side's own
+    `resolve_narrative_references` collapses both into the same field),
+    and regenerating a reference would additionally require inventing a
+    narrative anchor and a matching `<text>` block this reverse builder
+    doesn't otherwise produce. The inline shape re-parses to the identical
+    `.text` on the next forward pass, so this is round-trip stable - the
+    same "recoverable content, not recoverable original shape" tradeoff
+    `_build_narrative_section`'s own table-flattens-to-paragraphs
+    simplification already discloses.
+
+    `prefix_attrs` carries any attribute that must precede the CD
+    attributes themselves - only `<value xsi:type="CD" ...>` needs it."""
+    if concept is None or not concept.coding:
+        return ""
+    open_tag = f"<{tag} {prefix_attrs}{_build_cd_attrs(concept.coding[0])}"
+    if concept.text:
+        return f"{open_tag}><originalText>{_esc(concept.text)}</originalText></{tag}>"
+    return f"{open_tag}/>"
+
+
 def _build_problem_entry(condition, act_template_id: str = CONCERN_ACT_TEMPLATE_ID) -> str:
     """`act_template_id` defaults to Problems' own Concern Act, but is
     overridden by `_build_hospital_discharge_diagnosis_entry` below with
@@ -303,8 +338,7 @@ def _build_problem_entry(condition, act_template_id: str = CONCERN_ACT_TEMPLATE_
     forward `app.cda.hospital_discharge_diagnosis` module's own docstring
     (verified against a real HL7 C-CDA-Examples guide example), so only the
     outer Act templateId genuinely differs between the two."""
-    code = condition.code.coding[0] if condition.code and condition.code.coding else None
-    value = f'<value xsi:type="CD" {_build_cd_attrs(code)}/>' if code else '<value xsi:type="CD" nullFlavor="UNK"/>'
+    value = _build_cd_element("value", condition.code, 'xsi:type="CD" ') or '<value xsi:type="CD" nullFlavor="UNK"/>'
     act_status = "active"
     if condition.clinicalStatus and condition.clinicalStatus.coding:
         act_status = _CLINICAL_STATUS_TO_ACT_STATUS.get(condition.clinicalStatus.coding[0].code, "active")
@@ -384,7 +418,7 @@ def _build_dosage_elements(request) -> str:
 
     route = ""
     if dosage.route and dosage.route.coding:
-        route = f"<routeCode {_build_cd_attrs(dosage.route.coding[0])}/>"
+        route = _build_cd_element("routeCode", dosage.route)
 
     dose_quantity = ""
     rate_quantity = ""
@@ -418,12 +452,7 @@ def _build_dosage_elements(request) -> str:
 
 
 def _build_medication_entry(request) -> str:
-    coding = (
-        request.medicationCodeableConcept.coding[0]
-        if request.medicationCodeableConcept and request.medicationCodeableConcept.coding
-        else None
-    )
-    consumable_code = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
+    consumable_code = _build_cd_element("code", request.medicationCodeableConcept) or '<code nullFlavor="UNK"/>'
     status_code = _MEDICATION_STATUS_TO_ACT_STATUS.get(request.status, _DEFAULT_MEDICATION_ACT_STATUS)
     mood_code = _INTENT_TO_MOOD_CODE.get(request.intent, _DEFAULT_MOOD_CODE)
 
@@ -501,8 +530,8 @@ def _build_criticality_observation(allergy) -> str:
 
 
 def _build_reaction_observation(reaction) -> str:
-    manifestation = reaction.manifestation[0].coding[0] if reaction.manifestation and reaction.manifestation[0].coding else None
-    value = f"<value xsi:type=\"CD\" {_build_cd_attrs(manifestation)}/>" if manifestation else ""
+    manifestation = reaction.manifestation[0] if reaction.manifestation else None
+    value = _build_cd_element("value", manifestation, 'xsi:type="CD" ')
     onset = f'<effectiveTime><low value="{format_hl7_date(reaction.onset)}"/></effectiveTime>' if reaction.onset else ""
     severity_code = _SEVERITY_TO_SNOMED.get(reaction.severity) if reaction.severity else None
     severity = (
@@ -526,12 +555,12 @@ def _build_reaction_observation(reaction) -> str:
 
 
 def _build_allergen_participant(allergy) -> str:
-    coding = allergy.code.coding[0] if allergy.code and allergy.code.coding else None
-    if coding is None:
+    code_element = _build_cd_element("code", allergy.code)
+    if not code_element:
         return ""
     return (
         '<participant typeCode="CSM"><participantRole classCode="MANU"><playingEntity classCode="MMAT">'
-        f"<code {_build_cd_attrs(coding)}/>"
+        f"{code_element}"
         "</playingEntity></participantRole></participant>"
     )
 
@@ -609,10 +638,7 @@ _DEFAULT_IMMUNIZATION_ACT_STATUS = "aborted"
 
 
 def _build_immunization_entry(immunization) -> str:
-    coding = (
-        immunization.vaccineCode.coding[0] if immunization.vaccineCode and immunization.vaccineCode.coding else None
-    )
-    consumable_code = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
+    consumable_code = _build_cd_element("code", immunization.vaccineCode) or '<code nullFlavor="UNK"/>'
     lot_number = f"<lotNumberText>{_esc(immunization.lotNumber)}</lotNumberText>" if immunization.lotNumber else ""
 
     act_status = _IMMUNIZATION_STATUS_TO_ACT_STATUS.get(immunization.status, _DEFAULT_IMMUNIZATION_ACT_STATUS)
@@ -631,7 +657,7 @@ def _build_immunization_entry(immunization) -> str:
 
     route = ""
     if immunization.route and immunization.route.coding:
-        route = f"<routeCode {_build_cd_attrs(immunization.route.coding[0])}/>"
+        route = _build_cd_element("routeCode", immunization.route)
 
     dose_quantity = ""
     if immunization.doseQuantity is not None:
@@ -671,8 +697,7 @@ def _is_vital_signs_panel(observation) -> bool:
 
 
 def _build_vital_sign_observation_element(observation) -> str:
-    coding = observation.code.coding[0] if observation.code and observation.code.coding else None
-    code_element = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
+    code_element = _build_cd_element("code", observation.code) or '<code nullFlavor="UNK"/>'
     effective_time = (
         f'<effectiveTime value="{format_hl7_ts(observation.effectiveDateTime)}"/>'
         if observation.effectiveDateTime
@@ -684,13 +709,13 @@ def _build_vital_sign_observation_element(observation) -> str:
         value = f'<value xsi:type="PQ" value="{observation.valueQuantity.value}"{unit}/>'
     interpretation = ""
     if observation.interpretation and observation.interpretation[0].coding:
-        interpretation = f"<interpretationCode {_build_cd_attrs(observation.interpretation[0].coding[0])}/>"
+        interpretation = _build_cd_element("interpretationCode", observation.interpretation[0])
     method = ""
     if observation.method and observation.method.coding:
-        method = f"<methodCode {_build_cd_attrs(observation.method.coding[0])}/>"
+        method = _build_cd_element("methodCode", observation.method)
     body_site = ""
     if observation.bodySite and observation.bodySite.coding:
-        body_site = f"<targetSiteCode {_build_cd_attrs(observation.bodySite.coding[0])}/>"
+        body_site = _build_cd_element("targetSiteCode", observation.bodySite)
 
     return (
         '<component><observation classCode="OBS" moodCode="EVN">'
@@ -717,8 +742,7 @@ def _reverse_bp_panel_elements(panel) -> str:
     precedent this app's every other lossy reversal already establishes."""
     elements = []
     for component in panel.component or []:
-        coding = component.code.coding[0] if component.code and component.code.coding else None
-        code_element = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
+        code_element = _build_cd_element("code", component.code) or '<code nullFlavor="UNK"/>'
         value = ""
         if component.valueQuantity is not None:
             unit = f' unit="{_esc(component.valueQuantity.unit)}"' if component.valueQuantity.unit else ""
@@ -879,7 +903,7 @@ def _build_result_value_element(observation) -> str:
             high = f'<high value="{range_value.high.value}"{high_unit}/>'
         return f'<value xsi:type="IVL_PQ">{low}{high}</value>'
     if observation.valueCodeableConcept is not None and observation.valueCodeableConcept.coding:
-        return f'<value xsi:type="CD" {_build_cd_attrs(observation.valueCodeableConcept.coding[0])}/>'
+        return _build_cd_element("value", observation.valueCodeableConcept, 'xsi:type="CD" ')
     if observation.valueInteger is not None:
         return f'<value xsi:type="INT" value="{observation.valueInteger}"/>'
     if observation.valueString is not None:
@@ -907,7 +931,7 @@ def _reverse_specimen_elements(specimen) -> tuple[str, str]:
     code_element = ""
     name_element = ""
     if specimen.type and specimen.type.coding:
-        code_element = f"<code {_build_cd_attrs(specimen.type.coding[0])}/>"
+        code_element = _build_cd_element("code", specimen.type)
     elif specimen.type and specimen.type.text:
         name_element = f"<name>{_esc(specimen.type.text)}</name>"
     quantity_element = ""
@@ -923,14 +947,15 @@ def _reverse_specimen_elements(specimen) -> tuple[str, str]:
         "</specimenRole></specimen>"
     )
     collection_procedure_element = ""
-    if specimen.collection and specimen.collection.bodySite and specimen.collection.bodySite.coding:
-        body_site_attrs = _build_cd_attrs(specimen.collection.bodySite.coding[0])
-        collection_procedure_element = (
-            '<component><procedure classCode="PROC" moodCode="EVN">'
-            f'<code code="{SPECIMEN_COLLECTION_PROCEDURE_CODE}" codeSystem="{SPECIMEN_COLLECTION_PROCEDURE_CODE_SYSTEM}" displayName="Specimen collection"/>'
-            f"<targetSiteCode {body_site_attrs}/>"
-            "</procedure></component>"
-        )
+    if specimen.collection and specimen.collection.bodySite:
+        body_site_element = _build_cd_element("targetSiteCode", specimen.collection.bodySite)
+        if body_site_element:
+            collection_procedure_element = (
+                '<component><procedure classCode="PROC" moodCode="EVN">'
+                f'<code code="{SPECIMEN_COLLECTION_PROCEDURE_CODE}" codeSystem="{SPECIMEN_COLLECTION_PROCEDURE_CODE_SYSTEM}" displayName="Specimen collection"/>'
+                f"{body_site_element}"
+                "</procedure></component>"
+            )
     return specimen_element, collection_procedure_element
 
 
@@ -949,9 +974,10 @@ def _build_reference_range_element(observation) -> str:
     )
 
 
-def _build_result_observation_element(observation) -> str:
-    coding = observation.code.coding[0] if observation.code and observation.code.coding else None
-    code_element = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
+def _build_result_observation_element(
+    observation, specimens_by_id: dict | None = None, organizer_specimen_id: str | None = None
+) -> str:
+    code_element = _build_cd_element("code", observation.code) or '<code nullFlavor="UNK"/>'
     act_status = _RESULT_STATUS_TO_ACT_STATUS.get(observation.status, _DEFAULT_RESULT_ACT_STATUS)
     effective_time = (
         f'<effectiveTime value="{format_hl7_ts(observation.effectiveDateTime)}"/>'
@@ -961,51 +987,72 @@ def _build_result_observation_element(observation) -> str:
     value = _build_result_value_element(observation)
     interpretation = ""
     if observation.interpretation and observation.interpretation[0].coding:
-        interpretation = f"<interpretationCode {_build_cd_attrs(observation.interpretation[0].coding[0])}/>"
+        interpretation = _build_cd_element("interpretationCode", observation.interpretation[0])
     method = ""
     if observation.method and observation.method.coding:
-        method = f"<methodCode {_build_cd_attrs(observation.method.coding[0])}/>"
+        method = _build_cd_element("methodCode", observation.method)
     body_site = ""
     if observation.bodySite and observation.bodySite.coding:
-        body_site = f"<targetSiteCode {_build_cd_attrs(observation.bodySite.coding[0])}/>"
+        body_site = _build_cd_element("targetSiteCode", observation.bodySite)
     reference_range = _build_reference_range_element(observation)
+
+    # An observation-level <specimen> overrides the organizer-level
+    # default for this one Observation, per CF-results.md's own attachment
+    # rule (mirrored by the forward _build_result_observation's own
+    # own_specimen/default_specimen_id split). Only regenerated when this
+    # observation's own specimen genuinely differs from the organizer's -
+    # a reference equal to the organizer default came from propagation,
+    # not its own <specimen> child, so re-emitting it would fabricate an
+    # override the source document never had. No Specimen Collection
+    # Procedure sibling is emitted here: the forward parser only ever
+    # looks for one at organizer level (_find_specimen_collection_
+    # procedure scans the organizer's own component children), so one
+    # nested at observation level would simply never be read back.
+    own_specimen_element = ""
+    if observation.specimen and observation.specimen.reference and specimens_by_id:
+        own_specimen_id = observation.specimen.reference.removeprefix("urn:uuid:")
+        if own_specimen_id != organizer_specimen_id:
+            specimen = specimens_by_id.get(own_specimen_id)
+            if specimen is not None:
+                own_specimen_element, _ = _reverse_specimen_elements(specimen)
 
     return (
         '<component><observation classCode="OBS" moodCode="EVN">'
         f'<templateId root="{RESULTS_OBSERVATION_TEMPLATE_ID}"/>'
         f'<statusCode code="{act_status}"/>'
-        f"{code_element}{effective_time}{value}{interpretation}{method}{body_site}{reference_range}"
+        f"{code_element}{effective_time}{value}{interpretation}{method}{body_site}{reference_range}{own_specimen_element}"
         "</observation></component>"
     )
 
 
 def _build_result_organizer(report, observations_by_id: dict, specimens_by_id: dict) -> str:
+    # DiagnosticReport.specimen[0] is the organizer-level Specimen the
+    # forward builder propagates as the default onto every result
+    # Observation. Resolved before the members are built so each one can
+    # tell its own genuine observation-level override apart from a
+    # propagated default (see _build_result_observation_element).
+    specimen_element = ""
+    collection_procedure_element = ""
+    organizer_specimen_id = None
+    if report.specimen and report.specimen[0].reference:
+        organizer_specimen_id = report.specimen[0].reference.removeprefix("urn:uuid:")
+        specimen = specimens_by_id.get(organizer_specimen_id)
+        if specimen is not None:
+            specimen_element, collection_procedure_element = _reverse_specimen_elements(specimen)
+
     result_ids = [ref.reference.removeprefix("urn:uuid:") for ref in (report.result or [])]
     member_elements = "".join(
-        _build_result_observation_element(observations_by_id[result_id])
+        _build_result_observation_element(observations_by_id[result_id], specimens_by_id, organizer_specimen_id)
         for result_id in result_ids
         if result_id in observations_by_id
     )
     if not member_elements:
         return ""
-    coding = report.code.coding[0] if report.code and report.code.coding else None
-    organizer_code = f"<code {_build_cd_attrs(coding)}/>" if coding else '<code nullFlavor="UNK"/>'
+    organizer_code = _build_cd_element("code", report.code) or '<code nullFlavor="UNK"/>'
     act_status = _RESULT_STATUS_TO_ACT_STATUS.get(report.status, _DEFAULT_RESULT_ACT_STATUS)
     effective_time = (
         f'<effectiveTime value="{format_hl7_ts(report.effectiveDateTime)}"/>' if report.effectiveDateTime else ""
     )
-    # DiagnosticReport.specimen[0] is the organizer-level Specimen the
-    # forward builder propagates as the default onto every result
-    # Observation - reversed here at organizer level only; a genuine
-    # observation-level-only override is a disclosed round-trip gap this
-    # builder doesn't attempt to distinguish (see module docstring).
-    specimen_element = ""
-    collection_procedure_element = ""
-    if report.specimen:
-        specimen_id = report.specimen[0].reference.removeprefix("urn:uuid:")
-        specimen = specimens_by_id.get(specimen_id)
-        if specimen is not None:
-            specimen_element, collection_procedure_element = _reverse_specimen_elements(specimen)
     return (
         f'<entry typeCode="DRIV"><organizer classCode="BATTERY" moodCode="EVN">'
         f'<templateId root="{RESULTS_ORGANIZER_TEMPLATE_ID}"/>'
@@ -1175,7 +1222,7 @@ def _reverse_participant_location_element(procedure, locations_by_id: dict) -> s
 
     code_element = ""
     if location.type and location.type[0].coding:
-        code_element = f"<code {_build_cd_attrs(location.type[0].coding[0])}/>"
+        code_element = _build_cd_element("code", location.type[0])
     addr = _reverse_address_element(location.address) if location.address else ""
     telecom = f'<telecom use="WP" value="tel:{_esc(location.telecom[0].value)}"/>' if location.telecom else ""
     name = f"<name>{_esc(location.name)}</name>" if location.name else ""
@@ -1204,8 +1251,8 @@ def _reverse_reason_codes(procedure) -> str:
             '<entryRelationship typeCode="RSON"><observation classCode="OBS" moodCode="EVN">'
             f'<templateId root="{INDICATION_TEMPLATE_ID}"/>'
             '<code code="75321-0" codeSystem="2.16.840.1.113883.6.1" displayName="Clinical finding"/>'
-            f'<value xsi:type="CD" {_build_cd_attrs(reason.coding[0])}/>'
-            "</observation></entryRelationship>"
+            + _build_cd_element("value", reason, 'xsi:type="CD" ')
+            + "</observation></entryRelationship>"
         )
     return "".join(entries)
 
@@ -1274,7 +1321,7 @@ def _build_procedure_entry(
 
     code = ""
     if procedure.code and procedure.code.coding:
-        code = f"<code {_build_cd_attrs(procedure.code.coding[0])}/>"
+        code = _build_cd_element("code", procedure.code)
 
     status_value = _PROCEDURE_STATUS_TO_ACT_STATUS.get(procedure.status)
     status_element = f'<statusCode code="{status_value}"/>' if status_value else ""
@@ -1298,7 +1345,7 @@ def _build_procedure_entry(
 
     body_site = ""
     if procedure.bodySite and procedure.bodySite[0].coding:
-        body_site = f"<targetSiteCode {_build_cd_attrs(procedure.bodySite[0].coding[0])}/>"
+        body_site = _build_cd_element("targetSiteCode", procedure.bodySite[0])
 
     performers = "".join(
         _reverse_performer_element(p, practitioner_roles_by_id, practitioners_by_id, organizations_by_id, locations_by_id)
@@ -1346,7 +1393,7 @@ def _build_social_history_value(observation) -> str:
         unit = f' unit="{_esc(observation.valueQuantity.unit)}"' if observation.valueQuantity.unit else ""
         return f'<value xsi:type="PQ" value="{observation.valueQuantity.value}"{unit}/>'
     if observation.valueCodeableConcept is not None and observation.valueCodeableConcept.coding:
-        return f'<value xsi:type="CD" {_build_cd_attrs(observation.valueCodeableConcept.coding[0])}/>'
+        return _build_cd_element("value", observation.valueCodeableConcept, 'xsi:type="CD" ')
     if observation.valueInteger is not None:
         return f'<value xsi:type="INT" value="{observation.valueInteger}"/>'
     if observation.valueString is not None:
@@ -1369,7 +1416,7 @@ def _build_social_history_entry(observation) -> str:
     coding = observation.code.coding[0] if observation.code and observation.code.coding else None
     if coding is None:
         return ""
-    code_element = f"<code {_build_cd_attrs(coding)}/>"
+    code_element = _build_cd_element("code", observation.code)
     template_id = SMOKING_STATUS_TEMPLATE_ID if coding.code == "72166-2" else SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID
     effective_time = (
         f'<effectiveTime value="{format_hl7_ts(observation.effectiveDateTime)}"/>'
@@ -1396,7 +1443,7 @@ def _build_social_history_entries(observations) -> str:
 def _build_family_history_condition(condition) -> str:
     value = ""
     if condition.code and condition.code.coding:
-        value = f'<value xsi:type="CD" {_build_cd_attrs(condition.code.coding[0])}/>'
+        value = _build_cd_element("value", condition.code, 'xsi:type="CD" ')
     age_relationship = ""
     if condition.onsetAge is not None:
         unit = _esc(condition.onsetAge.unit) if condition.onsetAge.unit else "a"
@@ -1446,10 +1493,10 @@ def _build_family_history_entry(history) -> str:
         return ""
     relationship = ""
     if history.relationship and history.relationship.coding:
-        relationship = f"<code {_build_cd_attrs(history.relationship.coding[0])}/>"
+        relationship = _build_cd_element("code", history.relationship)
     gender = ""
     if history.sex and history.sex.coding:
-        gender = f"<administrativeGenderCode {_build_cd_attrs(history.sex.coding[0])}/>"
+        gender = _build_cd_element("administrativeGenderCode", history.sex)
     deceased_extension = ""
     if history.deceasedDate is not None:
         deceased_extension = (
@@ -1489,7 +1536,7 @@ def _build_care_plan_activity_entry(activity) -> str:
     detail = activity.detail
     if detail is None or not detail.code or not detail.code.coding:
         return ""
-    code_element = f"<code {_build_cd_attrs(detail.code.coding[0])}/>"
+    code_element = _build_cd_element("code", detail.code)
     status_value = _CARE_PLAN_ACTIVITY_STATUS_TO_ACT_STATUS.get(detail.status)
     status_element = f'<statusCode code="{status_value}"/>' if status_value else ""
     effective_time = ""

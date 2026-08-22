@@ -595,13 +595,74 @@ def test_ccd_round_trip_preserves_result_report_and_observations():
     assert color.valueString == "Yellow"
 
     # The organizer-level Specimen itself round-trips too, referenced from
-    # both the report and every result Observation.
-    specimen = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Specimen")
+    # both the report and every result Observation that doesn't carry its
+    # own override.
+    specimens = {
+        s.type.coding[0].code: s
+        for s in (e.resource for e in round_tripped_bundle.entry)
+        if s.get_resource_type() == "Specimen"
+    }
+    specimen = specimens["119297000"]
     assert report.specimen[0].reference == f"urn:uuid:{specimen.id}"
-    assert specimen.type.coding[0].code == "119297000"
     assert float(specimen.collection.quantity.value) == 5
     assert specimen.note[0].text == "Drawn via venipuncture"
     assert specimen.collection.bodySite.coding[0].code == "368225008"
+
+    # An observation-level <specimen> overrides the organizer default for
+    # that one Observation - a real round-trip bug this fixture's own
+    # culture entry now guards against: the reverse builder previously
+    # regenerated only the organizer-level specimen, silently dropping the
+    # override's own Specimen resource entirely (caught by a resource-type
+    # count sweep across generated documents, not by any existing test).
+    assert set(specimens) == {"119297000", "122575003"}
+    culture = next(o for o in all_round_tripped if o.code.coding and o.code.coding[0].code == "33747-0")
+    assert culture.specimen.reference == f"urn:uuid:{specimens['122575003'].id}"
+    # Every other member still inherits the organizer-level default.
+    assert creatinine.specimen.reference == f"urn:uuid:{specimen.id}"
+
+
+def test_ccd_round_trip_preserves_original_text_as_codeable_concept_text():
+    # ccd_procedures_basic.xml's own completed entry carries the
+    # narrative-anchor originalText shape (<reference value="#Proc1"/>,
+    # resolved forward against the section's own <text>) and its negated
+    # entry the inline shape - both reverse to the *inline* shape, a
+    # disclosed simplification (CodeableConcept.text keeps no record of
+    # which it came from), so both are round-trip stable from here on.
+    forward_xml = (FIXTURES / "ccd_procedures_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+
+    procedures = {
+        p.code.coding[0].code: p for p in (e.resource for e in round_tripped_bundle.entry) if p.get_resource_type() == "Procedure"
+    }
+    assert procedures["80146002"].code.text == "Appendectomy of the appendix"
+    assert procedures["73761001"].code.text == "Screening colonoscopy"
+
+    # Stable across a second cycle - the inline shape re-parses to the
+    # identical .text rather than degrading further.
+    twice = convert_cda_to_bundle(build_message_from_bundle(round_tripped_bundle, "CDA", "CCD", ""))
+    twice_procedures = {
+        p.code.coding[0].code: p for p in (e.resource for e in twice.entry) if p.get_resource_type() == "Procedure"
+    }
+    assert twice_procedures["80146002"].code.text == "Appendectomy of the appendix"
+    assert twice_procedures["73761001"].code.text == "Screening colonoscopy"
+
+
+def test_ccd_round_trip_escapes_xml_special_characters_in_original_text():
+    # CodeableConcept.text is free text reaching a raw f-string builder -
+    # the same escaping hazard app/transform/'s own adversarial review
+    # already found once for names/displays (see CLAUDE.md).
+    forward_xml = (FIXTURES / "ccd_procedures_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    procedure = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Procedure")
+    procedure.code.text = 'Diseases of ear & mastoid <acute> "flagged"'
+
+    round_tripped = convert_cda_to_bundle(build_message_from_bundle(bundle, "CDA", "CCD", ""))
+    texts = {
+        p.code.text for p in (e.resource for e in round_tripped.entry) if p.get_resource_type() == "Procedure" and p.code
+    }
+    assert 'Diseases of ear & mastoid <acute> "flagged"' in texts
 
 
 def test_ccd_round_trip_preserves_procedure_fields():
