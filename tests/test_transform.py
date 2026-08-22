@@ -1,4 +1,5 @@
 import base64
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from app.edi.pipeline import convert_edi_to_bundle
 from app.generators.registry import generate
 from app.hl7.errors import MappingError
 from app.hl7.pipeline import convert_hl7_to_bundle
+from app.pipeline import convert_to_bundle
 from app.transform.pipeline import build_message_from_bundle
 from app.transform.registry import get_builder, list_supported_targets
 
@@ -2188,3 +2190,62 @@ def test_edi_837p_preserves_trailing_zero_in_money_via_fixed_precision():
     message_text = build_message_from_bundle(bundle_after_json, "EDI", "837P", "")
     clm_segment = next(s for s in message_text.split("~") if s.startswith("CLM*"))
     assert "100.10" in clm_segment
+
+
+# The generator key for a given reverse-transform target. Every HL7v2
+# target's own (message_type, trigger_event) pair and every EDI target's
+# own ("EDI", transaction_set) pair line up directly; only C-CDA needs a
+# mapping, since its transform target_format is "CDA" while its generator
+# message_type is also "CDA" but keyed by document type rather than a
+# trigger.
+_GENERATOR_KEY_OVERRIDES = {
+    ("CDA", "CCD", ""): ("CDA", "CCD"),
+    ("CDA", "DISCHARGESUMMARY", ""): ("CDA", "DISCHARGESUMMARY"),
+    ("CDA", "HISTORYANDPHYSICAL", ""): ("CDA", "HISTORYANDPHYSICAL"),
+}
+
+
+def _generator_key(target_format: str, target_type: str, target_trigger: str) -> tuple[str, str]:
+    override = _GENERATOR_KEY_OVERRIDES.get((target_format, target_type, target_trigger))
+    if override:
+        return override
+    if target_format == "EDI":
+        return "EDI", target_type
+    return target_type, target_trigger
+
+
+@pytest.mark.parametrize("target", list_supported_targets())
+def test_reverse_transform_preserves_resource_type_counts(target):
+    """Every reverse-transform target must round-trip a generated message
+    back to a Bundle carrying the *same multiset of resource types* it
+    started with.
+
+    **Why this is a standing test rather than a run-it-manually sweep**,
+    unlike this app's other broad sweeps (app/dedup.py's full-registry
+    pass, the provenance pillar's own 1464-entry crosswalk sweep - both
+    deliberately uncommitted since they mostly re-run coverage other
+    tests already provide): this invariant is genuinely orthogonal to
+    every per-slice round-trip test, all of which assert on specific
+    named fields of specific resources they already know exist. None of
+    them notices a resource *disappearing* wholesale - and this check
+    found exactly that, a real pre-existing bug where an
+    observation-level <specimen> override silently lost its own Specimen
+    resource on 28 of 300 generated C-CDA documents while the entire test
+    suite stayed green (see app/transform/cda_ccd.py::
+    _build_result_observation_element and CLAUDE.md's own note).
+
+    Deliberately kept to a handful of seeds per target - the whole
+    parametrized set runs in well under a second, and the point is the
+    invariant, not fuzz breadth (the per-slice 200-300-seed sweeps
+    already cover that)."""
+    target_format, target_type, target_trigger = target
+    message_type, trigger_event = _generator_key(target_format, target_type, target_trigger)
+
+    for seed in range(5):
+        original = convert_to_bundle(generate(message_type, trigger_event, seed=seed))
+        round_tripped = convert_to_bundle(
+            build_message_from_bundle(original, target_format, target_type, target_trigger)
+        )
+        before = Counter(entry.resource.get_resource_type() for entry in original.entry)
+        after = Counter(entry.resource.get_resource_type() for entry in round_tripped.entry)
+        assert before == after, f"{target} seed={seed}: {before} != {after}"
