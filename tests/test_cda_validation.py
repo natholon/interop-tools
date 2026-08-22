@@ -903,6 +903,93 @@ def test_procedure_participant_wrong_type_code_is_not_checked():
     assert not any(f.rule_id == "cda.procedure-participant-missing-identity" for f in report.findings)
 
 
+def test_procedure_indication_missing_value_is_info():
+    # Mirrors app.cda.procedures._build_reason_codes' own skip condition:
+    # an Indication Observation with no resolvable <value> never
+    # contributes a Procedure.reasonCode entry.
+    indication = (
+        '<entryRelationship typeCode="RSON"><observation classCode="OBS" moodCode="EVN">'
+        '<templateId root="2.16.840.1.113883.10.20.22.4.19"/>'
+        "<value nullFlavor=\"UNK\"/>"
+        "</observation></entryRelationship>"
+    )
+    entry = _procedure_entry(extra=indication)
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.procedure-indication-missing-value")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_procedure_indication_with_value_produces_no_finding():
+    indication = (
+        '<entryRelationship typeCode="RSON"><observation classCode="OBS" moodCode="EVN">'
+        '<templateId root="2.16.840.1.113883.10.20.22.4.19"/>'
+        '<value xsi:type="CD" code="85189001" codeSystem="2.16.840.1.113883.6.96" displayName="Acute appendicitis"/>'
+        "</observation></entryRelationship>"
+    )
+    entry = _procedure_entry(extra=indication)
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    assert not any(f.rule_id == "cda.procedure-indication-missing-value" for f in report.findings)
+
+
+def test_procedure_comment_missing_text_is_info():
+    # Mirrors app.cda.procedures._build_notes' own skip condition: a
+    # Comment Activity act with no resolvable <text> never contributes a
+    # Procedure.note entry.
+    comment = (
+        '<entryRelationship typeCode="SUBJ" inversionInd="true"><act classCode="ACT" moodCode="EVN">'
+        '<templateId root="2.16.840.1.113883.10.20.22.4.64"/>'
+        "<text></text>"
+        "</act></entryRelationship>"
+    )
+    entry = _procedure_entry(extra=comment)
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.procedure-comment-missing-text")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_procedure_comment_with_text_produces_no_finding():
+    comment = (
+        '<entryRelationship typeCode="SUBJ" inversionInd="true"><act classCode="ACT" moodCode="EVN">'
+        '<templateId root="2.16.840.1.113883.10.20.22.4.64"/>'
+        "<text>Patient tolerated the procedure well.</text>"
+        "</act></entryRelationship>"
+    )
+    entry = _procedure_entry(extra=comment)
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    assert not any(f.rule_id == "cda.procedure-comment-missing-text" for f in report.findings)
+
+
+def test_procedure_recorder_missing_author_is_info():
+    # Mirrors app.cda.procedures._build_procedure_recorder's own skip
+    # condition: a direct-child <author> with no nested assignedAuthor
+    # never contributes Procedure.recorder.
+    author = "<author><time value=\"20260615113000-0500\"/></author>"
+    entry = _procedure_entry(extra=author)
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    finding = next(f for f in report.findings if f.rule_id == "cda.procedure-recorder-missing-author")
+    assert finding.severity == "info"
+    assert report.is_valid is True
+
+
+def test_procedure_recorder_with_assigned_author_produces_no_finding():
+    author = (
+        "<author><time value=\"20260615113000-0500\"/><assignedAuthor>"
+        '<id root="2.16.840.1.113883.19.5" extension="REC-001"/>'
+        "</assignedAuthor></author>"
+    )
+    entry = _procedure_entry(extra=author)
+    document = _doc(_patient() + _procedures_section(entry))
+    report = validate_document(document)
+    assert not any(f.rule_id == "cda.procedure-recorder-missing-author" for f in report.findings)
+
+
 def _hospital_discharge_diagnosis_entry(effective_time: str = "", value: str = "") -> str:
     value = value or '<value xsi:type="CD" code="385093006" codeSystem="2.16.840.1.113883.6.96" displayName="CAP"/>'
     return (

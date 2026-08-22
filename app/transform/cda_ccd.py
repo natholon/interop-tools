@@ -53,6 +53,7 @@ from app.cda.procedures import PROCEDURE_TEMPLATE_ID
 from app.cda.procedures import STATUS_MAP as PROCEDURE_STATUS_MAP
 from app.cda.procedures import SECTION_TEMPLATE_ID as PROCEDURES_SECTION_TEMPLATE_ID
 from app.cda.procedures import SERVICE_DELIVERY_LOCATION_TEMPLATE_ID
+from app.cda.procedures import INDICATION_TEMPLATE_ID, COMMENT_ACTIVITY_TEMPLATE_ID, AUTHOR_PARTICIPATION_TEMPLATE_ID
 from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID
 from app.cda.medications import STATUS_MAP as MEDICATION_STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
@@ -1079,6 +1080,32 @@ def _reverse_address_element(address) -> str:
     return f"<addr>{lines}{city}{state}{postal_code}{country}</addr>"
 
 
+def _reverse_practitioner_id_and_name(practitioner) -> str:
+    """Reverse of app.cda.procedures._build_practitioner_from_assigned_
+    entity - practitioner.identifier/.name -> <id>/<assignedPerson><name>,
+    the inner content shared by every assignedEntity/assignedAuthor shape
+    this app's own forward side builds identically (a performer's own
+    assignedEntity, an author's own assignedAuthor - see that module's own
+    docstring for why both reuse the identical builder). Returns the inner
+    content only, not a wrapping tag, since performer/recorder/comment-
+    author each wrap it in a different outer element. Extracted here once
+    recorder and the Comment Activity's own nested author became this
+    app's second and third real consumers of the identical reversal
+    _reverse_performer_element's own assigned_person block already did
+    inline."""
+    ids = "".join(
+        f'<id root="{_reverse_identifier_root(identifier)}" extension="{_esc(identifier.value)}"/>'
+        for identifier in (practitioner.identifier or [])
+    )
+    assigned_person = ""
+    if practitioner.name:
+        name = practitioner.name[0]
+        family = f"<family>{_esc(name.family)}</family>" if name.family else ""
+        given = "".join(f"<given>{_esc(g)}</given>" for g in (name.given or []))
+        assigned_person = f"<assignedPerson><name>{given}{family}</name></assignedPerson>"
+    return f"{ids}{assigned_person}"
+
+
 def _reverse_performer_element(
     performer, practitioner_roles_by_id: dict, practitioners_by_id: dict, organizations_by_id: dict, locations_by_id: dict
 ) -> str:
@@ -1098,10 +1125,16 @@ def _reverse_performer_element(
     if role is None:
         return ""
 
-    ids = "".join(
-        f'<id root="{_reverse_identifier_root(identifier)}" extension="{_esc(identifier.value)}"/>'
-        for identifier in (role.identifier or [])
-    )
+    # role.identifier is a copy of the underlying Practitioner's own
+    # identifier (see _build_performer's own docstring), so id/name both
+    # reverse from role.practitioner's own Practitioner, not role itself -
+    # _reverse_practitioner_id_and_name's shared reversal covers both.
+    id_and_name = ""
+    if role.practitioner:
+        practitioner_id = role.practitioner.reference.removeprefix("urn:uuid:")
+        practitioner = practitioners_by_id.get(practitioner_id)
+        if practitioner is not None:
+            id_and_name = _reverse_practitioner_id_and_name(practitioner)
 
     addr = ""
     if role.location:
@@ -1114,16 +1147,6 @@ def _reverse_performer_element(
     if role.telecom:
         telecom = f'<telecom use="WP" value="tel:{_esc(role.telecom[0].value)}"/>'
 
-    assigned_person = ""
-    if role.practitioner:
-        practitioner_id = role.practitioner.reference.removeprefix("urn:uuid:")
-        practitioner = practitioners_by_id.get(practitioner_id)
-        if practitioner is not None and practitioner.name:
-            name = practitioner.name[0]
-            family = f"<family>{_esc(name.family)}</family>" if name.family else ""
-            given = "".join(f"<given>{_esc(g)}</given>" for g in (name.given or []))
-            assigned_person = f"<assignedPerson><name>{given}{family}</name></assignedPerson>"
-
     represented_organization = ""
     if role.organization:
         organization_id = role.organization.reference.removeprefix("urn:uuid:")
@@ -1133,7 +1156,7 @@ def _reverse_performer_element(
 
     return (
         '<performer typeCode="PRF"><assignedEntity>'
-        f"{ids}{addr}{telecom}{assigned_person}{represented_organization}"
+        f"{id_and_name}{addr}{telecom}{represented_organization}"
         "</assignedEntity></performer>"
     )
 
@@ -1163,6 +1186,84 @@ def _reverse_participant_location_element(procedure, locations_by_id: dict) -> s
         f"{code_element}{addr}{telecom}"
         f'<playingEntity classCode="PLC">{name}</playingEntity>'
         "</participantRole></participant>"
+    )
+
+
+def _reverse_reason_codes(procedure) -> str:
+    """Reverse of app.cda.procedures._build_reason_codes -
+    Procedure.reasonCode[] -> one entryRelationship[typeCode=RSON]
+    wrapping an Indication Observation per entry, each regenerating the
+    fixed INDICATION_TEMPLATE_ID and the LOINC 75321-0 "Clinical finding"
+    code the forward side's own real fetched example always carries on
+    that nested observation."""
+    entries = []
+    for reason in procedure.reasonCode or []:
+        if not reason.coding:
+            continue
+        entries.append(
+            '<entryRelationship typeCode="RSON"><observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{INDICATION_TEMPLATE_ID}"/>'
+            '<code code="75321-0" codeSystem="2.16.840.1.113883.6.1" displayName="Clinical finding"/>'
+            f'<value xsi:type="CD" {_build_cd_attrs(reason.coding[0])}/>'
+            "</observation></entryRelationship>"
+        )
+    return "".join(entries)
+
+
+def _reverse_notes(procedure, practitioners_by_id: dict) -> str:
+    """Reverse of app.cda.procedures._build_notes -
+    Procedure.note[] -> one entryRelationship[typeCode=SUBJ,
+    inversionInd=true] wrapping a Comment Activity act per entry, each
+    regenerating the fixed COMMENT_ACTIVITY_TEMPLATE_ID/LOINC 48767-8
+    code. authorReference reverses via the shared
+    _reverse_practitioner_id_and_name (its own third real consumer,
+    after performer and recorder below) wrapped in the identical
+    Author Participation <author> shape the Comment Activity's own
+    nested author uses on the forward side - a plain Practitioner
+    reference, not a PractitionerRole, matching this app's own confirmed
+    Annotation.authorReference binding (see app/cda/procedures.py's own
+    docstring for why)."""
+    entries = []
+    for note in procedure.note or []:
+        if not note.text:
+            continue
+        author = ""
+        if note.authorReference and note.authorReference.reference:
+            practitioner_id = note.authorReference.reference.removeprefix("urn:uuid:")
+            practitioner = practitioners_by_id.get(practitioner_id)
+            if practitioner is not None:
+                time_element = f'<time value="{format_hl7_ts(note.time)}"/>' if note.time else ""
+                author = (
+                    f'<author><templateId root="{AUTHOR_PARTICIPATION_TEMPLATE_ID}"/>{time_element}'
+                    f"<assignedAuthor>{_reverse_practitioner_id_and_name(practitioner)}</assignedAuthor>"
+                    "</author>"
+                )
+        entries.append(
+            '<entryRelationship typeCode="SUBJ" inversionInd="true"><act classCode="ACT" moodCode="EVN">'
+            f'<templateId root="{COMMENT_ACTIVITY_TEMPLATE_ID}"/>'
+            '<code code="48767-8" codeSystem="2.16.840.1.113883.6.1" displayName="Annotation Comment"/>'
+            f"<text>{_esc(note.text)}</text>{author}"
+            "</act></entryRelationship>"
+        )
+    return "".join(entries)
+
+
+def _reverse_procedure_recorder(procedure, practitioners_by_id: dict) -> str:
+    """Reverse of app.cda.procedures._build_procedure_recorder -
+    Procedure.recorder -> a direct-child <author> (Author Participation),
+    distinct from a Comment Activity's own nested one - both reuse the
+    identical _reverse_practitioner_id_and_name reversal since the
+    forward side builds both from the identical assignedAuthor shape."""
+    if procedure.recorder is None or not procedure.recorder.reference:
+        return ""
+    practitioner_id = procedure.recorder.reference.removeprefix("urn:uuid:")
+    practitioner = practitioners_by_id.get(practitioner_id)
+    if practitioner is None:
+        return ""
+    return (
+        f'<author><templateId root="{AUTHOR_PARTICIPATION_TEMPLATE_ID}"/>'
+        f"<assignedAuthor>{_reverse_practitioner_id_and_name(practitioner)}</assignedAuthor>"
+        "</author>"
     )
 
 
@@ -1204,11 +1305,14 @@ def _build_procedure_entry(
         for p in (procedure.performer or [])
     )
     participant = _reverse_participant_location_element(procedure, locations_by_id)
+    author = _reverse_procedure_recorder(procedure, practitioners_by_id)
+    reason_codes = _reverse_reason_codes(procedure)
+    notes = _reverse_notes(procedure, practitioners_by_id)
 
     return (
         '<entry typeCode="DRIV"><procedure classCode="PROC" moodCode="EVN">'
         f'<templateId root="{PROCEDURE_TEMPLATE_ID}"/>'
-        f"{ids}{code}{status_element}{effective_time}{body_site}{performers}{participant}"
+        f"{ids}{code}{status_element}{effective_time}{body_site}{performers}{participant}{author}{reason_codes}{notes}"
         "</procedure></entry>"
     )
 

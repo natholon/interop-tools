@@ -692,6 +692,50 @@ def test_ccd_round_trip_preserves_procedure_performer_and_participant():
     assert colonoscopy_practitioner.identifier[0].value == "urn:oid:2.16.840.1.113883.19.5"
 
 
+def test_ccd_round_trip_preserves_procedure_indication_note_and_recorder():
+    # ccd_procedures_basic.xml's own completed entry carries an Indication
+    # (-> reasonCode), a Comment Activity with its own nested author
+    # (-> note, with authorReference resolving to a real Practitioner
+    # distinct from the recorder below), and a direct-child <author>
+    # (-> recorder) - all three genuinely optional, absent on the negated
+    # entry, confirming they're not unconditionally regenerated.
+    forward_xml = (FIXTURES / "ccd_procedures_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    document_text = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    round_tripped_bundle = convert_cda_to_bundle(document_text)
+
+    def _resolve(bundle_, reference: str):
+        resource_id = reference.removeprefix("urn:uuid:")
+        return next(e.resource for e in bundle_.entry if e.resource.id == resource_id)
+
+    procedures = {
+        p.code.coding[0].code: p for p in (e.resource for e in round_tripped_bundle.entry) if p.get_resource_type() == "Procedure"
+    }
+    appendectomy = procedures["80146002"]
+    colonoscopy = procedures["73761001"]
+
+    assert len(appendectomy.reasonCode) == 1
+    assert appendectomy.reasonCode[0].coding[0].code == "85189001"
+    assert appendectomy.reasonCode[0].coding[0].display == "Acute appendicitis"
+
+    assert len(appendectomy.note) == 1
+    note = appendectomy.note[0]
+    assert note.text == "Patient tolerated the procedure well, no complications."
+    assert note.time.isoformat() == "2026-06-15T12:30:00-05:00"
+    comment_author = _resolve(round_tripped_bundle, note.authorReference.reference)
+    assert comment_author.name[0].family == "Commenter"
+    assert comment_author.name[0].given == ["Jamie"]
+
+    recorder_practitioner = _resolve(round_tripped_bundle, appendectomy.recorder.reference)
+    assert recorder_practitioner.name[0].family == "Recorder"
+    assert recorder_practitioner.name[0].given == ["Alice"]
+    assert recorder_practitioner.id != comment_author.id
+
+    assert colonoscopy.reasonCode is None
+    assert colonoscopy.note is None
+    assert colonoscopy.recorder is None
+
+
 def test_ccd_missing_patient_raises_mapping_error():
     empty_bundle = Bundle(id="test", type="collection")
     with pytest.raises(MappingError):

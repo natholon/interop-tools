@@ -160,6 +160,15 @@ INDICATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.19"
 # inversionInd/fixed-code shape confirmed against the C-CDA on FHIR IG's
 # own mappingGuidance.html and a real fetched worked example.
 COMMENT_ACTIVITY_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.64"
+# Author Participation - the general CDA <author> shape, confirmed
+# "appropriate at any place CDA allows an author... CDA Entry" and legal
+# both as a direct child of the procedure element (-> Procedure.recorder)
+# and nested inside a Comment Activity act (-> Annotation.authorReference).
+# Public (not module-private) - app/transform/cda_ccd.py became a real
+# reverse-direction consumer, needing this OID to regenerate a realistic
+# <author><templateId .../>...</author> element, even though the forward
+# parser itself never gates on it (see module docstring for why).
+AUTHOR_PARTICIPATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.119"
 
 # ConceptMap-CF-ProcedureStatus (github.com/HL7/ccda-on-fhir/blob/master/
 # input/maps/ConceptMap-CF-ProcedureStatus.xml, fetched and confirmed

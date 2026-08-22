@@ -56,6 +56,7 @@ from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
 from app.cda.procedures import PROCEDURE_TEMPLATE_ID, STATUS_MAP as PROCEDURE_STATUS_MAP
 from app.cda.procedures import SECTION_TEMPLATE_ID as PROCEDURES_SECTION_TEMPLATE_ID
 from app.cda.procedures import SERVICE_DELIVERY_LOCATION_TEMPLATE_ID
+from app.cda.procedures import INDICATION_TEMPLATE_ID, COMMENT_ACTIVITY_TEMPLATE_ID
 from app.cda.procedures import (
     SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as PROCEDURES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL,
 )
@@ -937,6 +938,54 @@ def _rule_procedures(section, now: datetime) -> list[ValidationFinding]:
                         message="A Service Delivery Location participant has neither a resolvable name nor a coded type - the converter will silently skip it.",
                     )
                 )
+
+        # Surfaces app.cda.procedures._build_reason_codes'/_build_notes'
+        # own silent skips: an Indication/Comment Activity entryRelationship
+        # whose own nested observation/act carries no resolvable value/text
+        # never contributes a Procedure.reasonCode/.note entry.
+        for relationship in find_all(procedure, "entryRelationship"):
+            if relationship.get("typeCode") == "RSON":
+                observation = find_child(relationship, "observation")
+                if observation is None or not has_template_id(observation, INDICATION_TEMPLATE_ID):
+                    continue
+                if build_codeable_concept_from_cd(find_child(observation, "value")) is None:
+                    findings.append(
+                        ValidationFinding(
+                            severity="info",
+                            rule_id="cda.procedure-indication-missing-value",
+                            segment="Procedures/.../procedure/entryRelationship/observation",
+                            message="An Indication has no resolvable coded value - the converter will silently skip it.",
+                        )
+                    )
+            elif relationship.get("typeCode") == "SUBJ" and relationship.get("inversionInd") == "true":
+                act = find_child(relationship, "act")
+                if act is None or not has_template_id(act, COMMENT_ACTIVITY_TEMPLATE_ID):
+                    continue
+                text_element = find_child(act, "text")
+                text = (text_element.text or "").strip() if text_element is not None else ""
+                if not text:
+                    findings.append(
+                        ValidationFinding(
+                            severity="info",
+                            rule_id="cda.procedure-comment-missing-text",
+                            segment="Procedures/.../procedure/entryRelationship/act/text",
+                            message="A Comment Activity has no resolvable text - the converter will silently skip it.",
+                        )
+                    )
+
+        # Surfaces app.cda.procedures._build_procedure_recorder's own
+        # silent skip: a direct-child <author> with no nested
+        # assignedAuthor never contributes Procedure.recorder.
+        author = find_child(procedure, "author")
+        if author is not None and find_child(author, "assignedAuthor") is None:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.procedure-recorder-missing-author",
+                    segment="Procedures/.../procedure/author",
+                    message="An <author> has no nested assignedAuthor - the converter will silently skip it (Procedure.recorder stays unset).",
+                )
+            )
     return findings
 
 
