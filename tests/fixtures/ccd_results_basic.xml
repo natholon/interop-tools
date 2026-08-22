@@ -44,6 +44,16 @@
               <code code="58410-2" codeSystem="2.16.840.1.113883.6.1" displayName="Complete blood count panel"/>
               <statusCode code="completed"/>
               <effectiveTime value="20260803070000-0500"/>
+              <specimen typeCode="SPC">
+                <specimenRole classCode="SPEC">
+                  <id root="c1d2e3f4-0009-4a1a-8a1a-000000000009"/>
+                  <specimenPlayingEntity classCode="ENT">
+                    <code code="119297000" codeSystem="2.16.840.1.113883.6.96" displayName="Blood specimen"/>
+                    <quantity value="5" unit="mL"/>
+                    <desc>Drawn via venipuncture</desc>
+                  </specimenPlayingEntity>
+                </specimenRole>
+              </specimen>
               <component>
                 <observation classCode="OBS" moodCode="EVN">
                   <templateId root="2.16.840.1.113883.10.20.22.4.2"/>
@@ -72,6 +82,35 @@
                   <effectiveTime value="20260803070000-0500"/>
                   <value xsi:type="ST">No growth after 48 hours</value>
                 </observation>
+              </component>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.2"/>
+                  <id root="c1d2e3f4-0004-4a1a-8a1a-000000000004"/>
+                  <code code="2160-0" codeSystem="2.16.840.1.113883.6.1" displayName="Creatinine"/>
+                  <statusCode code="completed"/>
+                  <effectiveTime value="20260803070000-0500"/>
+                  <value xsi:type="IVL_PQ">
+                    <low value="0.6" unit="mg/dL"/>
+                    <high value="1.3" unit="mg/dL"/>
+                  </value>
+                </observation>
+              </component>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.2"/>
+                  <id root="c1d2e3f4-0005-4a1a-8a1a-000000000005"/>
+                  <code code="5778-6" codeSystem="2.16.840.1.113883.6.1" displayName="Color of Urine"/>
+                  <statusCode code="completed"/>
+                  <effectiveTime value="20260803070000-0500"/>
+                  <value xsi:type="ED">Yellow</value>
+                </observation>
+              </component>
+              <component>
+                <procedure classCode="PROC" moodCode="EVN">
+                  <code code="17636008" codeSystem="2.16.840.1.113883.6.96" displayName="Specimen collection"/>
+                  <targetSiteCode code="368225008" codeSystem="2.16.840.1.113883.6.96" displayName="Entire left antecubital vein"/>
+                </procedure>
               </component>
             </organizer>
           </entry>

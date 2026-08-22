@@ -360,6 +360,34 @@ def _build_patient_telecoms(patient_role, resource_id: str | None = None, record
     return telecoms
 
 
+def build_contact_point_from_telecom(telecom_element) -> ContactPoint | None:
+    """A single <telecom> element (e.g. an assignedEntity's/
+    representedOrganization's/participantRole's own <telecom> - not the
+    patient's own repeating telecom list _build_patient_telecoms handles)
+    -> ContactPoint. Promoted here, public, once app/cda/procedures.py
+    became a second real consumer of the identical scheme/use resolution
+    _build_patient_telecoms already had inline - unlike that function,
+    this one does no recording of its own, since a single-telecom caller's
+    own resource id/relative path/source location vary per call site;
+    the caller records against the returned object's own resolved fields,
+    the same division of labor build_quantity_from_pq/
+    build_codeable_concept_from_cd already establish."""
+    if telecom_element is None:
+        return None
+    raw_value = telecom_element.get("value")
+    if not raw_value:
+        return None
+    scheme, _, value = raw_value.partition(":")
+    contact_point = ContactPoint(value=value or raw_value)
+    system = _TELECOM_SCHEME_TO_SYSTEM.get(scheme.lower())
+    if system:
+        contact_point.system = system
+    use = _TELECOM_USE_MAP.get(telecom_element.get("use", ""))
+    if use:
+        contact_point.use = use
+    return contact_point
+
+
 def build_patient_from_header(document, recorder=None) -> Patient:
     """recordTarget/patientRole/patient -> Patient. Raises
     MissingSegmentError when the header lacks a patientRole/patient at

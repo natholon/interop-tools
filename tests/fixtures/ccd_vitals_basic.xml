@@ -65,6 +65,46 @@
                   <value xsi:type="PQ" value="98.6" unit="[degF]"/>
                 </observation>
               </component>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.27"/>
+                  <id root="b1c2d3e4-0004-4a1a-8a1a-000000000004"/>
+                  <code code="8480-6" codeSystem="2.16.840.1.113883.6.1" displayName="Systolic blood pressure"/>
+                  <statusCode code="completed"/>
+                  <effectiveTime value="20260805090000-0500"/>
+                  <value xsi:type="PQ" value="120" unit="mm[Hg]"/>
+                </observation>
+              </component>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.27"/>
+                  <id root="b1c2d3e4-0005-4a1a-8a1a-000000000005"/>
+                  <code code="8462-4" codeSystem="2.16.840.1.113883.6.1" displayName="Diastolic blood pressure"/>
+                  <statusCode code="completed"/>
+                  <effectiveTime value="20260805090000-0500"/>
+                  <value xsi:type="PQ" value="80" unit="mm[Hg]"/>
+                </observation>
+              </component>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.27"/>
+                  <id root="b1c2d3e4-0006-4a1a-8a1a-000000000006"/>
+                  <code code="59408-5" codeSystem="2.16.840.1.113883.6.1" displayName="Oxygen saturation"/>
+                  <statusCode code="completed"/>
+                  <effectiveTime value="20260805090000-0500"/>
+                  <value xsi:type="PQ" value="97" unit="%"/>
+                </observation>
+              </component>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.27"/>
+                  <id root="b1c2d3e4-0007-4a1a-8a1a-000000000007"/>
+                  <code code="3151-8" codeSystem="2.16.840.1.113883.6.1" displayName="Inhaled oxygen flow rate"/>
+                  <statusCode code="completed"/>
+                  <effectiveTime value="20260805090000-0500"/>
+                  <value xsi:type="PQ" value="2" unit="L/min"/>
+                </observation>
+              </component>
             </organizer>
           </entry>
         </section>

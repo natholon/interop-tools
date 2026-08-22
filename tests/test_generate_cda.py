@@ -579,6 +579,55 @@ def test_vital_sign_interpretation_varies_across_seeds():
     assert present > 0 and absent > 0
 
 
+def _observation_codes(organizer):
+    return {
+        find_child(observation, "code").get("code")
+        for observation in _vital_sign_observations_in_organizer(organizer)
+    }
+
+
+def _vital_sign_observations_in_organizer(organizer):
+    for component in find_all(organizer, "component"):
+        observation = find_child(component, "observation")
+        if observation is not None and has_template_id(observation, _VITAL_SIGN_OBSERVATION_TEMPLATE_ID):
+            yield observation
+
+
+def test_blood_pressure_panel_pair_and_incomplete_fallback_vary_across_seeds():
+    # Direct fuzz coverage of app/cda/vitals.py's own Blood Pressure Panel
+    # grouping: both a complete systolic+diastolic pair (grouped into one
+    # panel) and an incomplete pair (falls back to plain) must occur.
+    complete = incomplete = 0
+    for seed in range(80):
+        for organizer in _vital_signs_organizers(_document(seed)):
+            codes = _observation_codes(organizer)
+            has_systolic = "8480-6" in codes
+            has_diastolic = "8462-4" in codes
+            if has_systolic and has_diastolic:
+                complete += 1
+            elif has_systolic or has_diastolic:
+                incomplete += 1
+    assert complete > 0 and incomplete > 0
+
+
+def test_pulse_oximetry_reading_and_optional_components_vary_across_seeds():
+    # Direct fuzz coverage of app/cda/vitals.py's own Pulse Oximetry Panel
+    # grouping: the primary O2 saturation reading must occur both with and
+    # without its own optional concentration/flow-rate siblings.
+    with_components = without_components = absent = 0
+    for seed in range(80):
+        for organizer in _vital_signs_organizers(_document(seed)):
+            codes = _observation_codes(organizer)
+            if "59408-5" not in codes:
+                absent += 1
+                continue
+            if "3150-0" in codes or "3151-8" in codes:
+                with_components += 1
+            else:
+                without_components += 1
+    assert with_components > 0 and without_components > 0 and absent > 0
+
+
 def _result_organizers(document):
     for section in find_all(document, "component/structuredBody/component/section"):
         if not has_template_id(section, _RESULTS_SECTION_TEMPLATE_ID):
@@ -642,6 +691,46 @@ def test_result_reference_range_varies_across_seeds():
             else:
                 absent += 1
     assert present > 0 and absent > 0
+
+
+def test_result_specimen_at_organizer_and_observation_level_varies_across_seeds():
+    # Direct fuzz coverage of app/cda/results.py's own two specimen
+    # attachment levels - the organizer-level default and an individual
+    # observation's own override.
+    organizer_specimen_present = organizer_specimen_absent = 0
+    observation_specimen_present = 0
+    for seed in range(80):
+        for organizer in _result_organizers(_document(seed)):
+            if find_child(organizer, "specimen") is not None:
+                organizer_specimen_present += 1
+            else:
+                organizer_specimen_absent += 1
+            for observation in _result_observations_in_organizer(organizer):
+                if find_child(observation, "specimen") is not None:
+                    observation_specimen_present += 1
+    assert organizer_specimen_present > 0 and organizer_specimen_absent > 0
+    assert observation_specimen_present > 0
+
+
+def _result_observations_in_organizer(organizer):
+    for component in find_all(organizer, "component"):
+        observation = find_child(component, "observation")
+        if observation is not None and has_template_id(observation, _RESULT_OBSERVATION_TEMPLATE_ID):
+            yield observation
+
+
+def test_result_value_type_varies_across_pq_ivl_pq_and_ed():
+    # Direct fuzz coverage of app/cda/results.py's own IVL_PQ/ED value-type
+    # branches, not just the pre-existing PQ shape.
+    from app.cda.parser import xsi_type
+
+    value_types = set()
+    for seed in range(80):
+        for observation in _result_observations(_document(seed)):
+            value_element = find_child(observation, "value")
+            if value_element is not None:
+                value_types.add(xsi_type(value_element))
+    assert {"PQ", "IVL_PQ", "ED"} <= value_types
 
 
 def _procedure_entries(document):
@@ -721,6 +810,41 @@ def test_procedure_body_site_varies_across_seeds():
     for seed in range(80):
         for procedure in _procedure_entries(_document(seed)):
             if find_child(procedure, "targetSiteCode") is not None:
+                present += 1
+            else:
+                absent += 1
+    assert present > 0 and absent > 0
+
+
+def test_procedure_performer_presence_and_name_vs_id_only_varies_across_seeds():
+    # Direct fuzz coverage of app/cda/procedures.py's own performer
+    # handling - present/absent, and (when present) a real assignedPerson/
+    # name vs. an id-only assignedEntity (the "skip only when neither
+    # resolves" presence rule a real fetched example established).
+    present = absent = with_name = id_only = 0
+    for seed in range(120):
+        for procedure in _procedure_entries(_document(seed)):
+            performer = find_child(procedure, "performer")
+            if performer is None:
+                absent += 1
+                continue
+            present += 1
+            assigned_entity = find_child(performer, "assignedEntity")
+            if find_child(assigned_entity, "assignedPerson") is not None:
+                with_name += 1
+            else:
+                id_only += 1
+    assert present > 0 and absent > 0
+    assert with_name > 0 and id_only > 0
+
+
+def test_procedure_participant_location_varies_across_seeds():
+    # Direct fuzz coverage of app/cda/procedures.py's own Service Delivery
+    # Location handling.
+    present = absent = 0
+    for seed in range(120):
+        for procedure in _procedure_entries(_document(seed)):
+            if find_child(procedure, "participant") is not None:
                 present += 1
             else:
                 absent += 1

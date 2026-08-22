@@ -21,27 +21,44 @@ own separate, top-level Bundle entry (this app's established convention,
 never FHIR .contained - the same shape app/mappings/oru.py already uses
 for DiagnosticReport + its own Observation results on the HL7v2 side).
 
-**Disclosed scope limit, decided up front**: the IG's own Blood Pressure
-(systolic 8480-6 + diastolic 8462-4 grouped as .component under one
-85354-9 "Blood Pressure Panel" Observation) and Pulse Oximetry (O2
-saturation + flow rate + concentration similarly grouped) special cases
-are NOT implemented this slice - correlating specific sibling LOINC codes
-within one organizer into a single grouped Observation is real, additional
-complexity distinct from the general 1:1 mapping every other vital sign
-uses. Every Vital Sign Observation instead maps 1:1 to its own Observation
-- still valid, useful, correctly-coded data (just not US-Core-profile-
-conformant for those two specific vital types, which real consumers
-expecting the grouped panel shape would need to reconstruct themselves).
-A future slice can add the grouping without changing anything shipped
-here, the same "map the general case now, disclose the special case as a
-later slice" precedent this app already applied to Medications' IVL_PQ
-dosing ranges and Immunizations' INT-mood entries."""
+**Blood Pressure Panel and Pulse Oximetry Panel special cases** (per
+CF-vitals.md's own construction guidance, fetched directly): C-CDA has no
+dedicated template for either - a systolic/diastolic pair, or an O2
+saturation reading with optional inhaled-oxygen-concentration/flow-rate
+siblings, are just ordinary Vital Sign Observations sharing one organizer
+with everything else. Detection is purely by LOINC code within that flat
+component list:
+- **Blood Pressure Panel**: systolic (8480-6) + diastolic (8462-4),
+  grouped into one new Observation with a fixed `85354-9` code and exactly
+  2 `.component` entries (no top-level `.valueQuantity` - the IG's own
+  guidance says not to send one) - both components are required, so an
+  incomplete pair (only one of the two present in a given organizer) is
+  NOT grouped; it falls back to an ordinary flat Vital Sign Observation
+  instead of being silently dropped.
+- **Pulse Oximetry Panel**: the O2 saturation reading itself (LOINC
+  `59408-5` or the older synonymous `2708-6`) becomes the panel - its own
+  `.code` always carries BOTH IG-documented synonymous codings regardless
+  of which single one the source used, and `.valueQuantity` is the O2
+  saturation value itself (unlike the Blood Pressure Panel, which has no
+  top-level value). Inhaled oxygen concentration (`3150-0`) and flow rate
+  (`3151-8`) become `.component` entries only when their own sibling codes
+  are present in the same organizer ("only if values exist," per the IG) -
+  a concentration/flow-rate reading found with no primary O2 saturation
+  reading to attach to has nowhere to go and falls back to plain the same
+  way an incomplete BP pair does.
+
+**Disclosed scope limit that remains**: only these two documented special
+cases are grouped - any other LOINC-coded vital still maps 1:1, matching
+this app's own "map the general case now, disclose only the genuinely
+remaining special case" precedent (see Medications' own IVL_PQ dosing
+ranges and Immunizations' INT-mood entries for the same judgment call made
+elsewhere)."""
 
 import uuid
 
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
-from fhir.resources.R4B.observation import Observation
+from fhir.resources.R4B.observation import Observation, ObservationComponent
 from fhir.resources.R4B.reference import Reference
 
 from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, effective_time_location, parse_partial_ts
@@ -85,6 +102,19 @@ PANEL_CODE = "85353-1"
 # statusCode.
 _FIXED_STATUS = "final"
 
+_LOINC_OID = "2.16.840.1.113883.6.1"
+
+# Blood Pressure Panel (CF-vitals.md's own construction guidance, fetched
+# directly) - see module docstring for the full shape.
+_BP_SYSTOLIC_CODE = "8480-6"
+_BP_DIASTOLIC_CODE = "8462-4"
+_BP_PANEL_CODE = "85354-9"
+
+# Pulse Oximetry Panel - see module docstring for the full shape.
+_PULSE_OX_PRIMARY_CODES = {"59408-5", "2708-6"}
+_PULSE_OX_CONCENTRATION_CODE = "3150-0"
+_PULSE_OX_FLOW_RATE_CODE = "3151-8"
+
 
 def _category() -> CodeableConcept:
     return CodeableConcept(coding=[Coding(system=_CATEGORY_SYSTEM, code=_CATEGORY_CODE)])
@@ -119,6 +149,69 @@ def _member_base(index: int) -> str:
     return xpath_location("organizer", f"component[{index}]", "observation")
 
 
+def _loinc_code(observation_element) -> str | None:
+    """The observation's own <code>'s LOINC value, or None when absent or
+    coded in some other system - only a genuinely LOINC-coded value is
+    trusted for the Blood Pressure/Pulse Oximetry detection below, so a
+    coincidentally identical code string in a different vocabulary can
+    never false-match."""
+    code_element = find_child(observation_element, "code")
+    if code_element is None:
+        return None
+    if code_element.get("codeSystem") != _LOINC_OID:
+        return None
+    return code_element.get("code")
+
+
+def _apply_common_observation_fields(observation: Observation, observation_element, member_base: str, recorder=None) -> None:
+    """effectiveDateTime/interpretation/method/bodySite - the fields every
+    Vital Sign Observation reads the same way regardless of whether it
+    ends up as an ordinary flat member or the base of a Pulse Oximetry
+    Panel. Extracted once _build_pulse_oximetry_panel became a second real
+    consumer of the identical extraction _build_vital_sign_observation
+    already had inline."""
+    effective_time = find_child(observation_element, "effectiveTime")
+    effective, _ = ivl_ts_bounds(effective_time)
+    effective_dt = parse_partial_ts(effective)
+    if effective_dt:
+        observation.effectiveDateTime = effective_dt
+        if recorder:
+            recorder.record(
+                observation.id,
+                "effectiveDateTime",
+                effective_time_location(f"{member_base}/effectiveTime", effective_time, "low"),
+                effective_dt,
+            )
+
+    interpretation_element = find_child(observation_element, "interpretationCode")
+    interpretation = build_codeable_concept_from_cd(interpretation_element)
+    if interpretation:
+        observation.interpretation = [interpretation]
+        if recorder:
+            recorder.record(
+                observation.id,
+                "interpretation[0].coding[0].code",
+                f"{member_base}/interpretationCode/@code",
+                interpretation.coding[0].code,
+            )
+
+    method_element = find_child(observation_element, "methodCode")
+    method = build_codeable_concept_from_cd(method_element)
+    if method:
+        observation.method = method
+        if recorder:
+            recorder.record(observation.id, "method.coding[0].code", f"{member_base}/methodCode/@code", method.coding[0].code)
+
+    body_site_element = find_child(observation_element, "targetSiteCode")
+    body_site = build_codeable_concept_from_cd(body_site_element)
+    if body_site:
+        observation.bodySite = body_site
+        if recorder:
+            recorder.record(
+                observation.id, "bodySite.coding[0].code", f"{member_base}/targetSiteCode/@code", body_site.coding[0].code
+            )
+
+
 def _build_vital_sign_observation(
     observation_element, patient_id: str, index: int, recorder=None
 ) -> Observation | None:
@@ -149,19 +242,6 @@ def _build_vital_sign_observation(
         if display_value:
             recorder.record(observation_id, "code.coding[0].display", f"{member_base}/code/@displayName", display_value)
 
-    effective_time = find_child(observation_element, "effectiveTime")
-    effective, _ = ivl_ts_bounds(effective_time)
-    effective_dt = parse_partial_ts(effective)
-    if effective_dt:
-        observation.effectiveDateTime = effective_dt
-        if recorder:
-            recorder.record(
-                observation_id,
-                "effectiveDateTime",
-                effective_time_location(f"{member_base}/effectiveTime", effective_time, "low"),
-                effective_dt,
-            )
-
     value_element = find_child(observation_element, "value")
     value = build_quantity_from_pq(value_element)
     if value:
@@ -171,39 +251,151 @@ def _build_vital_sign_observation(
             if value.unit:
                 recorder.record(observation_id, "valueQuantity.unit", f"{member_base}/value/@unit", value.unit)
 
-    interpretation_element = find_child(observation_element, "interpretationCode")
-    interpretation = build_codeable_concept_from_cd(interpretation_element)
-    if interpretation:
-        observation.interpretation = [interpretation]
-        if recorder:
-            recorder.record(
-                observation_id,
-                "interpretation[0].coding[0].code",
-                f"{member_base}/interpretationCode/@code",
-                interpretation.coding[0].code,
-            )
-
-    method_element = find_child(observation_element, "methodCode")
-    method = build_codeable_concept_from_cd(method_element)
-    if method:
-        observation.method = method
-        if recorder:
-            recorder.record(observation_id, "method.coding[0].code", f"{member_base}/methodCode/@code", method.coding[0].code)
-
-    body_site_element = find_child(observation_element, "targetSiteCode")
-    body_site = build_codeable_concept_from_cd(body_site_element)
-    if body_site:
-        observation.bodySite = body_site
-        if recorder:
-            recorder.record(observation_id, "bodySite.coding[0].code", f"{member_base}/targetSiteCode/@code", body_site.coding[0].code)
+    _apply_common_observation_fields(observation, observation_element, member_base, recorder=recorder)
 
     return observation
+
+
+def _build_blood_pressure_panel(systolic, diastolic, patient_id: str, recorder=None) -> Observation | None:
+    """systolic/diastolic are each (index, observation_element) pairs from
+    the organizer's own flat component list - see build_vital_signs's own
+    detection pass. Grouped into one Blood Pressure Panel Observation per
+    CF-vitals.md's own construction guidance (fixed 85354-9 code, no
+    top-level valueQuantity, exactly 2 components) rather than kept as two
+    independent top-level Observations. Returns None when either side's
+    own code or value doesn't resolve - resolves BOTH sides before
+    building or recording anything (rather than failing mid-construction),
+    so a failed grouping never leaves an orphaned, half-recorded panel
+    behind; the caller falls both sides back to an ordinary flat Vital
+    Sign Observation instead of silently dropping data."""
+    resolved = []
+    for index, observation_element in (systolic, diastolic):
+        code_element = find_child(observation_element, "code")
+        code = build_codeable_concept_from_cd(code_element)
+        value_element = find_child(observation_element, "value")
+        value = build_quantity_from_pq(value_element)
+        if code is None or value is None:
+            return None
+        resolved.append((index, code_element, code, value_element, value))
+
+    panel_id = str(uuid.uuid4())
+    panel = Observation(
+        id=panel_id,
+        status=_FIXED_STATUS,
+        category=[_category()],
+        code=CodeableConcept(coding=[Coding(system=PANEL_CODE_SYSTEM, code=_BP_PANEL_CODE)]),
+        subject=Reference(reference=f"urn:uuid:{patient_id}"),
+        component=[ObservationComponent(code=code, valueQuantity=value) for _, _, code, _, value in resolved],
+    )
+    if recorder:
+        _record_fixed_status_and_category(recorder, panel_id)
+        recorder.record_inferred(
+            panel_id,
+            "code.coding[0].code",
+            'CF-vitals.md\'s own Blood Pressure Panel construction guidance fixes this to "85354-9" regardless of the source systolic/diastolic codes themselves.',
+            _BP_PANEL_CODE,
+        )
+        for component_index, (index, code_element, code, value_element, value) in enumerate(resolved):
+            member_base = _member_base(index)
+            component_path = f"component[{component_index}]"
+            recorder.record(panel_id, f"{component_path}.code.coding[0].code", f"{member_base}/code/@code", code_element.get("code"))
+            recorder.record(
+                panel_id, f"{component_path}.valueQuantity.value", f"{member_base}/value/@value", value_element.get("value")
+            )
+            if value.unit:
+                recorder.record(panel_id, f"{component_path}.valueQuantity.unit", f"{member_base}/value/@unit", value.unit)
+    return panel
+
+
+def _build_pulse_oximetry_panel(primary, concentration, flow_rate, patient_id: str, recorder=None) -> Observation | None:
+    """`primary` is a (index, observation_element) pair (the O2 saturation
+    reading) - the base of the panel itself, not a separate member;
+    `concentration`/`flow_rate` are the same shape or None when their own
+    sibling LOINC code wasn't present in this organizer. Per CF-vitals.md's
+    own construction guidance: the panel's own .code always carries BOTH
+    IG-documented synonymous LOINC codes (59408-5/2708-6) regardless of
+    which single one the source actually used, .valueQuantity is the O2
+    saturation reading itself (unlike the Blood Pressure Panel, which
+    carries no top-level value), and concentration/flow-rate become
+    .component entries only when present. Returns None when the primary
+    reading's own value doesn't resolve - falls back to an ordinary flat
+    Vital Sign Observation the same way an incomplete BP pair does."""
+    primary_index, primary_element = primary
+    value_element = find_child(primary_element, "value")
+    value = build_quantity_from_pq(value_element)
+    if value is None:
+        return None
+
+    panel_id = str(uuid.uuid4())
+    panel = Observation(
+        id=panel_id,
+        status=_FIXED_STATUS,
+        category=[_category()],
+        code=CodeableConcept(coding=[Coding(system=PANEL_CODE_SYSTEM, code=code) for code in sorted(_PULSE_OX_PRIMARY_CODES)]),
+        subject=Reference(reference=f"urn:uuid:{patient_id}"),
+        valueQuantity=value,
+    )
+    member_base = _member_base(primary_index)
+    if recorder:
+        _record_fixed_status_and_category(recorder, panel_id)
+        recorder.record_inferred(
+            panel_id,
+            "code.coding[0].code",
+            "CF-vitals.md's own Pulse Oximetry Panel construction guidance fixes this to carry both IG-documented "
+            'synonymous LOINC codes ("59408-5" and "2708-6") regardless of which single one the source used.',
+            "+".join(sorted(_PULSE_OX_PRIMARY_CODES)),
+        )
+        recorder.record(panel_id, "valueQuantity.value", f"{member_base}/value/@value", value_element.get("value"))
+        if value.unit:
+            recorder.record(panel_id, "valueQuantity.unit", f"{member_base}/value/@unit", value.unit)
+
+    _apply_common_observation_fields(panel, primary_element, member_base, recorder=recorder)
+
+    components = []
+    for entry in (concentration, flow_rate):
+        if entry is None:
+            continue
+        entry_index, entry_element = entry
+        code_element = find_child(entry_element, "code")
+        code = build_codeable_concept_from_cd(code_element)
+        entry_value_element = find_child(entry_element, "value")
+        entry_value = build_quantity_from_pq(entry_value_element)
+        if code is None or entry_value is None:
+            # An optional concentration/flow-rate sibling with no
+            # resolvable value has nothing useful to report either as a
+            # component or as its own flat vital - matching the IG's own
+            # "only if values exist" scoping, not a data-loss bug.
+            continue
+        components.append(ObservationComponent(code=code, valueQuantity=entry_value))
+        if recorder:
+            entry_member_base = _member_base(entry_index)
+            component_path = f"component[{len(components) - 1}]"
+            recorder.record(
+                panel_id, f"{component_path}.code.coding[0].code", f"{entry_member_base}/code/@code", code_element.get("code")
+            )
+            recorder.record(
+                panel_id,
+                f"{component_path}.valueQuantity.value",
+                f"{entry_member_base}/value/@value",
+                entry_value_element.get("value"),
+            )
+            if entry_value.unit:
+                recorder.record(
+                    panel_id, f"{component_path}.valueQuantity.unit", f"{entry_member_base}/value/@unit", entry_value.unit
+                )
+    if components:
+        panel.component = components
+
+    return panel
 
 
 def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observation]:
     """One panel Observation per Vital Signs Organizer entry (its own
     .hasMember referencing one Observation per individual Vital Sign
-    Observation), plus each of those individual Observations - all
+    Observation - including a Blood Pressure/Pulse Oximetry Panel
+    Observation as a single member, when either was detected, in place of
+    the flat systolic/diastolic/O2-saturation-plus-siblings readings it
+    was built from), plus each of those individual Observations - all
     returned as a flat list of separate, top-level resources. An organizer
     whose every child observation lacks a resolvable code produces no
     panel either (nothing to group), matching the "no resolvable code ->
@@ -214,14 +406,89 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
         if organizer is None or not has_template_id(organizer, ORGANIZER_TEMPLATE_ID):
             continue
 
-        member_observations = []
+        # First pass: bucket each component's own observation element by
+        # LOINC code so the Blood Pressure/Pulse Oximetry Panel special
+        # cases (see module docstring) can be detected before any of them
+        # are built as ordinary flat members - first match wins per
+        # bucket, a second occurrence of the same code falls through to
+        # "plain" rather than silently being dropped.
+        systolic = None
+        diastolic = None
+        pulse_ox_primary = None
+        pulse_ox_concentration = None
+        pulse_ox_flow_rate = None
+        plain = []
         for index, component in enumerate(find_all(organizer, "component")):
             observation_element = find_child(component, "observation")
             if observation_element is None or not has_template_id(observation_element, OBSERVATION_TEMPLATE_ID):
                 continue
+            code = _loinc_code(observation_element)
+            if code == _BP_SYSTOLIC_CODE and systolic is None:
+                systolic = (index, observation_element)
+            elif code == _BP_DIASTOLIC_CODE and diastolic is None:
+                diastolic = (index, observation_element)
+            elif code in _PULSE_OX_PRIMARY_CODES and pulse_ox_primary is None:
+                pulse_ox_primary = (index, observation_element)
+            elif code == _PULSE_OX_CONCENTRATION_CODE and pulse_ox_concentration is None:
+                pulse_ox_concentration = (index, observation_element)
+            elif code == _PULSE_OX_FLOW_RATE_CODE and pulse_ox_flow_rate is None:
+                pulse_ox_flow_rate = (index, observation_element)
+            else:
+                plain.append((index, observation_element))
+
+        # An incomplete Blood Pressure pair, or a Pulse Oximetry
+        # concentration/flow-rate reading with no primary O2 saturation
+        # reading to attach to, has nothing to group into - falls back to
+        # an ordinary flat Vital Sign Observation instead of being
+        # silently dropped.
+        if systolic and not diastolic:
+            plain.append(systolic)
+            systolic = None
+        if diastolic and not systolic:
+            plain.append(diastolic)
+            diastolic = None
+        if pulse_ox_primary is None:
+            if pulse_ox_concentration:
+                plain.append(pulse_ox_concentration)
+                pulse_ox_concentration = None
+            if pulse_ox_flow_rate:
+                plain.append(pulse_ox_flow_rate)
+                pulse_ox_flow_rate = None
+
+        member_observations = []
+        for index, observation_element in plain:
             observation = _build_vital_sign_observation(observation_element, patient_id, index, recorder=recorder)
             if observation is not None:
                 member_observations.append(observation)
+
+        if systolic and diastolic:
+            bp_panel = _build_blood_pressure_panel(systolic, diastolic, patient_id, recorder=recorder)
+            if bp_panel is not None:
+                member_observations.append(bp_panel)
+            else:
+                # Either side's own value failed to resolve - fall back to
+                # plain rather than silently dropping the data.
+                for index, observation_element in (systolic, diastolic):
+                    observation = _build_vital_sign_observation(observation_element, patient_id, index, recorder=recorder)
+                    if observation is not None:
+                        member_observations.append(observation)
+
+        if pulse_ox_primary:
+            pulse_ox_panel = _build_pulse_oximetry_panel(
+                pulse_ox_primary, pulse_ox_concentration, pulse_ox_flow_rate, patient_id, recorder=recorder
+            )
+            if pulse_ox_panel is not None:
+                member_observations.append(pulse_ox_panel)
+            else:
+                index, observation_element = pulse_ox_primary
+                observation = _build_vital_sign_observation(observation_element, patient_id, index, recorder=recorder)
+                if observation is not None:
+                    member_observations.append(observation)
+                # A concentration/flow-rate sibling with no resolvable
+                # primary reading has nowhere to attach and is not
+                # separately recovered as its own flat vital either - the
+                # same "optional, skip if unusable" treatment
+                # _build_pulse_oximetry_panel itself already applies.
 
         if not member_observations:
             continue

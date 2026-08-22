@@ -21,6 +21,15 @@ def _entries_by_type(bundle):
     return entries
 
 
+def _resolve_reference(bundle, reference: str):
+    """Resolves a "urn:uuid:{id}" Reference.reference string to the real
+    resource it points at within `bundle` - used by tests that need to
+    follow a chain of materialized resources (e.g. Procedure.performer ->
+    PractitionerRole -> Practitioner/Organization/Location)."""
+    resource_id = reference.removeprefix("urn:uuid:")
+    return next(entry.resource for entry in bundle.entry if entry.resource.id == resource_id)
+
+
 def test_basic_fixture_maps_patient_encounter_and_conditions():
     bundle = convert_cda_to_bundle(read_fixture("ccd_basic.xml"))
 
@@ -266,11 +275,13 @@ def test_vitals_basic_fixture_maps_panel_and_members():
     entries = _entries_by_type(bundle)
     patient = entries["Patient"][0].resource
     observations = [e.resource for e in entries["Observation"]]
-    assert len(observations) == 3
+    # The outer Vital Signs Panel, heart rate, temperature (both plain),
+    # plus the Blood Pressure Panel and Pulse Oximetry Panel groupings.
+    assert len(observations) == 5
 
     panel = next(o for o in observations if o.code.coding[0].code == "85353-1")
     members = [o for o in observations if o.id != panel.id]
-    assert len(members) == 2
+    assert len(members) == 4
     assert {ref.reference for ref in panel.hasMember} == {f"urn:uuid:{m.id}" for m in members}
     assert panel.status == "final"
     assert panel.category[0].coding[0].code == "vital-signs"
@@ -287,28 +298,77 @@ def test_vitals_basic_fixture_maps_panel_and_members():
     assert temperature.valueQuantity.unit == "[degF]"
     assert temperature.interpretation is None
 
+    # Blood Pressure Panel: systolic+diastolic grouped as .component, no
+    # top-level valueQuantity.
+    bp_panel = next(m for m in members if m.code.coding[0].code == "85354-9")
+    assert bp_panel.valueQuantity is None
+    assert bp_panel.status == "final"
+    bp_components = {c.code.coding[0].code: c for c in bp_panel.component}
+    assert float(bp_components["8480-6"].valueQuantity.value) == 120
+    assert bp_components["8480-6"].valueQuantity.unit == "mm[Hg]"
+    assert float(bp_components["8462-4"].valueQuantity.value) == 80
+
+    # Pulse Oximetry Panel: the O2 saturation reading itself becomes the
+    # panel (with a top-level valueQuantity, unlike the BP Panel), always
+    # carrying both IG-documented synonymous LOINC codings regardless of
+    # which one the source used (this fixture uses 59408-5 only), plus the
+    # one present optional sibling (flow rate) as a .component.
+    pulse_ox_panel = next(m for m in members if {c.code for c in m.code.coding} == {"59408-5", "2708-6"})
+    assert float(pulse_ox_panel.valueQuantity.value) == 97
+    assert pulse_ox_panel.valueQuantity.unit == "%"
+    assert len(pulse_ox_panel.component) == 1
+    assert pulse_ox_panel.component[0].code.coding[0].code == "3151-8"
+    assert float(pulse_ox_panel.component[0].valueQuantity.value) == 2
+
 
 def test_results_basic_fixture_maps_report_and_observations():
     bundle = convert_cda_to_bundle(read_fixture("ccd_results_basic.xml"))
     entries = _entries_by_type(bundle)
     patient = entries["Patient"][0].resource
     report = entries["DiagnosticReport"][0].resource
+    specimen = entries["Specimen"][0].resource
     observations = {o.resource.code.coding[0].code: o.resource for o in entries["Observation"]}
 
     assert report.status == "final"
     assert report.code.coding[0].display == "Complete blood count panel"
     assert report.subject.reference == f"urn:uuid:{patient.id}"
     assert {ref.reference for ref in report.result} == {f"urn:uuid:{o.id}" for o in observations.values()}
+    assert report.category[0].coding[0].code == "laboratory"
+    assert report.specimen[0].reference == f"urn:uuid:{specimen.id}"
+
+    # Specimen: built from the organizer-level <specimen>, its own
+    # collection.bodySite from the sibling Specimen Collection Procedure
+    # (fixed SNOMED code 17636008).
+    assert specimen.type.coding[0].code == "119297000"
+    assert float(specimen.collection.quantity.value) == 5
+    assert specimen.collection.quantity.unit == "mL"
+    assert specimen.note[0].text == "Drawn via venipuncture"
+    assert specimen.collection.bodySite.coding[0].code == "368225008"
 
     wbc = observations["6690-2"]
     assert float(wbc.valueQuantity.value) == 6.8
     assert wbc.valueQuantity.unit == "10*3/uL"
     assert float(wbc.referenceRange[0].low.value) == 4.5
     assert float(wbc.referenceRange[0].high.value) == 11.0
+    assert wbc.category[0].coding[0].code == "laboratory"
+    # The organizer-level Specimen propagates as the default for every
+    # result Observation that doesn't carry its own.
+    assert wbc.specimen.reference == f"urn:uuid:{specimen.id}"
 
     culture = observations["33747-0"]
     assert culture.valueString == "No growth after 48 hours"
     assert culture.valueQuantity is None
+
+    # IVL_PQ with both bounds present -> valueRange, not valueQuantity.
+    creatinine = observations["2160-0"]
+    assert creatinine.valueQuantity is None
+    assert float(creatinine.valueRange.low.value) == 0.6
+    assert float(creatinine.valueRange.high.value) == 1.3
+
+    # ED's own plain-text (narrative-reference) case maps to valueString,
+    # the same as ST.
+    color = observations["5778-6"]
+    assert color.valueString == "Yellow"
 
 
 def test_procedures_basic_fixture_maps_completed_and_negated_entries():
@@ -335,6 +395,40 @@ def test_procedures_basic_fixture_maps_completed_and_negated_entries():
     # Root-only id (no @extension) falls back to the urn:oid identifier shape.
     assert colonoscopy.identifier[0].system == "urn:ietf:rfc:3986"
     assert colonoscopy.identifier[0].value == "urn:oid:d1e2f3a4-0002-4a1a-8a1a-000000000002"
+
+    # performer -> Procedure.performer.actor -> a real PractitionerRole
+    # wrapping Practitioner + Organization + Location (from the performer's
+    # own address).
+    assert len(appendectomy.performer) == 1
+    role = _resolve_reference(bundle, appendectomy.performer[0].actor.reference)
+    assert role.get_resource_type() == "PractitionerRole"
+    practitioner = _resolve_reference(bundle, role.practitioner.reference)
+    assert practitioner.name[0].family == "Smith"
+    assert practitioner.name[0].given == ["John"]
+    assert practitioner.identifier[0].value == "333444555"
+    organization = _resolve_reference(bundle, role.organization.reference)
+    assert organization.name == "General Hospital"
+    performer_location = _resolve_reference(bundle, role.location[0].reference)
+    assert performer_location.address.city == "Portland"
+    assert role.telecom[0].value == "+1-555-555-1234"
+
+    # participant[@typeCode=LOC] -> Procedure.location - a separate
+    # Location, unrelated to the performer's own machinery.
+    sdloc = _resolve_reference(bundle, appendectomy.location.reference)
+    assert sdloc.get_resource_type() == "Location"
+    assert sdloc.name == "Community Medical Center"
+    assert sdloc.type[0].coding[0].code == "1060-3"
+    assert sdloc.address.city == "Portland"
+    assert sdloc.address.postalCode == "99123"
+
+    # A performer with only an id and no assignedPerson/name at all still
+    # materializes a Practitioner (id-only), matching a real fetched
+    # example's own shape.
+    assert len(colonoscopy.performer) == 1
+    colonoscopy_role = _resolve_reference(bundle, colonoscopy.performer[0].actor.reference)
+    colonoscopy_practitioner = _resolve_reference(bundle, colonoscopy_role.practitioner.reference)
+    assert colonoscopy_practitioner.name is None
+    assert colonoscopy_practitioner.identifier[0].value == "urn:oid:2.16.840.1.113883.19.5"
 
 
 def test_discharge_summary_maps_header_and_all_six_of_its_sections():

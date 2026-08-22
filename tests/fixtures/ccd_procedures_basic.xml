@@ -46,6 +46,45 @@
               <statusCode code="completed"/>
               <effectiveTime value="20260615120000-0500"/>
               <targetSiteCode code="66754008" codeSystem="2.16.840.1.113883.6.96" displayName="Appendix structure"/>
+              <performer typeCode="PRF">
+                <assignedEntity>
+                  <id root="2.16.840.1.113883.4.6" extension="333444555"/>
+                  <addr>
+                    <streetAddressLine>100 Main St</streetAddressLine>
+                    <city>Portland</city>
+                    <state>OR</state>
+                    <postalCode>97201</postalCode>
+                    <country>US</country>
+                  </addr>
+                  <telecom use="WP" value="tel:+1-555-555-1234"/>
+                  <assignedPerson>
+                    <name>
+                      <given>John</given>
+                      <family>Smith</family>
+                    </name>
+                  </assignedPerson>
+                  <representedOrganization>
+                    <name>General Hospital</name>
+                  </representedOrganization>
+                </assignedEntity>
+              </performer>
+              <participant typeCode="LOC">
+                <participantRole classCode="SDLOC">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.32"/>
+                  <code code="1060-3" codeSystem="2.16.840.1.113883.6.259" displayName="Medical Ward"/>
+                  <addr>
+                    <streetAddressLine>1007 Health Drive</streetAddressLine>
+                    <city>Portland</city>
+                    <state>OR</state>
+                    <postalCode>99123</postalCode>
+                    <country>US</country>
+                  </addr>
+                  <telecom use="WP" value="tel:+1-555-555-1030"/>
+                  <playingEntity classCode="PLC">
+                    <name>Community Medical Center</name>
+                  </playingEntity>
+                </participantRole>
+              </participant>
             </procedure>
           </entry>
           <entry typeCode="DRIV">
@@ -58,6 +97,11 @@
                 <low value="20260201"/>
                 <high value="20260201"/>
               </effectiveTime>
+              <performer typeCode="PRF">
+                <assignedEntity>
+                  <id root="2.16.840.1.113883.19.5"/>
+                </assignedEntity>
+              </performer>
             </procedure>
           </entry>
         </section>

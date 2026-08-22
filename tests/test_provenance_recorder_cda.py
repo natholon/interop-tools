@@ -508,17 +508,18 @@ def test_ccd_vitals_basic_crosswalk_matches_known_field_values():
         for i, e in enumerate(bundle.entry)
         if e.resource.get_resource_type() == "Observation" and e.resource.hasMember
     )
-    member_indices = [
-        i
-        for i, e in enumerate(bundle.entry)
-        if e.resource.get_resource_type() == "Observation" and not e.resource.hasMember
-    ]
-    assert len(member_indices) == 2
-    heart_rate_index, temperature_index = (
-        (member_indices[0], member_indices[1])
-        if bundle.entry[member_indices[0]].resource.code.coding[0].code == "8867-4"
-        else (member_indices[1], member_indices[0])
-    )
+
+    def _index_with_code(code: str) -> int:
+        return next(
+            i
+            for i, e in enumerate(bundle.entry)
+            if e.resource.get_resource_type() == "Observation"
+            and e.resource.code.coding
+            and e.resource.code.coding[0].code == code
+        )
+
+    heart_rate_index = _index_with_code("8867-4")
+    temperature_index = _index_with_code("8310-5")
 
     # The panel's own status/category/code are all fixed, inferred facts -
     # never read from the organizer's own /code.
@@ -553,6 +554,52 @@ def test_ccd_vitals_basic_crosswalk_matches_known_field_values():
     # same collision class Allergies'/837I's own fixes already established.
     assert temp_code_entry.source_location != hr_code_entry.source_location
     assert f"{temperature_prefix}.interpretation[0].coding[0].code" not in by_path
+
+    # Blood Pressure Panel: systolic is organizer/component[2], diastolic
+    # is component[3] - both components' own facts must point at their
+    # real original organizer-relative index, even though neither
+    # component is a standalone top-level resource anymore.
+    bp_panel_index = next(
+        i
+        for i, e in enumerate(bundle.entry)
+        if e.resource.get_resource_type() == "Observation"
+        and e.resource.code.coding
+        and e.resource.code.coding[0].code == "85354-9"
+    )
+    bp_prefix = f"Bundle.entry[{bp_panel_index}].resource"
+    bp_code_entry = by_path[f"{bp_prefix}.code.coding[0].code"]
+    assert bp_code_entry.value == "85354-9"
+    assert bp_code_entry.derivation == "inferred"
+    systolic_component_entry = by_path[f"{bp_prefix}.component[0].code.coding[0].code"]
+    assert systolic_component_entry.value == "8480-6"
+    assert systolic_component_entry.source_location == xpath_location("organizer", "component[2]", "observation", "code", "@code")
+    diastolic_component_entry = by_path[f"{bp_prefix}.component[1].code.coding[0].code"]
+    assert diastolic_component_entry.value == "8462-4"
+    assert diastolic_component_entry.source_location == xpath_location(
+        "organizer", "component[3]", "observation", "code", "@code"
+    )
+    assert f"{bp_prefix}.valueQuantity.value" not in by_path
+
+    # Pulse Oximetry Panel: the O2 saturation reading (organizer/
+    # component[4]) becomes the panel itself (with its own valueQuantity,
+    # unlike the BP Panel), and its one present optional sibling (flow
+    # rate, component[5]) becomes .component[0].
+    pulse_ox_panel_index = next(
+        i
+        for i, e in enumerate(bundle.entry)
+        if e.resource.get_resource_type() == "Observation"
+        and e.resource.code.coding
+        and {c.code for c in e.resource.code.coding} == {"59408-5", "2708-6"}
+    )
+    pulse_ox_prefix = f"Bundle.entry[{pulse_ox_panel_index}].resource"
+    pulse_ox_value_entry = by_path[f"{pulse_ox_prefix}.valueQuantity.value"]
+    assert pulse_ox_value_entry.value == "97"
+    assert pulse_ox_value_entry.source_location == xpath_location("organizer", "component[4]", "observation", "value", "@value")
+    flow_rate_component_entry = by_path[f"{pulse_ox_prefix}.component[0].code.coding[0].code"]
+    assert flow_rate_component_entry.value == "3151-8"
+    assert flow_rate_component_entry.source_location == xpath_location(
+        "organizer", "component[5]", "observation", "code", "@code"
+    )
 
 
 def test_ccd_results_basic_crosswalk_matches_known_field_values():
@@ -607,6 +654,50 @@ def test_ccd_results_basic_crosswalk_matches_known_field_values():
     st_code_entry = by_path[f"{st_prefix}.code.coding[0].code"]
     assert pq_code_entry.source_location != st_code_entry.source_location
 
+    # category is an unconditional, disclosed "laboratory" default - no
+    # live LOINC CLASSTYPE lookup exists anywhere in this app.
+    report_category_entry = by_path[f"{report_prefix}.category[0].coding[0].code"]
+    assert report_category_entry.value == "laboratory"
+    assert report_category_entry.derivation == "inferred"
+    pq_category_entry = by_path[f"{pq_prefix}.category[0].coding[0].code"]
+    assert pq_category_entry.value == "laboratory"
+    assert pq_category_entry.derivation == "inferred"
+
+    # specimen: the organizer-level <specimen> builds a real Specimen
+    # resource, referenced from both DiagnosticReport.specimen and the
+    # organizer-level default propagated onto every result Observation.
+    specimen_index = next(i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Specimen")
+    specimen_prefix = f"Bundle.entry[{specimen_index}].resource"
+    specimen_type_entry = by_path[f"{specimen_prefix}.type.coding[0].code"]
+    assert specimen_type_entry.value == "119297000"
+    specimen_quantity_entry = by_path[f"{specimen_prefix}.collection.quantity.value"]
+    assert specimen_quantity_entry.value == "5"
+    specimen_note_entry = by_path[f"{specimen_prefix}.note[0].text"]
+    assert specimen_note_entry.value == "Drawn via venipuncture"
+    # collection.bodySite comes from the sibling Specimen Collection
+    # Procedure (fixed SNOMED code 17636008), not the specimen itself.
+    specimen_body_site_entry = by_path[f"{specimen_prefix}.collection.bodySite.coding[0].code"]
+    assert specimen_body_site_entry.value == "368225008"
+
+    # IVL_PQ with both bounds present -> valueRange, not valueQuantity.
+    creatinine_index = next(
+        i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Observation" and e.resource.code.coding[0].code == "2160-0"
+    )
+    creatinine_prefix = f"Bundle.entry[{creatinine_index}].resource"
+    range_low_value_entry = by_path[f"{creatinine_prefix}.valueRange.low.value"]
+    assert range_low_value_entry.value == "0.6"
+    range_high_value_entry = by_path[f"{creatinine_prefix}.valueRange.high.value"]
+    assert range_high_value_entry.value == "1.3"
+    assert f"{creatinine_prefix}.valueQuantity.value" not in by_path
+
+    # ED's own plain-text case maps to valueString, the same field ST does.
+    color_index = next(
+        i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Observation" and e.resource.code.coding[0].code == "5778-6"
+    )
+    color_prefix = f"Bundle.entry[{color_index}].resource"
+    color_entry = by_path[f"{color_prefix}.valueString"]
+    assert color_entry.value == "Yellow"
+
 
 def test_ccd_procedures_basic_crosswalk_matches_known_field_values():
     # ccd_procedures_basic.xml's own two entries exercise both
@@ -659,6 +750,50 @@ def test_ccd_procedures_basic_crosswalk_matches_known_field_values():
     end_entry = by_path[f"{negated_prefix}.performedPeriod.end"]
     assert end_entry.value == "2026-02-01"
     assert f"{negated_prefix}.performedDateTime" not in by_path
+
+    # performer[0] -> PractitionerRole -> Practitioner/Organization/
+    # Location, all real, independently-recorded facts.
+    role_index = next(i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "PractitionerRole")
+    role_prefix = f"Bundle.entry[{role_index}].resource"
+    role = bundle.entry[role_index].resource
+    practitioner_index = next(
+        i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Practitioner" and f"urn:uuid:{e.resource.id}" == role.practitioner.reference
+    )
+    practitioner_prefix = f"Bundle.entry[{practitioner_index}].resource"
+    practitioner_family_entry = by_path[f"{practitioner_prefix}.name[0].family"]
+    assert practitioner_family_entry.value == "Smith"
+    assert practitioner_family_entry.source_location == xpath_location(
+        "procedure", "performer[0]", "assignedEntity", "assignedPerson", "name", "family"
+    )
+    practitioner_given_entry = by_path[f"{practitioner_prefix}.name[0].given[0]"]
+    assert practitioner_given_entry.value == "John"
+    practitioner_identifier_entry = by_path[f"{practitioner_prefix}.identifier[0].value"]
+    assert practitioner_identifier_entry.value == "333444555"
+    role_identifier_entry = by_path[f"{role_prefix}.identifier[0].value"]
+    assert role_identifier_entry.value == "333444555"
+
+    organization_index = next(i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Organization")
+    organization_prefix = f"Bundle.entry[{organization_index}].resource"
+    organization_name_entry = by_path[f"{organization_prefix}.name"]
+    assert organization_name_entry.value == "General Hospital"
+
+    location_index = next(i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Location" and e.resource.name is None)
+    location_prefix = f"Bundle.entry[{location_index}].resource"
+    location_city_entry = by_path[f"{location_prefix}.address.city"]
+    assert location_city_entry.value == "Portland"
+    role_telecom_entry = by_path[f"{role_prefix}.telecom[0].value"]
+    assert role_telecom_entry.value == "+1-555-555-1234"
+
+    # participant[@typeCode=LOC] -> a separate, name-carrying Location -
+    # Procedure.location, unrelated to the performer's own PractitionerRole.
+    sdloc_index = next(
+        i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Location" and e.resource.name == "Community Medical Center"
+    )
+    sdloc_prefix = f"Bundle.entry[{sdloc_index}].resource"
+    sdloc_name_entry = by_path[f"{sdloc_prefix}.name"]
+    assert sdloc_name_entry.value == "Community Medical Center"
+    sdloc_type_entry = by_path[f"{sdloc_prefix}.type[0].coding[0].code"]
+    assert sdloc_type_entry.value == "1060-3"
 
 
 def test_discharge_medications_reuses_medications_own_recorder_instrumentation():

@@ -86,6 +86,7 @@ from app.cda.procedures import (
     SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as PROCEDURES_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL,
 )
 from app.cda.procedures import STATUS_MAP as PROCEDURE_STATUS_MAP
+from app.cda.procedures import SERVICE_DELIVERY_LOCATION_TEMPLATE_ID
 from app.cda.results import ORGANIZER_TEMPLATE_ID as RESULT_ORGANIZER_TEMPLATE_ID
 from app.cda.results import OBSERVATION_TEMPLATE_ID as RESULT_OBSERVATION_TEMPLATE_ID
 from app.cda.results import SECTION_TEMPLATE_ID as RESULTS_SECTION_TEMPLATE_ID
@@ -229,6 +230,32 @@ _BODY_SITE_CODES = [
     ("51185008", "Thoracic structure"),
     ("53120007", "Upper limb structure"),
 ]
+
+# Blood Pressure Panel / Pulse Oximetry Panel codes (LOINC) - direct fuzz
+# coverage of app/cda/vitals.py's own grouping detection, generated
+# deliberately (not left to chance via _VITAL_SIGN_CODES' own coincidental
+# overlap with these same codes).
+_BP_SYSTOLIC = ("8480-6", "Systolic blood pressure", "mm[Hg]", 95.0, 160.0)
+_BP_DIASTOLIC = ("8462-4", "Diastolic blood pressure", "mm[Hg]", 55.0, 100.0)
+_PULSE_OX_PRIMARY = ("59408-5", "Oxygen saturation", "%", 90.0, 100.0)
+_PULSE_OX_CONCENTRATION = ("3150-0", "Inhaled oxygen concentration", "%", 21.0, 100.0)
+_PULSE_OX_FLOW_RATE = ("3151-8", "Inhaled oxygen flow rate", "L/min", 1.0, 15.0)
+
+# Specimen codes (SNOMED CT) - direct fuzz coverage of app/cda/results.py's
+# own specimen attachment (organizer-level and observation-level).
+_SPECIMEN_CODES = [
+    ("119297000", "Blood specimen"),
+    ("122575003", "Urine specimen"),
+    ("258500001", "Nasopharyngeal swab"),
+]
+
+# Performer/participant pools - direct fuzz coverage of app/cda/
+# procedures.py's own performer (Practitioner+PractitionerRole+
+# Organization+Location) and participant (Service Delivery Location)
+# handling.
+_PERFORMER_NAMES = [("John", "Smith"), ("Maria", "Garcia"), ("Wei", "Chen")]
+_ORGANIZATION_NAMES = ["General Hospital", "Valley Health Clinic", "Riverside Surgical Center"]
+_SERVICE_DELIVERY_LOCATION_NAMES = ["Medical Ward", "Same Day Surgery Unit", "Outpatient Procedure Suite"]
 
 
 def _random_uuid_like(rng: random.Random) -> str:
@@ -688,8 +715,7 @@ def _random_immunizations_section(rng: random.Random) -> str | None:
     )
 
 
-def _random_vital_sign_observation(rng: random.Random, start) -> str:
-    code, display, unit, (low, high) = rng.choice(_VITAL_SIGN_CODES)
+def _random_vital_sign_observation_from_code(rng: random.Random, start, code: str, display: str, unit: str, low: float, high: float) -> str:
     obs_id = _random_uuid_like(rng)
     value = round(rng.uniform(low, high), 1)
     interpretation = ""
@@ -708,11 +734,36 @@ def _random_vital_sign_observation(rng: random.Random, start) -> str:
     )
 
 
+def _random_vital_sign_observation(rng: random.Random, start) -> str:
+    code, display, unit, (low, high) = rng.choice(_VITAL_SIGN_CODES)
+    return _random_vital_sign_observation_from_code(rng, start, code, display, unit, low, high)
+
+
 def _random_vital_signs_organizer(rng: random.Random) -> str:
     org_id = _random_uuid_like(rng)
     start, _ = random_time_range(rng, min_days=-60, max_days=5)
     count = rng.randint(1, 4)
     components = "".join(_random_vital_sign_observation(rng, start) for _ in range(count))
+
+    # Direct fuzz coverage of app/cda/vitals.py's own Blood Pressure Panel
+    # grouping - both sides present ~40% of the time, with a further ~10%
+    # chance of dropping the diastolic side to exercise the "incomplete
+    # pair falls back to plain" branch.
+    if maybe(rng, 0.4):
+        components += _random_vital_sign_observation_from_code(rng, start, *_BP_SYSTOLIC)
+        if maybe(rng, 0.9):
+            components += _random_vital_sign_observation_from_code(rng, start, *_BP_DIASTOLIC)
+
+    # Direct fuzz coverage of the Pulse Oximetry Panel grouping - the
+    # primary O2 saturation reading ~30% of the time, each optional
+    # sibling independently present about half the time.
+    if maybe(rng, 0.3):
+        components += _random_vital_sign_observation_from_code(rng, start, *_PULSE_OX_PRIMARY)
+        if maybe(rng, 0.5):
+            components += _random_vital_sign_observation_from_code(rng, start, *_PULSE_OX_CONCENTRATION)
+        if maybe(rng, 0.5):
+            components += _random_vital_sign_observation_from_code(rng, start, *_PULSE_OX_FLOW_RATE)
+
     return (
         f'<entry typeCode="DRIV"><organizer classCode="CLUSTER" moodCode="EVN">'
         f'<templateId root="{VITAL_SIGNS_ORGANIZER_TEMPLATE_ID}"/><id root="{org_id}"/>'
@@ -746,6 +797,42 @@ def _random_vital_signs_section(rng: random.Random) -> str | None:
     )
 
 
+def _random_specimen(rng: random.Random) -> str:
+    """A <specimen> element - direct fuzz coverage of app/cda/results.py's
+    own _build_specimen, at whichever attachment level the caller wires
+    this into (organizer-level default vs. an individual observation's own
+    override - see _random_result_organizer/_random_result_observation)."""
+    spec_id = _random_uuid_like(rng)
+    code, display = rng.choice(_SPECIMEN_CODES)
+    return (
+        '<specimen typeCode="SPC"><specimenRole classCode="SPEC">'
+        f'<id root="{spec_id}"/>'
+        '<specimenPlayingEntity classCode="ENT">'
+        f'<code code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
+        f'<quantity value="{rng.randint(1, 20)}" unit="mL"/>'
+        "</specimenPlayingEntity></specimenRole></specimen>"
+    )
+
+
+def _random_result_value(rng: random.Random, value: float, unit: str) -> str:
+    """~75% the existing plain PQ shape, ~15% IVL_PQ (split evenly across
+    low-only/high-only/both), ~10% ED-as-plain-text - direct fuzz coverage
+    of app/cda/results.py's own IVL_PQ/ED value-type branches."""
+    roll = rng.random()
+    if roll < 0.75:
+        return f'<value xsi:type="PQ" value="{value}" unit="{unit}"/>'
+    if roll < 0.90:
+        low = round(value * 0.8, 1)
+        high = round(value * 1.2, 1)
+        shape = rng.choice(["low", "high", "both"])
+        if shape == "low":
+            return f'<value xsi:type="IVL_PQ"><low value="{low}" unit="{unit}"/></value>'
+        if shape == "high":
+            return f'<value xsi:type="IVL_PQ"><high value="{high}" unit="{unit}"/></value>'
+        return f'<value xsi:type="IVL_PQ"><low value="{low}" unit="{unit}"/><high value="{high}" unit="{unit}"/></value>'
+    return f'<value xsi:type="ED">{rng.choice(["Clear", "Cloudy", "Yellow", "Amber"])}</value>'
+
+
 def _random_result_observation(rng: random.Random, start) -> str:
     code, display, unit, (low, high) = rng.choice(_RESULT_OBSERVATION_CODES)
     obs_id = _random_uuid_like(rng)
@@ -771,13 +858,18 @@ def _random_result_observation(rng: random.Random, start) -> str:
             f'<low value="{low_bound}" unit="{unit}"/><high value="{high_bound}" unit="{unit}"/>'
             "</value></observationRange></referenceRange>"
         )
+    # ~15% chance this individual observation carries its own <specimen>,
+    # overriding the organizer-level default for just this one result -
+    # direct fuzz coverage of that attachment-level override.
+    specimen = _random_specimen(rng) if maybe(rng, 0.15) else ""
+    value_element = _random_result_value(rng, value, unit)
     return (
         f'<component><observation classCode="OBS" moodCode="EVN">'
         f'<templateId root="{RESULT_OBSERVATION_TEMPLATE_ID}"/><id root="{obs_id}"/>'
         f'<code code="{code}" codeSystem="2.16.840.1.113883.6.1" displayName="{display}"/>'
         f'<statusCode code="{status_code}"/>'
         f'<effectiveTime value="{format_hl7_datetime(start)}"/>'
-        f'<value xsi:type="PQ" value="{value}" unit="{unit}"/>{interpretation}{reference_range}'
+        f"{value_element}{interpretation}{reference_range}{specimen}"
         "</observation></component>"
     )
 
@@ -789,13 +881,17 @@ def _random_result_organizer(rng: random.Random) -> str:
     status_code = rng.choice(list(RESULT_STATUS_MAP)) if maybe(rng, 0.85) else "nullified"
     count = rng.randint(1, 3)
     components = "".join(_random_result_observation(rng, start) for _ in range(count))
+    # ~35% chance the organizer itself carries a <specimen>, becoming the
+    # default for every result observation that doesn't have its own -
+    # direct fuzz coverage of that attachment level.
+    specimen = _random_specimen(rng) if maybe(rng, 0.35) else ""
     return (
         f'<entry typeCode="DRIV"><organizer classCode="BATTERY" moodCode="EVN">'
         f'<templateId root="{RESULT_ORGANIZER_TEMPLATE_ID}"/><id root="{org_id}"/>'
         f'<code code="{panel_code}" codeSystem="2.16.840.1.113883.6.1" displayName="{panel_display}"/>'
         f'<statusCode code="{status_code}"/>'
         f'<effectiveTime value="{format_hl7_datetime(start)}"/>'
-        f"{components}"
+        f"{specimen}{components}"
         "</organizer></entry>"
     )
 
@@ -813,6 +909,54 @@ def _random_results_section(rng: random.Random) -> str | None:
         f'<component><section><templateId root="{section_template_id}"/>'
         '<code code="30954-2" codeSystem="2.16.840.1.113883.6.1" displayName="Relevant diagnostic tests and/or laboratory data"/>'
         f"<title>Results</title>{entries}</section></component>"
+    )
+
+
+def _random_performer(rng: random.Random) -> str:
+    """A <performer> element - direct fuzz coverage of app/cda/
+    procedures.py's own Practitioner+PractitionerRole+Organization+
+    Location construction."""
+    perf_id = _random_uuid_like(rng)
+    # ~70% a real assignedPerson/name, else id-only - direct fuzz coverage
+    # of _build_practitioner_from_assigned_entity's own "id or name, skip
+    # only when neither resolves" presence rule (a real fetched example
+    # showed a performer with only an id and no name at all).
+    person = ""
+    if maybe(rng, 0.7):
+        given, family = rng.choice(_PERFORMER_NAMES)
+        person = f"<assignedPerson><name><given>{given}</given><family>{family}</family></name></assignedPerson>"
+    organization = ""
+    if maybe(rng, 0.6):
+        org_name = rng.choice(_ORGANIZATION_NAMES)
+        organization = f"<representedOrganization><name>{org_name}</name></representedOrganization>"
+    addr = ""
+    if maybe(rng, 0.4):
+        addr = (
+            "<addr><streetAddressLine>100 Main St</streetAddressLine><city>Portland</city>"
+            '<state>OR</state><postalCode>97201</postalCode><country>US</country></addr>'
+        )
+    telecom = '<telecom use="WP" value="tel:+1-555-555-1234"/>' if maybe(rng, 0.5) else ""
+    return (
+        '<performer typeCode="PRF"><assignedEntity>'
+        f'<id root="2.16.840.1.113883.4.6" extension="{perf_id[:9]}"/>'
+        f"{addr}{telecom}{person}{organization}"
+        "</assignedEntity></performer>"
+    )
+
+
+def _random_participant_location(rng: random.Random) -> str:
+    """A <participant typeCode="LOC"> element - direct fuzz coverage of
+    app/cda/procedures.py's own Service Delivery Location handling."""
+    location_name = rng.choice(_SERVICE_DELIVERY_LOCATION_NAMES)
+    return (
+        '<participant typeCode="LOC"><participantRole classCode="SDLOC">'
+        f'<templateId root="{SERVICE_DELIVERY_LOCATION_TEMPLATE_ID}"/>'
+        '<code code="1060-3" codeSystem="2.16.840.1.113883.6.259" displayName="Medical Ward"/>'
+        "<addr><streetAddressLine>1007 Health Drive</streetAddressLine><city>Portland</city>"
+        '<state>OR</state><postalCode>99123</postalCode><country>US</country></addr>'
+        '<telecom use="WP" value="tel:+1-555-555-1030"/>'
+        f'<playingEntity classCode="PLC"><name>{location_name}</name></playingEntity>'
+        "</participantRole></participant>"
     )
 
 
@@ -844,12 +988,18 @@ def _random_procedure_entry(rng: random.Random) -> str:
         site_code, site_display = rng.choice(_BODY_SITE_CODES)
         body_site = f'<targetSiteCode code="{site_code}" codeSystem="2.16.840.1.113883.6.96" displayName="{site_display}"/>'
 
+    # ~50% chance of a <performer>, ~40% chance of a <participant
+    # typeCode="LOC"> - direct fuzz coverage of app/cda/procedures.py's
+    # own performer/participant handling.
+    performer = _random_performer(rng) if maybe(rng, 0.5) else ""
+    participant = _random_participant_location(rng) if maybe(rng, 0.4) else ""
+
     return (
         f'<entry typeCode="DRIV"><procedure classCode="PROC" moodCode="EVN"{negation_attr}>'
         f'<templateId root="{PROCEDURE_TEMPLATE_ID}"/><id root="{proc_id}"/>'
         f'<code code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
         f'<statusCode code="{status_code}"/>'
-        f"{effective_time}{body_site}"
+        f"{effective_time}{body_site}{performer}{participant}"
         "</procedure></entry>"
     )
 
