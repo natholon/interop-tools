@@ -299,19 +299,13 @@ def build_service_type_category(
     return CodeableConcept(coding=[Coding(system=SERVICE_TYPE_CODE_SYSTEM, code=code)])
 
 
-# HI composite qualifier (component 1) -> a real FHIR-canonical system URI.
-# Public - both prior_auth.py (278's UM/HI Patient Event loop) and
-# claim_837p.py (2300's HI diagnosis segment) read the identical X12 code
-# list 1270 diagnosis-type-code shape, so this table and its parsing loop
-# are shared here rather than duplicated. Verified directly (not assumed):
-# "ABK"/"ABF" are the 5010 ICD-10-CM principal/other-diagnosis qualifiers,
-# "BK"/"BF" are the legacy ICD-9-CM ones - an earlier version of this table
-# (introduced in Phase 3, only in prior_auth.py) mapped "BF" itself to
-# ICD-10-CM, which is wrong: "BF" is ICD-9-CM, not ICD-10-CM ("ABF" is the
-# ICD-10-CM one). Caught and fixed while building Phase 5, which needed the
-# identical table a second time and re-verified it from scratch rather than
-# copying the Phase 3 table as-is - see tests/test_prior_auth_mapping.py::
-# test_bf_qualifier_resolves_to_icd9_not_icd10 for the regression proof.
+# HI composite qualifier (component 1) -> a FHIR-canonical system URI,
+# from X12 code list 1270. Shared by 278 and the 837 family.
+#
+# **The two pairs are easy to transpose**: "ABK"/"ABF" are the 5010
+# ICD-10-CM principal/other qualifiers, "BK"/"BF" the legacy ICD-9-CM
+# ones - so "BF" is ICD-9-CM, not ICD-10-CM. An earlier table had exactly
+# that wrong; see test_bf_qualifier_resolves_to_icd9_not_icd10.
 HI_QUALIFIER_SYSTEM = {
     "ABK": "http://hl7.org/fhir/sid/icd-10-cm",  # ICD-10-CM Principal Diagnosis
     "ABF": "http://hl7.org/fhir/sid/icd-10-cm",  # ICD-10-CM Other Diagnosis
@@ -417,13 +411,11 @@ def iter_diagnosis_hi_segments(claim_loop_members: list[Segment], delimiters: De
     return diagnosis_segments
 
 
-# CMS's own Place of Service code set - a real, verified FHIR-canonical
-# CodeSystem (confirmed by direct fetch), unlike most of this app's
-# disclosed local-system fallbacks for X12 code lists with no official FHIR
-# home. Public - promoted from claim_837p.py once claim_837d.py became a
-# second real consumer: CLM05-1 (Facility Code Value) uses this identical
-# vocabulary for both professional and dental claims (confirmed by direct
-# fetch of SV3-03's own field description, "Place of Service Codes for
+# CMS's Place of Service code set - a real FHIR-canonical CodeSystem,
+# unlike most of this app's local fallbacks for X12 code lists with no
+# official FHIR home. Shared by 837P and 837D: CLM05-1 uses the identical
+# vocabulary for professional and dental claims (per SV3-03's own field
+# description, "Place of Service Codes for
 # Professional or Dental Services") - a genuine, confirmed structural match,
 # not a coincidence the way HL03 numeric codes have sometimes only
 # *appeared* to match across other EDI families. 837I's own CLM05-1 uses a

@@ -103,19 +103,13 @@ STC_CATEGORY_SYSTEM = "urn:interop-tools:x12-claim-status-category-code"
 STC_STATUS_SYSTEM = "urn:interop-tools:x12-claim-status-code"
 TRACE_NUMBER_SYSTEM = "urn:interop-tools:x12-claim-status-trace-number"
 
-# Claim Status Category Code (STC01-1) -> Task.status, keyed by the
-# category code's own leading letter (A=Acknowledgement, P=Pending,
-# F=Finalized, R=Request for additional information, E=Response Error,
-# D=Data Search Unsuccessful - verified against x12.org's own published
-# Claim Status Category Codes page: x12.org/codes/claim-status-category-codes).
-# A prefix-level mapping, not a per-exact-code crosswalk - X12's own list
-# has finer distinctions within each prefix (e.g. A1 Received vs. A3
-# Rejected) that FHIR's fixed task-status value set has no equivalent
-# granularity for without guessing at a fuller crosswalk; unrecognized/
-# absent falls back to "completed", the most common real-world outcome,
-# matching this project's established "default to the most common real
-# value when no unknown option exists" precedent (Medications' moodCode,
-# Immunization.status).
+# Claim Status Category Code (STC01-1) -> Task.status, keyed by the leading
+# letter: A=Acknowledgement, P=Pending, F=Finalized, R=Request for more
+# info, E=Response Error, D=Data Search Unsuccessful (x12.org/codes/
+# claim-status-category-codes). Prefix-level, not per-code: X12 draws finer
+# distinctions within a prefix (A1 Received vs A3 Rejected) that
+# task-status has no room for. Unrecognized or absent falls back to
+# "completed", the most common real outcome.
 STC_CATEGORY_PREFIX_TO_TASK_STATUS = {
     "A": "received",
     "P": "in-progress",

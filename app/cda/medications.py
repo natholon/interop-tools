@@ -43,32 +43,22 @@ STATUS_MAP = {
 }
 _DEFAULT_STATUS = "unknown"
 
-# CF_MedActivityMood ConceptMap - moodCode -> MedicationRequest.intent. INT
-# (intended, not yet given) -> "order"; EVN (already administered) ->
-# "plan" - the IG's own mapping, despite reading backwards at first glance;
-# both rows are marked "maps loosely to" since CDA mood codes are broader
-# than FHIR intent codes. intent is FHIR-required (confirmed by
-# constructing MedicationRequest directly - fhir.resources enforces this
-# even though it doesn't show up via model_fields introspection, unlike
-# Appointment's non-enforced status), so an unrecognized/absent moodCode
-# falls back to "order" - the more common real-world case - rather than
-# leaving a required field unset.
+# CF_MedActivityMood - moodCode -> MedicationRequest.intent. INT (intended)
+# -> "order", EVN (administered) -> "plan": the IG's own mapping, despite
+# reading backwards, both rows marked "maps loosely to" since CDA moods are
+# broader than FHIR intents. intent is required at construction (enforced
+# by fhir.resources even though model_fields does not flag it), so an
+# unrecognized moodCode falls back to "order" rather than leaving it unset.
 _MOOD_TO_INTENT = {"INT": "order", "EVN": "plan"}
 _DEFAULT_INTENT = "order"
 
-# The entry element's own relative path - accurate for the plain Medications
-# section (entry/substanceAdministration directly, no wrapping Act, this
-# function's own primary/first consumer). discharge_medications.py's own
-# reuse wraps the identical substanceAdministration one level deeper (inside
-# act[templateId=...4.35]/entryRelationship[SUBJ]/) - a real, disclosed
-# simplification, not a bug: unlike Problems' own reused build_condition
-# (whose two callers both genuinely have an outer <act>, just different
-# templateIds, so "act/..." is accurate for both), Medications' own plain
-# section has no outer act at all, so no single base prefix is literally
-# accurate for both callers. This module deliberately doesn't thread a
-# third parameter through the whole dosage-building chain just to
-# distinguish the two - the recorded location is still close enough to be
-# useful, and correct for the dominant, primary case.
+# The entry's relative path, accurate for the plain Medications section
+# (entry/substanceAdministration, no wrapping Act). Discharge Medications
+# nests the identical element one level deeper, so no single prefix is
+# literally right for both callers - unlike Problems, where both callers do
+# have an outer <act> and only its templateId differs. Threading a third
+# parameter through the whole dosage chain to distinguish them is not worth
+# it; the recorded location stays correct for the primary case.
 _ENTRY_BASE = "substanceAdministration"
 
 

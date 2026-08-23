@@ -91,17 +91,11 @@ _ENTRY_BASE = "procedure"
 # Public (not module-private) - reused by app/cda/generator.py and
 # app/cda/validation.py, same pattern as every other section module.
 SECTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.2.7.1"
-# The "entries optional" sibling section (no trailing ".1") - a real,
-# evidenced gap, not a defensive guess: a real official HL7 History and
-# Physical example (HL7/C-CDA-Examples, Documents/History and Physical)
-# uses ONLY this templateId for its own Procedures section (no paired
-# ".2.7.1" declaration the way its Vital Signs/Results sections both
-# carry), which app/cda/vitals.py's/app/cda/results.py's original,
-# single-templateId registration would have silently skipped entirely -
-# the exact same class of gap this app's Allergies section already shipped
-# once (see app/cda/allergies.py's own SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
-# docstring) and the C-CDA on FHIR IG's own template list confirms as a
-# real, distinct templateId, not a typo in that one example.
+# The "entries optional" sibling section (no trailing ".1"). A real HL7
+# History and Physical example uses ONLY this templateId for its Procedures
+# section, with no paired ".2.7.1" - so a single-templateId registration
+# skips the section entirely. The IG's template list confirms it as a
+# distinct templateId, not a typo in that one document.
 SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL = "2.16.840.1.113883.10.20.22.2.7"
 PROCEDURE_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.14"
 # Service Delivery Location - the generic CDA participantRole template

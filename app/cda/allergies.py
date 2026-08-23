@@ -44,17 +44,13 @@ SEVERITY_OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.8"
 
 _CLINICAL_STATUS_SYSTEM = "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical"
 
-# CF_AllergyIntoleranceType / CF_AllergyIntoleranceCategory ConceptMaps
-# (build.fhir.org/ig/HL7/ccda-on-fhir) - both keyed off the SAME source
-# value (the Allergy-Intolerance Observation's own <value>), but target
-# genuinely different vocabularies, so two separate dicts rather than one
-# merged table. The "propensity to adverse reaction" SNOMED codes
-# (418038007 always, 419199007/420134006 for category only) have no row in
-# the published ConceptMaps - disclosed, not guessed at. Public (not
-# module-private) - app/transform/cda_ccd.py became a real reverse-
-# direction consumer, searching both tables for a source code whose own
-# (type, category) pair matches an AllergyIntolerance's values, rather
-# than maintaining a second, independently-drifting copy.
+# CF_AllergyIntoleranceType / CF_AllergyIntoleranceCategory - both keyed
+# off the SAME source value (the Allergy-Intolerance Observation's
+# <value>) but targeting different vocabularies, hence two dicts rather
+# than one merged table. The "propensity to adverse reaction" SNOMED codes
+# (418038007, and 419199007/420134006 for category only) have no row in
+# either published ConceptMap. Public: the reverse direction searches both
+# for a source code whose (type, category) pair matches.
 TYPE_MAP = {
     "235719002": "intolerance",  # Intolerance to food
     "414285001": "allergy",  # Allergy to food

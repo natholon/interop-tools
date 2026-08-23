@@ -51,19 +51,14 @@ from app.provenance.models import CrosswalkReport, ProvenanceEntry
 _PALETTE_SIZE = 10
 
 _ENTRY_INDEX_RE = re.compile(r"^Bundle\.entry\[(\d+)\]")
-# Every FHIR array field this app has ever recorded facts against where a
-# *single* location string is shared identically across every repetition,
-# with no other disambiguator baked into the location string itself (see
-# _item_index's own docstring for the full reasoning, and why other
-# repeating arrays - reaction[N], referenceRange[N], diagnosis[N] - are
-# deliberately NOT in this set). `detail[N]` (PaymentReconciliation.
-# detail[], one per 835 CLP claim) was found missing here via the exact
-# same real-fixture bug edi_837p_basic.x12's own NM1 occurrence-resolution
-# bug was found through - reproduced directly against edi_835_multi_claim
-# .x12, whose own second claim's facts (CLP-1/CLP-2/CLP-4) were silently
-# resolving to the *first* claim's physical CLP segment instead, since both
-# claims live on the one PaymentReconciliation resource with no item[]-
-# style bracket in their shared "CLP-1"/"CLP-2"/"CLP-4" location strings.
+# Array fields where one location string is shared identically across every
+# repetition, with no other disambiguator in the string itself - so the
+# bracket index is the only thing that can tell two occurrences apart. See
+# _item_index for why reaction[N]/referenceRange[N]/diagnosis[N] are
+# deliberately NOT here. `detail[N]` is PaymentReconciliation.detail[], one
+# per 835 CLP claim: all of them live on one resource and share "CLP-1"/
+# "CLP-2"/"CLP-4", so without this the second claim resolved to the first
+# claim's segment.
 _REPEATING_FIELD_INDEX_RE = re.compile(r"\.(?:item|detail)\[(\d+)\]")
 
 
