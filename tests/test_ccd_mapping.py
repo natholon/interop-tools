@@ -259,8 +259,9 @@ def test_immunizations_basic_fixture_maps_administered_and_refused_skips_planned
     patient = entries["Patient"][0].resource
     immunizations = {e.resource.vaccineCode.coding[0].display: e.resource for e in entries["Immunization"]}
 
-    # Only the two EVN-mood entries convert - the INT-mood (planned Tdap)
-    # entry is out of scope for this slice and must be silently skipped.
+    # The two EVN-mood entries become Immunizations; the INT-mood
+    # (planned Tdap) entry becomes a MedicationRequest instead, per the
+    # IG's own moodCode split - see the MedicationRequest assertions below.
     assert len(immunizations) == 2
     for immunization in immunizations.values():
         assert immunization.patient.reference == f"urn:uuid:{patient.id}"
@@ -272,6 +273,20 @@ def test_immunizations_basic_fixture_maps_administered_and_refused_skips_planned
     assert administered.route.coding[0].display == "INTRAMUSCULAR"
     assert float(administered.doseQuantity.value) == 0.5
     assert administered.doseQuantity.unit == "mL"
+
+    # The INT-mood entry: MedicationRequest, not Immunization. Status maps
+    # through CF_MedStatus ("active" -> "active"), intent is fixed to
+    # "order" by the moodCode, and route/doseQuantity/repeatNumber land
+    # under dosageInstruction rather than on the resource itself.
+    planned = entries["MedicationRequest"][0].resource
+    assert planned.status == "active"
+    assert planned.intent == "order"
+    assert planned.medicationCodeableConcept.coding[0].display == "Tdap"
+    assert planned.subject.reference == f"urn:uuid:{patient.id}"
+    dosage = planned.dosageInstruction[0]
+    assert dosage.route.coding[0].display == "INTRAMUSCULAR"
+    assert float(dosage.doseAndRate[0].doseQuantity.value) == 0.5
+    assert dosage.timing.repeat.count == 2
 
     refused = immunizations["zoster vaccine, live"]
     assert refused.status == "not-done"

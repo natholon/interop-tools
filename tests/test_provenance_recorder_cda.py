@@ -492,9 +492,11 @@ def test_ccd_immunizations_basic_crosswalk_matches_known_field_values():
     assert occurrence_string_entry.derivation == "inferred"
     assert occurrence_string_entry.source_location is None
 
-    # The INT-mood planned entry never produces an Immunization at all -
-    # only two vaccineCode facts should exist anywhere in the crosswalk.
+    # The INT-mood planned entry produces a MedicationRequest, not an
+    # Immunization, so only the two EVN entries contribute a vaccineCode -
+    # the planned one records medicationCodeableConcept instead.
     assert sum(1 for e in entries if "vaccineCode.coding[0].code" in e.fhir_path) == 2
+    assert sum(1 for e in entries if "medicationCodeableConcept.coding[0].code" in e.fhir_path) == 1
 
 
 def test_ccd_vitals_basic_crosswalk_matches_known_field_values():

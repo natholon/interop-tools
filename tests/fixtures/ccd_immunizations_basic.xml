@@ -77,6 +77,9 @@
               <templateId root="2.16.840.1.113883.10.20.22.4.52"/>
               <id root="e6f1ba43-0003-4b9b-9f12-000000000003"/>
               <statusCode code="active"/>
+              <repeatNumber value="2"/>
+              <routeCode code="C28161" codeSystem="2.16.840.1.113883.3.26.1.1" displayName="INTRAMUSCULAR"/>
+              <doseQuantity value="0.5" unit="mL"/>
               <consumable>
                 <manufacturedProduct classCode="MANU">
                   <templateId root="2.16.840.1.113883.10.20.22.4.54"/>

@@ -51,6 +51,7 @@ from app.cda.history_and_physical import HISTORY_AND_PHYSICAL_TEMPLATE_ID
 from app.cda.hospital_discharge_diagnosis import HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID
 from app.cda.hospital_discharge_diagnosis import SECTION_TEMPLATE_ID as HOSPITAL_DISCHARGE_DIAGNOSIS_SECTION_TEMPLATE_ID
 from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID
+from app.cda.medications import STATUS_MAP as MEDICATION_STATUS_MAP
 from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
 from app.cda.immunizations import STATUS_MAP as IMMUNIZATION_STATUS_MAP
 from app.cda.medications import FREE_TEXT_SIG_TEMPLATE_ID, MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP
@@ -693,15 +694,21 @@ def _random_allergies_section(rng: random.Random) -> str | None:
 
 def _random_immunization_entry(rng: random.Random, start, end) -> str:
     sub_id = _random_uuid_like(rng)
-    # ~80% EVN (administered/refused - what this section converts), ~20%
-    # INT (planned - deliberately out of scope, direct fuzz coverage of
-    # build_immunizations()'s mood-based skip).
+    # ~80% EVN (administered/refused) -> Immunization, ~20% INT (planned)
+    # -> MedicationRequest. Both convert, via different field maps.
     mood_code = "EVN" if maybe(rng, 0.8) else "INT"
-    negated = mood_code == "EVN" and maybe(rng, 0.15)
-    negation_attr = ' negationInd="true"' if negated else ""
-    # Mostly a recognized statusCode (exercising STATUS_MAP's branches),
-    # rarely an unrecognized one, exercising _resolve_status's default.
-    status_code = rng.choice(list(IMMUNIZATION_STATUS_MAP)) if maybe(rng, 0.85) else "draft"
+    # negationInd means different things per mood: on EVN it overrides
+    # status to not-done, on INT it maps to doNotPerform either way - so
+    # INT gets an explicit "false" sometimes too, which EVN never needs.
+    if mood_code == "EVN":
+        negation_attr = ' negationInd="true"' if maybe(rng, 0.15) else ""
+    else:
+        negation_attr = f' negationInd="{"true" if maybe(rng, 0.3) else "false"}"' if maybe(rng, 0.5) else ""
+    # Mostly a recognized statusCode, rarely an unrecognized one to
+    # exercise each mood's own fallback. The two moods resolve status
+    # through different ConceptMaps.
+    status_pool = IMMUNIZATION_STATUS_MAP if mood_code == "EVN" else MEDICATION_STATUS_MAP
+    status_code = rng.choice(list(status_pool)) if maybe(rng, 0.85) else "draft"
     code, display = rng.choice(_VACCINE_CODES)
 
     effective_time = _random_ivl_ts(rng, start, end) if maybe(rng, 0.7) else ""
@@ -716,11 +723,15 @@ def _random_immunization_entry(rng: random.Random, start, end) -> str:
         )
 
     lot_number = f"<lotNumberText>{random_identifier(rng, 6)}</lotNumberText>" if maybe(rng, 0.6) else ""
+    # repeatNumber only has a target on the INT side.
+    repeat_number = (
+        f'<repeatNumber value="{rng.randint(1, 4)}"/>' if mood_code == "INT" and maybe(rng, 0.5) else ""
+    )
 
     return (
         f'<entry typeCode="DRIV"><substanceAdministration classCode="SBADM" moodCode="{mood_code}"{negation_attr}>'
         f'<templateId root="{IMMUNIZATION_ACTIVITY_TEMPLATE_ID}"/><id root="{sub_id}"/>'
-        f'<statusCode code="{status_code}"/>{effective_time}{dosing}'
+        f'<statusCode code="{status_code}"/>{effective_time}{repeat_number}{dosing}'
         '<consumable><manufacturedProduct classCode="MANU">'
         '<templateId root="2.16.840.1.113883.10.20.22.4.54"/>'
         f'<manufacturedMaterial><code code="{code}" codeSystem="2.16.840.1.113883.12.292" codeSystemName="CVX" displayName="{display}"/>{lot_number}</manufacturedMaterial>'

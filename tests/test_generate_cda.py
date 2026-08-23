@@ -456,6 +456,43 @@ def test_immunization_count_varies_across_seeds():
     assert {0, 1, 2, 3} & counts, f"expected some immunization-entry counts of 0/1/2/3, got {counts}"
 
 
+def test_planned_immunization_fields_vary_across_seeds():
+    # INT-mood entries convert to MedicationRequest, and carry two things
+    # the EVN side never does: an explicit negationInd="false" (which maps
+    # to doNotPerform rather than overriding status) and a repeatNumber.
+    do_not_perform_true = do_not_perform_false = with_repeat = without_repeat = 0
+    for seed in range(80):
+        for substance_administration in _immunization_activities(_document(seed)):
+            if substance_administration.get("moodCode") != "INT":
+                continue
+            negation = substance_administration.get("negationInd")
+            if negation == "true":
+                do_not_perform_true += 1
+            elif negation == "false":
+                do_not_perform_false += 1
+            if find_child(substance_administration, "repeatNumber") is not None:
+                with_repeat += 1
+            else:
+                without_repeat += 1
+    assert do_not_perform_true > 0 and do_not_perform_false > 0
+    assert with_repeat > 0 and without_repeat > 0
+
+
+def test_planned_immunizations_convert_to_medication_requests():
+    # The generator's contract is that everything it emits converts, so an
+    # INT entry has to produce a real MedicationRequest rather than being
+    # skipped - which is what it used to be.
+    seen = 0
+    for seed in range(40):
+        bundle = convert_cda_to_bundle(generate_ccd(random.Random(seed)))
+        seen += sum(
+            1 for e in bundle.entry
+            if e.resource.get_resource_type() == "MedicationRequest"
+            and e.resource.intent == "order"
+        )
+    assert seen > 0
+
+
 def test_immunization_mood_and_negation_vary_across_seeds():
     evn_asserted = evn_negated = int_mood = 0
     for seed in range(80):

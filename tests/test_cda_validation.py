@@ -555,14 +555,25 @@ def test_immunization_occurrence_before_birth_is_error():
     assert report.is_valid is False
 
 
-def test_planned_immunization_int_mood_produces_no_findings():
-    # INT-mood entries are out of scope for this slice and excluded from
-    # the rule walk entirely - not flagged, same treatment an unrecognized
-    # section already gets.
+def test_planned_immunization_status_unrecognized_is_info():
+    # INT-mood entries convert to MedicationRequest, resolving status
+    # through CF_MedStatus rather than CF_ImmunizationStatus - so they get
+    # their own rule with its own fallback, and validation walks the same
+    # entry set conversion does.
     entry = _immunization_entry(mood="INT", status="draft")
     document = _doc(_patient() + _immunizations_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    finding = next(
+        f for f in report.findings if f.rule_id == "cda.planned-immunization-status-unrecognized"
+    )
+    assert finding.severity == "info"
+    assert "unknown" in finding.message
+
+
+def test_planned_immunization_with_recognized_status_produces_no_findings():
+    entry = _immunization_entry(mood="INT", status="active")
+    document = _doc(_patient() + _immunizations_section(entry))
+    assert validate_document(document).findings == []
 
 
 def _vital_sign_observation(code: str = "", effective_time: str = "") -> str:

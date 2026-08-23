@@ -576,24 +576,33 @@ def _rule_allergies(section, patient, now: datetime) -> list[ValidationFinding]:
     return findings
 
 
-def _iter_evn_immunization_activities(section):
-    """Yield each EVN-mood Immunization Activity substanceAdministration
-    element - the same walk (including the mood filter)
+def _iter_immunization_activities(section, mood: str):
+    """Yield each Immunization Activity substanceAdministration element in
+    the given mood - the same walk, including the mood filter,
     app.cda.immunizations.build_immunizations() uses, so validation can
-    never see a different set of entries than conversion does. INT-mood
-    entries are out of scope for this slice (see that module's docstring)
-    and are excluded here too, not flagged - the same "silently out of
-    scope, not a data-quality issue" treatment an unrecognized section
-    already gets."""
+    never see a different set of entries than conversion does. Both moods
+    convert now (EVN -> Immunization, INT -> MedicationRequest), so both
+    are walked; the rules differ, because the two targets resolve status
+    through different ConceptMaps and only the EVN side maps an occurrence
+    date at all."""
     for entry in find_all(section, "entry"):
         substance_administration = find_child(entry, "substanceAdministration")
         if substance_administration is None or not has_template_id(
             substance_administration, IMMUNIZATION_ACTIVITY_TEMPLATE_ID
         ):
             continue
-        if substance_administration.get("moodCode") != "EVN":
+        if substance_administration.get("moodCode") != mood:
             continue
         yield substance_administration
+
+
+def _immunization_material_code(substance_administration):
+    consumable = find_child(substance_administration, "consumable")
+    manufactured_product = find_child(consumable, "manufacturedProduct") if consumable is not None else None
+    manufactured_material = (
+        find_child(manufactured_product, "manufacturedMaterial") if manufactured_product is not None else None
+    )
+    return find_child(manufactured_material, "code") if manufactured_material is not None else None
 
 
 def _rule_immunizations(section, patient, now: datetime) -> list[ValidationFinding]:
@@ -601,13 +610,8 @@ def _rule_immunizations(section, patient, now: datetime) -> list[ValidationFindi
     raw_birth = ts_value(find_child(patient, "birthTime")) if patient is not None else None
     birth_dt = parse_comparable_datetime(raw_birth) if raw_birth else None
 
-    for substance_administration in _iter_evn_immunization_activities(section):
-        consumable = find_child(substance_administration, "consumable")
-        manufactured_product = find_child(consumable, "manufacturedProduct") if consumable is not None else None
-        manufactured_material = (
-            find_child(manufactured_product, "manufacturedMaterial") if manufactured_product is not None else None
-        )
-        code_element = find_child(manufactured_material, "code") if manufactured_material is not None else None
+    for substance_administration in _iter_immunization_activities(section, "EVN"):
+        code_element = _immunization_material_code(substance_administration)
         if build_codeable_concept_from_cd(code_element) is None:
             findings.append(
                 ValidationFinding(
@@ -653,6 +657,41 @@ def _rule_immunizations(section, patient, now: datetime) -> list[ValidationFindi
                         message="An Immunization Activity's occurrence date is before the patient's birthTime.",
                     )
                 )
+
+    # INT-mood entries build a MedicationRequest instead, so they get the
+    # same two rules against that path's own resolution: a missing code is
+    # still a silent skip, and status resolves through CF_MedStatus rather
+    # than CF_ImmunizationStatus, with a different fallback.
+    for substance_administration in _iter_immunization_activities(section, "INT"):
+        code_element = _immunization_material_code(substance_administration)
+        if build_codeable_concept_from_cd(code_element) is None:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.planned-immunization-missing-medication-code",
+                    segment="Immunizations/.../substanceAdministration/consumable",
+                    message=(
+                        "A planned (INT-mood) Immunization Activity has no resolvable medication code - "
+                        "the converter will silently skip this entry."
+                    ),
+                )
+            )
+            continue
+
+        status_element = find_child(substance_administration, "statusCode")
+        status_code = (status_element.get("code") or "").strip().lower() if status_element is not None else ""
+        if status_code and status_code not in MEDICATION_STATUS_MAP:
+            findings.append(
+                ValidationFinding(
+                    severity="info",
+                    rule_id="cda.planned-immunization-status-unrecognized",
+                    segment="Immunizations/.../substanceAdministration/statusCode",
+                    message=(
+                        f"statusCode {status_code!r} is not recognized - the converter will silently "
+                        "default to 'unknown'."
+                    ),
+                )
+            )
     return findings
 
 

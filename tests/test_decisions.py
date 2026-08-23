@@ -947,19 +947,49 @@ def test_unconverted_entry_is_one_decision_not_one_per_element():
 def test_a_skipped_entry_cannot_borrow_its_siblings_reads():
     # The relative-path fallback resolves which *repeat* of an element a
     # recorded location belongs to. Sibling entries always share their
-    # relative paths, so applied to the entry-level scan it let a wholly
-    # skipped entry vanish: this fixture's third immunization is INT-mood
-    # (planned, not administered), which the mapper skips entirely, but
-    # its id/statusCode/vaccine-code paths were all recorded by the two
-    # EVN entries beside it - so the register reported nothing at all for
-    # a whole discarded clinical statement.
-    _, decisions = _cda_bundle_and_decisions("ccd_immunizations_basic.xml")
-    unconverted = [
-        d for d in decisions if d.citation.title == "Source entry not converted"
-    ]
-    assert len(unconverted) == 1
+    # relative paths, so applying it to the entry-level scan let a wholly
+    # skipped entry vanish from the register - nothing at all reported for
+    # a discarded clinical statement.
+    #
+    # Built inline rather than from a fixture: the case needs a skipped
+    # entry beside a converted one of the same shape, which the two
+    # single-entry negated fixtures cannot provide. Every value in it is
+    # deliberately unique to this entry, so the value-matching fallback
+    # cannot absolve it either and the path fallback is what is actually
+    # under test.
+    negated_entry = """          <entry typeCode="DRIV">
+            <substanceAdministration classCode="SBADM" moodCode="EVN" negationInd="true">
+              <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+              <id root="ffffffff-9999-4a1a-8a1a-999999999999"/>
+              <statusCode code="aborted"/>
+              <consumable>
+                <manufacturedProduct classCode="MANU">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                  <manufacturedMaterial>
+                    <code code="999999" codeSystem="2.16.840.1.113883.6.88" displayName="Placebo 1 MG Oral Tablet"/>
+                  </manufacturedMaterial>
+                </manufacturedProduct>
+              </consumable>
+            </substanceAdministration>
+          </entry>"""
+    raw = (_EDI_FIXTURES / "ccd_medications_basic.xml").read_text(encoding="utf-8")
+    raw = raw.replace("</section>", negated_entry + "\n        </section>", 1)
+
+    bundle, report, _ = convert_with_provenance(raw)
+    # The negated entry builds nothing; only the two original entries do.
+    assert sum(
+        1 for e in bundle.entry if e.resource.get_resource_type() == "MedicationRequest"
+    ) == 2
+
+    from app.provenance.highlighting import build_highlighting_payload
+
+    highlighting = build_highlighting_payload(bundle, report, raw, report.source_format)
+    spans = {tuple(m.source_span) for m in highlighting.matches if m.source_span}
+    decisions = compute_decisions(report, raw, spans)
+
+    unconverted = [d for d in decisions if d.citation.title == "Source entry not converted"]
+    assert len(unconverted) == 1, [d.source_location for d in unconverted]
     assert unconverted[0].source_location.endswith("entry[2]")
-    assert "INT" in (unconverted[0].detail or "")
 
 
 def test_values_carried_into_the_bundle_are_never_reported_as_dropped():
