@@ -1,56 +1,44 @@
-"""X12 276 (Health Care Claim Status Request) / 277 (Health Care Claim
-Status Response) -> FHIR Task.
+"""X12 276 (Claim Status Request) / 277 (Claim Status Response) -> FHIR Task.
 
-No official, free X12-to-FHIR ConceptMap IG exists for this transaction
-pair (same disclosed gap as every EDI transaction set in this app - see
-CLAUDE.md's EDI section). Unlike 270/271, base FHIR R4 has no purpose-built
-resource for "the status of a previously submitted claim" either -
-Claim.use is a closed claim|preauthorization|predetermination set with no
-status-inquiry concept, confirmed directly against hl7.org/fhir/R4/
-claim.html rather than assumed. Task is the documented general mechanism
-for tracking the status of an activity/request (hl7.org/fhir/R4/task.html):
-Task.businessStatus is an unbound CodeableConcept explicitly intended to
-carry "business-specific nuances of the business state" - the disclosed
-target for STC's category/status code pair, same category as 270/271's
-SERVICE_TYPE_CODE_SYSTEM local-system fallback.
+No official free X12-to-FHIR ConceptMap exists (the same gap as every EDI
+family here), and base R4 has no purpose-built resource for "the status of
+a previously submitted claim": `Claim.use` is a closed
+claim|preauthorization|predetermination set with no status-inquiry
+concept. `Task` is the documented general mechanism for tracking an
+activity's status, and `Task.businessStatus` is an unbound CodeableConcept
+explicitly meant for "business-specific nuances of the business state" -
+the disclosed target for STC's category/status pair.
 
-Loop shape (HL-hierarchy, HL03 level codes - a DIFFERENT code table than
-270/271's, verified against a real 276 segment example rather than assumed
-to carry over - HL03's numeric-code MEANING is defined per-TR3, not a
-universal table):
-  2000A (HL03="20", Payer)                 NM1*PR      -> payer Organization
-  2000B (HL03="21", Information Receiver)  NM1         -> receiver Org/Practitioner
-  2000C (HL03="19", Provider)              NM1         -> provider Org/Practitioner
-  2000D (HL03="22", Subscriber)            NM1*IL, DMG -> subscriber Patient
-  2000E (HL03="23", Dependent, optional)   NM1*QC, DMG -> dependent Patient
+Loop shape - **a different HL03 code table from 270/271's**, verified
+against a real 276 example rather than assumed to carry over (HL03's
+meaning is defined per-TR3):
 
-Unlike 270/271's single "one patient per transaction, dependent wins when
-present" rule, a 276/277 can carry claim-status entries for BOTH the
-subscriber and a dependent within the same transaction set (each has its
-own repeating TRN-led "claim status tracking" loop) - so this module walks
-BOTH 2000D and 2000E (when present) rather than picking one "the patient".
-One Task is built per TRN-led claim-status group, referencing whichever
-patient (subscriber or dependent) that group's loop belongs to.
+    2000A  "20"  Payer                 NM1*PR      -> payer Organization
+    2000B  "21"  Information Receiver  NM1         -> Org/Practitioner
+    2000C  "19"  Provider              NM1         -> Org/Practitioner
+    2000D  "22"  Subscriber            NM1*IL+DMG  -> subscriber Patient
+    2000E  "23"  Dependent (optional)  NM1*QC+DMG  -> dependent Patient
 
-Within each patient loop, TRN (trace/reference number, echoed
-request->response, verified via hl7.org/fhir - no, via Stedi's X12
-reference and Blue Cross NC's 276/277 companion guide) leads a repeating
-claim-status group whose members include REF (payer claim control number,
-patient control number, etc. - captured by the leader/member walk but not
-yet mapped to any FHIR field this phase, the same disclosed-and-deferred
-treatment 270/271 already gives REF), DTP, and - 277 only - STC (Health
-Care Claim Status). A claim-status group may itself nest a further SVC-led
-service-line-level sub-group with its own STC/REF/DTP; this module treats
-every STC found within a TRN group as claim-level status without
-distinguishing service-line-level STC nested under SVC, and only reads
-STC01 (not the additional STC10/STC11 composites, used when more than one
-status applies at once) - both disclosed Phase-2 scope limits, the same
-category as 270's deferred RD8 date-range qualifier.
+**Unlike 270/271's "one patient per transaction, dependent wins"**, a
+276/277 can carry claim-status entries for both the subscriber and a
+dependent at once, each with its own repeating TRN-led group. So this
+walks both 2000D and 2000E, building one Task per TRN group, referencing
+whichever patient that group's loop belongs to.
 
-276 vs. 277 are distinguished by BHT02 ("13" for 276, "08" for 277,
-verified against multiple real companion guides) - not read by this
-module directly (registry dispatch is by ST01, not BHT02), but documented
-here since it's the field a real sender uses to tell them apart."""
+Within a patient loop, TRN leads a claim-status group whose members
+include REF, DTP, and - 277 only - STC.
+
+Scope limits:
+- `REF`/`DTP` are captured by the leader/member walk but not mapped, the
+  same treatment 270/271 give them.
+- A TRN group can nest a further SVC-led service-line sub-group with its
+  own STC. Every STC in a TRN group is treated as claim-level.
+- Only `STC01` is read, not the `STC10`/`STC11` composites used when more
+  than one status applies at once.
+
+276 and 277 are distinguished by BHT02 ("13" vs "08"). Not read here -
+registry dispatch is by ST01 - but noted since it is what a real sender
+uses to tell them apart."""
 
 import uuid
 from dataclasses import dataclass

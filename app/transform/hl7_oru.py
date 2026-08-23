@@ -1,48 +1,26 @@
-"""FHIR Bundle -> HL7v2 ORU - the sixth reverse-direction slice, and the
-second proof (after SIU's `Appointment`) that this architecture handles a
-genuinely different FHIR shape - `DiagnosticReport` + `Observation`, with
-a real *grouping* relationship (`DiagnosticReport.result[]` referencing
-only its own `Observation`s) that neither ADT's Encounter nor SIU's
-flat-participant-list Appointment needed to reconstruct. Originally R01
-alone; **R30/R31/R32/R40 shipped as an immediate follow-up breadth pass**,
-the same "one-line trigger-string change" the module's own original
-docstring disclosed as a natural next step - confirmed genuinely trivial,
-not just assumed: `app/mappings/oru.py::BaseOruMapper` handles all five
-triggers with byte-for-byte identical forward logic (they differ only in
-upstream ordering-workflow semantics this stateless converter never
-modeled), so the reverse direction mirrors that exactly via a
-`_BaseOruBuilder` + five one-line `trigger_event` subclasses, the same
-`_BaseAdtBuilder` shape `hl7_adt.py` already established for its own
-five-trigger breadth pass.
+"""FHIR Bundle -> HL7v2 ORU (R01/R30/R31/R32/R40).
+
+All five triggers share one `_BaseOruBuilder` plus a one-line
+`trigger_event` subclass each, mirroring `BaseOruMapper` - the triggers
+differ only in upstream ordering-workflow semantics this converter never
+modelled.
 
 Reverses `app/mappings/oru.py::build_observation`/`build_diagnostic_report`
-field-for-field: `OBR-4`/`-7`/`-8`/`-22`/`-25` (code/effective timing/
-issued/status, CWE + status map both reused in reverse from
-`app/transform/hl7_common.py`), and one `OBX` per `Observation` referenced
-by that report's own `DiagnosticReport.result[]` - **not** a flat scan of
-every `Observation` in the Bundle, mirroring `group_segments_by_leader`'s
-own forward-direction grouping guarantee (a report only emits `OBX`
-segments for its own results, never another report's). `OBX-2`/`-3`/`-5`/
-`-6`/`-7`/`-8`/`-11`/`-14`/`-16` reverse `Observation.value[x]`/`.code`/
-`.referenceRange[0].text`/`.interpretation`/`.status`/
-`.effectiveDateTime`/`.performer`.
+field-for-field: `OBR-4`/`-7`/`-8`/`-22`/`-25`, and one `OBX` per
+`Observation` referenced by that report's own `.result[]` - **not** a flat
+scan of every Observation in the Bundle, mirroring the forward
+`group_segments_by_leader` guarantee that a report emits segments only for
+its own results. `OBX-2`/`-3`/`-5`/`-6`/`-7`/`-8`/`-11`/`-14`/`-16`
+reverse `Observation.value[x]`/`.code`/`.referenceRange[0].text`/
+`.interpretation`/`.status`/`.effectiveDateTime`/`.performer`.
 
-**A real, disclosed round-trip fidelity gap specific to this slice**:
-`Observation.status`'s reverse can't always recover the exact original
-OBX-11 code - `_RESULT_STATUS_MAP`'s forward direction maps *two* distinct
-HL7 codes (`"D"`/`"W"`) to the identical FHIR `"entered-in-error"` status,
-so the reverse table picks one disclosed representative (`"D"`) rather
-than guessing which of the two a given Observation originally carried -
-the same "can't always recover a many-to-one forward mapping's original
-input" limitation `edi_271.py`'s own `.disposition` free-text gap already
-discloses for a different field. `OBR-2`/`-3` (placer/filler numbers) and
-`OBX-1`'s own semantic value have no FHIR-side home at all (the forward
-mapper never reads `DiagnosticReport.identifier`/`Observation.identifier`
-for these - neither resource type gets an `.identifier` from OBR/OBX at
-all), so `OBX-1` is regenerated as a simple per-report sequence number and
-`OBR-2`/`-3` are left empty, the same "no source field, disclosed
-placeholder or omission" precedent every earlier slice already
-established for MSH-3/4/5/6 and similar."""
+Disclosed round-trip fidelity gaps:
+- `Observation.status` cannot always recover the original OBX-11: the
+  forward map sends both `"D"` and `"W"` to `"entered-in-error"`, so the
+  reverse picks `"D"` as the disclosed representative.
+- `OBR-2`/`-3` (placer/filler numbers) have no FHIR home - the forward
+  mapper never reads `DiagnosticReport.identifier` from them - and are
+  left empty. `OBX-1` is regenerated as a per-report sequence number."""
 
 from fhir.resources.R4B.bundle import Bundle
 

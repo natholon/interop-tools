@@ -1,51 +1,33 @@
-"""FHIR Bundle -> HL7v2 MDM - the seventh reverse-direction slice, and the
-third proof (after SIU's `Appointment`, ORU's `DiagnosticReport`+
-`Observation`) that this architecture handles a genuinely different FHIR
-shape - `DocumentReference` + a separately-referenced `Binary` carrying the
-document's own text body, neither of which any earlier reverse slice
-needed to reconstruct. Originally T02 alone; **T04/T06/T08/T10/T11 shipped
-as an immediate follow-up breadth pass**, confirmed genuinely trivial
-rather than just assumed: `app/mappings/mdm.py::BaseMdmMapper` handles all
-six triggers with byte-for-byte identical forward logic (the official
-v2-to-FHIR IG ships exactly one MDM ConceptMap, trigger-agnostic), so
-`_BaseMdmBuilder` + six one-line `trigger_event` subclasses (the identical
-shape `hl7_oru.py`'s own R30/R31/R32/R40 breadth pass already proved
-trivial) was the whole change - no new field-mapping logic needed.
+"""FHIR Bundle -> HL7v2 MDM (T02/T04/T06/T08/T10/T11).
+
+All six triggers share one `_BaseMdmBuilder` plus a one-line
+`trigger_event` subclass each, mirroring the forward direction, where the
+v2-to-FHIR IG ships exactly one trigger-agnostic MDM ConceptMap.
 
 Reverses `app/mappings/mdm.py::build_document_reference`/
 `_build_binary_from_obx` field-for-field: TXA-2/-3/-6/-9/-10/-12/-16/-18
-(type/content-presentation/origination-date/originator/authenticator/
-master-identifier/file-name/confidentiality, CWE + XCN-practitioner
-reversal both reused from `hl7_common.py`), and one `OBX` per line of the
-referenced `Binary`'s own decoded text body (the reverse of the forward
-mapper's own `"\\n".join` over every `TX`/`FT`-typed `OBX-5`) - not a
-guess at how many `OBX` segments originally existed, since the forward
-mapper itself collapses that count down to one joined string with no
-count preserved anywhere in FHIR. `PV1` is rebuilt via the shared
-`app.transform.hl7_common.build_minimal_pv1` (MDM's own optional
-Encounter is the identical minimal, lifecycle-free shape ORU's is - see
-that function's own docstring for why this is its third real consumer,
-not MDM-specific logic).
+(type, content presentation, origination date, originator, authenticator,
+master identifier, file name, confidentiality), and one `OBX` per line of
+the referenced `Binary`'s decoded text. The original OBX count is not
+recoverable - the forward mapper joins them into one string and keeps no
+count - so one segment per line is the disclosed choice. `PV1` comes from
+the shared `build_minimal_pv1`, MDM's optional Encounter being the same
+lifecycle-free shape ORU's is.
 
-**Two real, disclosed round-trip fidelity gaps specific to this slice**:
-TXA-19 (Document Availability Status) can't be recovered at all - the
-forward `_resolve_status` unconditionally returns `"current"` regardless
-of what TXA-19 actually said (per that function's own module docstring,
-only `"AV"` is a verified mapping and every other/absent value defaults
-to the identical FHIR status too), so there is no signal on the FHIR side
-to reverse from; this builder always regenerates the one verified value,
-`"AV"`, the same "can't recover a many-to-one forward mapping's original
-input, pick the disclosed representative" precedent `hl7_oru.py`'s own
-OBX-11 `"D"`/`"W"` gap and `edi_271.py`'s own `.disposition` gap already
-established. TXA-3's own reverse has the identical shape: `"TEXT"` and
-`"FORMATTED"` both map forward to the same `text/plain` MIME type, so a
-`text/plain` attachment always reverses to the disclosed representative
-`"TEXT"`, never `"FORMATTED"`."""
+TXA-19 round-trips: the forward mapper carries a `"CA"`/`"OB"`/`"UN"` code
+on `status.extension` as an alternate code (the IG's own rule), so it is
+read back when present, falling back to `"AV"` - the only value the IG
+maps to a status at all.
+
+Disclosed round-trip fidelity gap: TXA-3's `"TEXT"` and `"FORMATTED"` both
+map forward to `text/plain`, so a `text/plain` attachment always reverses
+to `"TEXT"`."""
 
 from fhir.resources.R4B.bundle import Bundle
 
 from app.generators.base import segment
 from app.hl7.errors import MappingError
+from app.mappings.mdm import ALTERNATE_CODES_EXTENSION
 from app.transform.base import MessageBuilder
 from app.transform.common import find_resource, find_resources, format_hl7_ts
 from app.transform.hl7_common import build_minimal_pv1, build_msh, build_pid, reverse_cwe
@@ -90,8 +72,27 @@ def _resolve_practitioner(reference, practitioners_by_id: dict):
     return practitioners_by_id.get(practitioner_id)
 
 
+def _reverse_availability_status(document_reference) -> str:
+    """TXA-19. The forward mapper puts a "CA"/"OB"/"UN" code on
+    `status.extension` as an alternate code (the IG's own rule), so when
+    one is there it is the real original value and reverses exactly.
+    Otherwise "AV" - the only TXA-19 value the IG maps to a status, and
+    the one `status="current"` is verified to come from."""
+    extension = getattr(document_reference, "status__ext", None)
+    for entry in getattr(extension, "extension", None) or []:
+        if entry.url != ALTERNATE_CODES_EXTENSION:
+            continue
+        concept = entry.valueCodeableConcept
+        if concept and concept.coding and concept.coding[0].code:
+            return concept.coding[0].code
+    return "AV"
+
+
 def _build_txa(document_reference, practitioners_by_id: dict) -> str:
-    fields: dict[int, str] = {3: _reverse_content_presentation(document_reference), 19: "AV"}
+    fields: dict[int, str] = {
+        3: _reverse_content_presentation(document_reference),
+        19: _reverse_availability_status(document_reference),
+    }
 
     doc_type = reverse_cwe(document_reference.type)
     if doc_type:

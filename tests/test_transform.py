@@ -2257,3 +2257,24 @@ def test_reverse_transform_preserves_resource_type_counts(target):
         before = Counter(entry.resource.get_resource_type() for entry in original.entry)
         after = Counter(entry.resource.get_resource_type() for entry in round_tripped.entry)
         assert before == after, f"{target} seed={seed}: {before} != {after}"
+
+
+def test_mdm_round_trip_preserves_unverified_availability_status():
+    # TXA-19's "CA"/"OB"/"UN" ride on status.extension as an alternate
+    # code, per the IG's own rule, so they are real data on the FHIR side
+    # and must survive a round trip. This builder used to emit "AV"
+    # unconditionally, which silently turned a cancelled document into an
+    # available one.
+    raw = (FIXTURES / "validation_mdm_availability_unverified.hl7").read_text()
+    bundle = convert_to_bundle(raw)
+    message = build_message_from_bundle(bundle, "HL7", "MDM", "T02")
+
+    txa = next(line for line in message.split(chr(13)) if line.startswith("TXA"))
+    assert txa.split("|")[19] == "CA"
+
+    reparsed = convert_to_bundle(message)
+    document_reference = next(
+        e.resource for e in reparsed.entry if e.resource.get_resource_type() == "DocumentReference"
+    )
+    extension = document_reference.status__ext.extension[0]
+    assert extension.valueCodeableConcept.coding[0].code == "CA"
