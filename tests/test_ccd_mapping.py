@@ -185,6 +185,11 @@ def test_medications_basic_fixture_maps_structured_and_free_text_dosing():
     assert len(requests) == 2
     for request in requests.values():
         assert request.subject.reference == f"urn:uuid:{patient.id}"
+        # A plain-Medications-sourced request never populates .category -
+        # that's precisely what makes "discharge" a reliable marker for
+        # the Discharge Medications section (see app/cda/
+        # discharge_medications.py and its reverse-direction split).
+        assert request.category is None
 
     structured = requests["Lisinopril 10 MG Oral Tablet"]
     assert structured.status == "active"
@@ -503,6 +508,17 @@ def test_discharge_summary_maps_header_and_all_six_of_its_sections():
 
     medication_request = entries["MedicationRequest"][0].resource
     assert medication_request.medicationCodeableConcept.coding[0].display == "Amoxicillin 500 MG Oral Capsule"
+    # A Discharge-Medications-sourced request is marked with the standard
+    # "discharge" code from FHIR R4's own medicationrequest-category
+    # CodeSystem - the marker the reverse direction splits on, mirroring
+    # the Hospital Discharge Diagnosis Condition's own category above. A
+    # plain-Medications-sourced request never populates .category at all
+    # (see test_medications_basic_fixture_* for that side).
+    assert medication_request.category[0].coding[0].code == "discharge"
+    assert (
+        medication_request.category[0].coding[0].system
+        == "http://terminology.hl7.org/CodeSystem/medicationrequest-category"
+    )
 
     encounter = entries["Encounter"][0].resource
     assert encounter.class_fhir.code == "IMP"

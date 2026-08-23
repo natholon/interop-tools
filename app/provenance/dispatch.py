@@ -95,30 +95,50 @@ _INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835", "837
 # follow-up slice shipped real structured-entry parsing (Observation/
 # FamilyMemberHistory/CarePlan) for the three sections that can carry one,
 # and again once app/cda/procedures.py's own Indication/Comment Activity/
-# `author`->`Procedure.recorder` follow-up shipped, and a fourth time once
+# `author`->`Procedure.recorder` follow-up shipped, a fourth time once
 # app/cda/common.py's own originalText -> CodeableConcept.text resolution
 # shipped (both the inline and the narrative-anchor `<reference
-# value="#ID"/>` shapes) - the reason below no longer names any of these.
-# What remains genuinely true: this app has no CDA-side Provenance
-# resource builder anywhere (a real, separate Provenance *resource*,
-# distinct from a plain `recorder` Reference field on a resource itself,
-# which DOES now get recorded), so `author` never produces a Provenance
-# fact for any section that reads one. Note this reason string covers
-# *provenance* coverage specifically - a separate, disclosed
-# reverse-direction gap (app/transform/cda_ccd.py doesn't regenerate
-# <originalText> from CodeableConcept.text) is tracked in CLAUDE.md's own
-# C-CDA subsection instead, since it doesn't affect what this pillar
-# records. Marking any document type "fully supported" here would still
-# overclaim relative to what conversion itself actually guarantees for it.
+# value="#ID"/>` shapes), and a fifth once app/cda/discharge_medications.py
+# gained its own `MedicationRequest.category="discharge"` marker.
+#
+# **The last standing item, `author` -> a FHIR `Provenance` resource, has
+# since been reclassified as a deliberate, permanent scope decision rather
+# than deferred work** - see CLAUDE.md's own C-CDA subsection for the full
+# reasoning. In short: `Provenance` models "who created/revised/signed
+# this record, and when," which presumes a system that STORES records over
+# time; this app is a stateless converter with no record lifecycle for
+# such a resource to describe (its required `recorded` timestamp has no
+# honest value here - conversion time is clinically meaningless). Where
+# the source `<author>` has a real home on the resource itself, the plain
+# attribute already carries it (`Procedure.recorder`,
+# `Annotation.authorReference`), which reaches a downstream consumer
+# without fabricating an audit record for an event that never happened.
+# The C-CDA on FHIR IG itself explicitly declines to give guidance here
+# ("does not provide definitive CDA <-> FHIR guidance on when resource
+# attributes... vs. dedicated Provenance resources should be used").
+#
+# With that reclassified, C-CDA now sits exactly where every fully-
+# instrumented HL7v2 message type already does: a deliberate decision NOT
+# to map something has never counted against provenance coverage here
+# (app/mappings/mdm.py leaves TXA-13/TXA-17 unmapped for well-documented
+# reasons, and MDM still reports unsupported=False). So every C-CDA
+# document type now graduates to fully supported too - see
+# _INSTRUMENTED_CDA_DOCUMENT_TYPES below. This constant is kept for the
+# one case that genuinely remains: a document type this app doesn't
+# recognize at all.
 _CDA_UNSUPPORTED_REASON = (
-    "Field-level provenance for C-CDA covers the document header, all "
-    "seven general-purpose sections, every narrative-only section either "
-    "document type's own IG requires, the structured entries Plan of "
-    "Treatment/Social History/Family History can carry, and Procedures' "
-    "own Indication/Comment Activity cross-references and recorder - but "
-    "this app has no CDA-side Provenance resource builder, so no C-CDA "
-    "document type is ever reported fully supported."
+    "Field-level provenance for C-CDA is implemented for the CCD, "
+    "Discharge Summary, and History and Physical document types; this "
+    "document's own type isn't one this app recognizes."
 )
+
+# C-CDA document types with real, complete field-level instrumentation -
+# the CDA-format mirror of _INSTRUMENTED_MESSAGE_TYPES/
+# _INSTRUMENTED_TRANSACTION_SETS below. Every section registered in
+# app/cda/registry.py::SECTION_BUILDERS is instrumented, so this is
+# keyed per document type (as resolved by
+# app.cda.validation.resolve_trigger_event) rather than per section.
+_INSTRUMENTED_CDA_DOCUMENT_TYPES = {"CCD", "DISCHARGESUMMARY", "HISTORYANDPHYSICAL"}
 
 # Message types with real, complete field-level instrumentation. Extended
 # as each message type's own provenance slice actually ships.
@@ -147,13 +167,14 @@ def convert_with_provenance(raw_text: str, deduplicate: bool = False) -> tuple[B
     app/edi/common.py), so a not-yet-instrumented family's own recorder can
     still accumulate a Bundle.identifier/.timestamp fact or two despite
     having no instrumentation for its own resource-specific fields at all.
-    C-CDA input converts normally and threads a recorder through too (so
-    `entries` may be genuinely non-empty for a document with a header
-    and/or a Problems section), but also always reports `unsupported=True`
-    - see `_CDA_UNSUPPORTED_REASON`'s own comment for why no CDA document
-    type is "fully instrumented" yet. An HL7v2 message whose message_type
-    isn't in `_INSTRUMENTED_MESSAGE_TYPES` converts normally too and
-    reports `unsupported=True` for the identical reason.
+    C-CDA input converts normally and threads a recorder through too;
+    every document type this app recognizes (CCD, Discharge Summary,
+    History and Physical) is now fully instrumented and reports
+    `unsupported=False` - see `_INSTRUMENTED_CDA_DOCUMENT_TYPES` and the
+    long comment above it for why that graduation is correct rather than
+    an overclaim. An HL7v2 message whose message_type isn't in
+    `_INSTRUMENTED_MESSAGE_TYPES` converts normally too and reports
+    `unsupported=True`.
 
     Raises the same exception shapes convert_to_bundle does
     (Hl7ParseError/CdaParseError/EdiParseError, MissingSegmentError,
@@ -194,13 +215,15 @@ def convert_with_provenance(raw_text: str, deduplicate: bool = False) -> tuple[B
         bundle = builder.build_bundle(document, recorder=recorder)
         bundle, dedup_result = _deduplicate_if_requested(bundle, deduplicate)
         entries = resolve_bundle_paths(bundle, recorder)
+        document_type = resolve_cda_trigger_event(document)
+        unsupported = document_type not in _INSTRUMENTED_CDA_DOCUMENT_TYPES
         return bundle, CrosswalkReport(
             message_type="CDA",
-            trigger_event=resolve_cda_trigger_event(document),
+            trigger_event=document_type,
             source_format="CDA",
             entries=entries,
-            unsupported=True,
-            unsupported_reason=_CDA_UNSUPPORTED_REASON,
+            unsupported=unsupported,
+            unsupported_reason=_CDA_UNSUPPORTED_REASON if unsupported else None,
         ), dedup_result
 
     message = parse_message(raw_text)

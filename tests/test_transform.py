@@ -913,14 +913,22 @@ def test_discharge_summary_round_trip_splits_discharge_diagnosis_from_plain_prob
     assert conditions["385093006"].category[0].coding[0].code == "encounter-diagnosis"
     assert not conditions["38341003"].category
 
-    # Discharge Medications has no FHIR-side marker at all (see this
-    # builder's own module docstring) - the medication must still survive,
-    # just always via the plain Medications section.
+    # Discharge Medications now splits out too, via its own real
+    # MedicationRequest.category == "discharge" marker (a standard code
+    # from FHIR R4's own medicationrequest-category CodeSystem) - exactly
+    # the way the Hospital Discharge Diagnosis Condition above does. This
+    # previously asserted the opposite ("no FHIR-side marker at all, so it
+    # always folds into the plain Medications section"), which described
+    # an implementation choice as if it were a standards constraint.
     original_med = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "MedicationRequest")
     med = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "MedicationRequest")
     assert med.medicationCodeableConcept.coding[0].code == original_med.medicationCodeableConcept.coding[0].code
-    assert "10160-0" in document_text  # plain Medications section LOINC code
-    assert "10183-2" not in document_text  # Discharge Medications section LOINC code - never regenerated
+    assert original_med.category[0].coding[0].code == "discharge"
+    assert med.category[0].coding[0].code == "discharge"
+    assert "10183-2" in document_text  # Discharge Medications section LOINC code, now regenerated
+    # This fixture's only MedicationRequest came from the Discharge
+    # Medications section, so no plain Medications section is emitted.
+    assert "10160-0" not in document_text
 
 
 def test_discharge_summary_round_trip_regenerates_hospital_course_narrative():

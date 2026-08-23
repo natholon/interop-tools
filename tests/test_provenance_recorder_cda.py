@@ -864,6 +864,15 @@ def test_discharge_medications_reuses_medications_own_recorder_instrumentation()
     code_entry = by_path[f"Bundle.entry[{medication_index}].resource.medicationCodeableConcept.coding[0].code"]
     assert code_entry.derivation == "direct"
 
+    # The "discharge" category marker itself is inferred, not direct - no
+    # source element carries it; it's implied purely by which section the
+    # entry was found in, the identical reasoning
+    # hospital_discharge_diagnosis.py's own category marker records under.
+    category_entry = by_path[f"Bundle.entry[{medication_index}].resource.category[0].coding[0].code"]
+    assert category_entry.derivation == "inferred"
+    assert category_entry.value == "discharge"
+    assert category_entry.source_location is None
+
 
 def test_discharge_summary_hospital_discharge_diagnosis_condition_also_recorded():
     # Hospital Discharge Diagnosis reuses build_condition directly (see

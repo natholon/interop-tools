@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -189,25 +190,42 @@ def test_api_data_specification_277_type_is_now_instrumented():
     assert len(report["entries"]) > 0
 
 
-def test_api_data_specification_cda_input_converts_but_is_unsupported():
-    # C-CDA's document header + Problems section are instrumented (see
-    # app/cda/common.py/app/cda/problems.py), so ccd_basic.xml (which
-    # carries both) now produces real, non-empty partial entries - but the
-    # report stays unsupported=True until every CCD section is
-    # instrumented, mirroring the identical "some real facts, still
-    # unsupported" shape a not-yet-instrumented HL7v2 message type already
-    # produces (see app/provenance/dispatch.py's own _CDA_UNSUPPORTED_REASON).
+def test_api_data_specification_cda_input_is_now_fully_instrumented():
+    # Every section registered in app/cda/registry.py::SECTION_BUILDERS is
+    # instrumented, so C-CDA document types now graduate to
+    # unsupported=False - this previously asserted the opposite, held back
+    # by author -> a FHIR Provenance resource, which has since been
+    # reclassified as a deliberate scope decision rather than deferred
+    # work (Provenance models an audit trail this stateless converter has
+    # no record lifecycle for; see app/provenance/dispatch.py's own
+    # _INSTRUMENTED_CDA_DOCUMENT_TYPES comment). A deliberate decision not
+    # to map something has never counted against coverage here - MDM
+    # leaves TXA-13/TXA-17 unmapped and still reports unsupported=False.
     response = client.post("/api/data-specification", json={"hl7_text": read_fixture("ccd_basic.xml")})
     assert response.status_code == 200
     body = response.json()
     assert body["bundle"]["resourceType"] == "Bundle"
     report = body["report"]
-    assert report["unsupported"] is True
+    assert report["unsupported"] is False
     assert report["source_format"] == "CDA"
     assert report["message_type"] == "CDA"
     assert report["trigger_event"] == "CCD"
     assert len(report["entries"]) > 0
-    assert "C-CDA" in report["unsupported_reason"]
+    # exclude_none=True drops the key entirely when there's no reason.
+    assert "unsupported_reason" not in report
+
+
+@pytest.mark.parametrize("fixture,document_type", [
+    ("discharge_summary_basic.xml", "DISCHARGESUMMARY"),
+    ("history_and_physical_basic.xml", "HISTORYANDPHYSICAL"),
+])
+def test_api_data_specification_other_cda_document_types_are_instrumented(fixture, document_type):
+    response = client.post("/api/data-specification", json={"hl7_text": read_fixture(fixture)})
+    assert response.status_code == 200
+    report = response.json()["report"]
+    assert report["unsupported"] is False
+    assert report["trigger_event"] == document_type
+    assert len(report["entries"]) > 0
 
 
 def test_api_data_specification_siu_type_is_now_instrumented():

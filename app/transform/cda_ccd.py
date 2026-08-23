@@ -60,6 +60,10 @@ from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPL
 from app.cda.problems import PROBLEM_OBSERVATION_TEMPLATE_ID
 from app.cda.problems import CONCERN_ACT_TEMPLATE_ID
 from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
+from app.cda.discharge_medications import CATEGORY_CODE as DISCHARGE_MEDICATION_CATEGORY_CODE
+from app.cda.discharge_medications import CATEGORY_SYSTEM as DISCHARGE_MEDICATION_CATEGORY_SYSTEM
+from app.cda.discharge_medications import DISCHARGE_MEDICATION_ACT_TEMPLATE_ID
+from app.cda.discharge_medications import SECTION_TEMPLATE_ID as DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.hospital_discharge_diagnosis import CATEGORY_CODE as DISCHARGE_DIAGNOSIS_CATEGORY_CODE
 from app.cda.hospital_discharge_diagnosis import CATEGORY_SYSTEM as DISCHARGE_DIAGNOSIS_CATEGORY_SYSTEM
 from app.cda.hospital_discharge_diagnosis import HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID
@@ -451,20 +455,54 @@ def _build_dosage_elements(request) -> str:
     return f"{effective_time}{route}{dose_quantity}{rate_quantity}{free_text_sig}"
 
 
-def _build_medication_entry(request) -> str:
+def _build_medication_entry(request, wrap_in_discharge_act: bool = False) -> str:
     consumable_code = _build_cd_element("code", request.medicationCodeableConcept) or '<code nullFlavor="UNK"/>'
     status_code = _MEDICATION_STATUS_TO_ACT_STATUS.get(request.status, _DEFAULT_MEDICATION_ACT_STATUS)
     mood_code = _INTENT_TO_MOOD_CODE.get(request.intent, _DEFAULT_MOOD_CODE)
 
-    return (
-        f'<entry typeCode="DRIV"><substanceAdministration classCode="SBADM" moodCode="{mood_code}">'
+    substance_administration = (
+        f'<substanceAdministration classCode="SBADM" moodCode="{mood_code}">'
         f'<templateId root="{MEDICATION_ACTIVITY_TEMPLATE_ID}"/>'
         f'<statusCode code="{status_code}"/>'
         f"{_build_dosage_elements(request)}"
         "<consumable><manufacturedProduct><manufacturedMaterial>"
         f"{consumable_code}"
         "</manufacturedMaterial></manufacturedProduct></consumable>"
-        "</substanceAdministration></entry>"
+        "</substanceAdministration>"
+    )
+    if wrap_in_discharge_act:
+        # Discharge Medications nests the identical Medication Activity
+        # one level deeper, inside its own Act - unlike Hospital Discharge
+        # Diagnosis, whose plain-Problems sibling ALSO has an outer act
+        # (only the templateId differs there). So this is a wrap/don't-wrap
+        # choice rather than a swapped templateId. Shape confirmed against
+        # the real HL7 C-CDA-Examples guide example quoted in
+        # app/cda/discharge_medications.py's own docstring.
+        return (
+            f'<entry typeCode="DRIV"><act classCode="ACT" moodCode="EVN">'
+            f'<templateId root="{DISCHARGE_MEDICATION_ACT_TEMPLATE_ID}"/>'
+            '<code code="10183-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital discharge medication"/>'
+            f'<statusCode code="{status_code}"/>'
+            f'<entryRelationship typeCode="SUBJ">{substance_administration}</entryRelationship>'
+            "</act></entry>"
+        )
+    return f'<entry typeCode="DRIV">{substance_administration}</entry>'
+
+
+def _is_discharge_medication(request) -> bool:
+    """MedicationRequest.category == "discharge" is the one reliable
+    marker distinguishing a Discharge-Medications-sourced request from a
+    plain-Medications one - see app.cda.discharge_medications' own module
+    docstring: plain Medications never populates .category at all, so any
+    request carrying this exact (system, code) pair unambiguously came
+    from there. Exactly mirrors _is_hospital_discharge_diagnosis above."""
+    return bool(
+        request.category
+        and any(
+            coding.system == DISCHARGE_MEDICATION_CATEGORY_SYSTEM and coding.code == DISCHARGE_MEDICATION_CATEGORY_CODE
+            for category in request.category
+            for coding in (category.coding or [])
+        )
     )
 
 
@@ -476,6 +514,17 @@ def _build_medications_section(requests) -> str:
         f'<component><section><templateId root="{MEDICATIONS_SECTION_TEMPLATE_ID}"/>'
         '<code code="10160-0" codeSystem="2.16.840.1.113883.6.1" displayName="History of medication use"/>'
         f"<title>Medications</title>{entries}</section></component>"
+    )
+
+
+def _build_discharge_medications_section(requests) -> str:
+    if not requests:
+        return ""
+    entries = "".join(_build_medication_entry(r, wrap_in_discharge_act=True) for r in requests)
+    return (
+        f'<component><section><templateId root="{DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID}"/>'
+        '<code code="10183-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital discharge medications"/>'
+        f"<title>Discharge Medications</title>{entries}</section></component>"
     )
 
 
@@ -1743,14 +1792,20 @@ def build_sectioned_document(
     effective_time = format_hl7_ts(bundle.timestamp) if bundle.timestamp else ""
 
     hospital_discharge_diagnosis_section = ""
+    discharge_medications_section = ""
     if include_discharge_specific_sections:
         discharge_diagnoses = [c for c in conditions if _is_hospital_discharge_diagnosis(c)]
         problem_conditions = [c for c in conditions if not _is_hospital_discharge_diagnosis(c)]
         hospital_discharge_diagnosis_section = _build_hospital_discharge_diagnosis_section(discharge_diagnoses)
         problems_section = _build_problems_section(problem_conditions)
+
+        discharge_medications = [r for r in medication_requests if _is_discharge_medication(r)]
+        plain_medications = [r for r in medication_requests if not _is_discharge_medication(r)]
+        discharge_medications_section = _build_discharge_medications_section(discharge_medications)
+        medications_section = _build_medications_section(plain_medications)
     else:
         problems_section = _build_problems_section(conditions)
-    medications_section = _build_medications_section(medication_requests)
+        medications_section = _build_medications_section(medication_requests)
     allergies_section = _build_allergies_section(allergies)
     immunizations_section = _build_immunizations_section(immunizations)
     vitals_section = _build_vitals_section(observations)
@@ -1766,7 +1821,8 @@ def build_sectioned_document(
     }
     narrative_sections = _build_narrative_sections(document_references, binaries_by_id, extra_entries_by_loinc)
     sections = (
-        f"{hospital_discharge_diagnosis_section}{problems_section}{medications_section}{allergies_section}"
+        f"{hospital_discharge_diagnosis_section}{problems_section}{medications_section}"
+        f"{discharge_medications_section}{allergies_section}"
         f"{immunizations_section}{vitals_section}{results_section}{procedures_section}{narrative_sections}"
     )
     body = f"<component><structuredBody>{sections}</structuredBody></component>" if sections else ""
