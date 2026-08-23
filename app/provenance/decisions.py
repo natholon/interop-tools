@@ -611,7 +611,17 @@ class _CdaRow(NamedTuple):
 
 
 def _unconverted_entry_paths(leaves: list[_CdaLeaf], is_mapped) -> set[str]:
-    """Paths of `<entry>` elements with no mapped leaf anywhere beneath."""
+    """Paths of `<entry>` elements with no mapped leaf anywhere beneath.
+
+    **Called with the relative-path fallback disabled, deliberately.** That
+    fallback resolves which *repeat* of an element a recorded location
+    belongs to, and sibling entries always share their relative paths - so
+    applied here it lets a wholly skipped entry (an INT-mood immunization,
+    a negated allergy) borrow its siblings' reads and vanish from the
+    register entirely. Hiding a discarded clinical statement is a worse
+    failure than mis-attributing one attribute between twins, which is all
+    the fallback exists to smooth over.
+    """
     read: set[str] = set()
     entries: set[str] = set()
     for leaf in leaves:
@@ -727,7 +737,7 @@ def _dropped_cda_decisions(
     """
     narrative_sections_seen: set[str] = set()
 
-    def is_mapped(leaf: _CdaLeaf) -> bool:
+    def is_mapped(leaf: _CdaLeaf, allow_path_fallback: bool = True) -> bool:
         if leaf.span is not None:
             start, end = leaf.span
             for mapped_start, mapped_end in mapped_spans:
@@ -735,6 +745,8 @@ def _dropped_cda_decisions(
                     return True
         if leaf.value in mapped_values:
             return True
+        if not allow_path_fallback:
+            return False
         # Last resort: did anything record this relative path at all? See
         # compute_decisions for why an unattributed repeat lands here.
         return _relative_paths(leaf.path) & mapped_paths != set()
@@ -742,7 +754,9 @@ def _dropped_cda_decisions(
     # An entry nothing was read from produced no resource at all, so every
     # leaf under it is collateral. One row for the entry says what six rows
     # for its parts do not: a whole clinical statement was discarded.
-    unconverted = _unconverted_entry_paths(leaves, is_mapped)
+    unconverted = _unconverted_entry_paths(
+        leaves, lambda leaf: is_mapped(leaf, allow_path_fallback=False)
+    )
 
     by_element: dict[str, list[_CdaLeaf]] = {}
     for leaf in leaves:
