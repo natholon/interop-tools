@@ -915,3 +915,27 @@ pre {
     background: var(--drop-bg, #fdecea);
     color: var(--drop-fg, #b3261e);
 }
+
+/* Caret position readout under each crosswalk pane. Reserves its own line
+   whether or not it has content, so clicking around does not shift the
+   panes underneath it. */
+.caret-readout {
+    margin: 0.4rem 0 0;
+    min-height: 1.3em;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+    font-size: 0.82rem;
+    color: var(--muted, #6b7280);
+    word-break: break-all;
+}
+
+.caret-readout .caret-readout-label {
+    font-family: inherit;
+    color: inherit;
+    opacity: 0.75;
+    margin-right: 0.4rem;
+}
+
+.caret-readout .caret-readout-path {
+    color: var(--text, inherit);
+    font-weight: 600;
+}

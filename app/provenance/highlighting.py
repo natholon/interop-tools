@@ -47,6 +47,7 @@ from app.provenance.edi_locator import EdiLocator
 from app.provenance.hl7_locator import Hl7Locator
 from app.provenance.json_locator import locate_json_paths
 from app.provenance.models import CrosswalkReport, ProvenanceEntry
+from app.provenance.position_index import build_fhir_position_index, build_source_position_index
 
 _PALETTE_SIZE = 10
 
@@ -70,10 +71,24 @@ class HighlightMatch(BaseModel):
     fhir_token_type: str | None = None  # "string" | "number" | "literal" - see json_locator.JsonSpan
 
 
+class PositionSpan(BaseModel):
+    """One clickable region and what it is - see position_index.py."""
+
+    start: int
+    end: int
+    path: str
+
+
 class HighlightingPayload(BaseModel):
     display_source_text: str
     fhir_json_text: str
     matches: list[HighlightMatch]
+    # Offset -> location for the caret readout under each pane. Carried
+    # here rather than computed separately because the spans have to be
+    # relative to the two display texts above, and this is where both are
+    # already resolved.
+    source_positions: list[PositionSpan] = []
+    fhir_positions: list[PositionSpan] = []
 
 
 def _item_index(fhir_path: str) -> int | None:
@@ -285,7 +300,19 @@ def build_highlighting_payload(
             )
         )
 
-    return HighlightingPayload(display_source_text=display_source_text, fhir_json_text=fhir_json_text, matches=matches)
+    return HighlightingPayload(
+        display_source_text=display_source_text,
+        fhir_json_text=fhir_json_text,
+        matches=matches,
+        source_positions=[
+            PositionSpan(start=e.start, end=e.end, path=e.path)
+            for e in build_source_position_index(display_source_text, source_format)
+        ],
+        fhir_positions=[
+            PositionSpan(start=e.start, end=e.end, path=e.path)
+            for e in build_fhir_position_index(fhir_json_text)
+        ],
+    )
 
 
 def _occurrence_count(source_locator, root_key: str, scope_hint: str | None) -> int:

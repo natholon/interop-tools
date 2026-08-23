@@ -76,7 +76,10 @@ def _parse_number(text: str, pos: int) -> int:
     return pos
 
 
-def _parse_value(text: str, pos: int, path: str, out: dict[str, JsonSpan]) -> int:
+def _parse_value(
+    text: str, pos: int, path: str, out: dict[str, JsonSpan],
+    containers: list[tuple[str, JsonSpan]] | None = None,
+) -> int:
     pos = _skip_whitespace(text, pos)
     if pos >= len(text):
         raise _JsonSyntaxError("unexpected end of input")
@@ -88,10 +91,16 @@ def _parse_value(text: str, pos: int, path: str, out: dict[str, JsonSpan]) -> in
         return end
 
     if char == "{":
-        return _parse_object(text, pos, path, out)
+        end = _parse_object(text, pos, path, out, containers)
+        if containers is not None:
+            containers.append((path, JsonSpan(pos, end, "container")))
+        return end
 
     if char == "[":
-        return _parse_array(text, pos, path, out)
+        end = _parse_array(text, pos, path, out, containers)
+        if containers is not None:
+            containers.append((path, JsonSpan(pos, end, "container")))
+        return end
 
     if char in "-0123456789":
         end = _parse_number(text, pos)
@@ -107,7 +116,10 @@ def _parse_value(text: str, pos: int, path: str, out: dict[str, JsonSpan]) -> in
     raise _JsonSyntaxError(f"unexpected character {char!r} at {pos}")
 
 
-def _parse_object(text: str, pos: int, path: str, out: dict[str, JsonSpan]) -> int:
+def _parse_object(
+    text: str, pos: int, path: str, out: dict[str, JsonSpan],
+    containers: list[tuple[str, JsonSpan]] | None = None,
+) -> int:
     assert text[pos] == "{"
     pos = _skip_whitespace(text, pos + 1)
     if pos < len(text) and text[pos] == "}":
@@ -117,11 +129,15 @@ def _parse_object(text: str, pos: int, path: str, out: dict[str, JsonSpan]) -> i
         key_start = pos
         key_end = _parse_string(text, pos)
         key = text[key_start + 1 : key_end - 1]  # strip the surrounding quotes for use as a path segment
+        if containers is not None:
+            # The key names the field, so clicking it should say so rather
+            # than naming the object the key sits in.
+            containers.append((f"{path}.{key}", JsonSpan(key_start, key_end, "container")))
         pos = _skip_whitespace(text, key_end)
         if pos >= len(text) or text[pos] != ":":
             raise _JsonSyntaxError(f"expected ':' at {pos}")
         pos = _skip_whitespace(text, pos + 1)
-        pos = _parse_value(text, pos, f"{path}.{key}", out)
+        pos = _parse_value(text, pos, f"{path}.{key}", out, containers)
         pos = _skip_whitespace(text, pos)
         if pos >= len(text):
             raise _JsonSyntaxError("unterminated object")
@@ -133,7 +149,10 @@ def _parse_object(text: str, pos: int, path: str, out: dict[str, JsonSpan]) -> i
         raise _JsonSyntaxError(f"expected ',' or '}}' at {pos}")
 
 
-def _parse_array(text: str, pos: int, path: str, out: dict[str, JsonSpan]) -> int:
+def _parse_array(
+    text: str, pos: int, path: str, out: dict[str, JsonSpan],
+    containers: list[tuple[str, JsonSpan]] | None = None,
+) -> int:
     assert text[pos] == "["
     pos = _skip_whitespace(text, pos + 1)
     if pos < len(text) and text[pos] == "]":
@@ -141,7 +160,7 @@ def _parse_array(text: str, pos: int, path: str, out: dict[str, JsonSpan]) -> in
     index = 0
     while True:
         pos = _skip_whitespace(text, pos)
-        pos = _parse_value(text, pos, f"{path}[{index}]", out)
+        pos = _parse_value(text, pos, f"{path}[{index}]", out, containers)
         index += 1
         pos = _skip_whitespace(text, pos)
         if pos >= len(text):
@@ -177,3 +196,30 @@ def locate_json_paths(text: str, root_path: str = "Bundle") -> dict[str, JsonSpa
     except _JsonSyntaxError:
         return {}
     return out
+
+
+def locate_json_paths_with_containers(
+    text: str, root_path: str = "Bundle"
+) -> list[tuple[str, JsonSpan]]:
+    """Every leaf *and* every object/array, for the caret position readout.
+
+    `locate_json_paths` deliberately records leaves only - a highlight
+    should cover the value, not the whole object around it. The position
+    readout needs the opposite: clicking a `{`, a key, or the whitespace
+    between fields should still name the thing being clicked, so containers
+    are included and the caller picks the most specific span containing the
+    offset.
+
+    Returns a list, not a dict: a key and the value it labels share a path
+    but sit in two different places in the text, and both are worth
+    clicking. Never raises - a parse failure degrades to an empty index
+    rather than a broken page.
+    """
+    leaves: dict[str, JsonSpan] = {}
+    containers: list[tuple[str, JsonSpan]] = []
+    try:
+        pos = _parse_value(text, 0, root_path, leaves, containers)
+        _skip_whitespace(text, pos)
+    except (_JsonSyntaxError, IndexError, RecursionError):
+        return []
+    return containers + [(path, span) for path, span in leaves.items()]

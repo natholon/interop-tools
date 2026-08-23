@@ -710,8 +710,102 @@ function renderCrosswalkTable(entries) {
 
     if (downloadCsvBtn) downloadCsvBtn.addEventListener("click", downloadCrosswalkCsv);
 
+    // --- caret position readout -------------------------------------
+    // Clicking anywhere in either pane says what is under the caret:
+    // "PID-5.1" in the source, "Bundle.entry[1].resource.name" in the
+    // FHIR JSON. The index comes from the server (see
+    // app/provenance/position_index.py) because resolving an offset to a
+    // location is a parsing problem, and parsing lives in Python here.
+    const sourceCaret = document.getElementById("source-caret");
+    const fhirCaret = document.getElementById("fhir-caret");
+    let sourcePositions = [];
+    let fhirPositions = [];
+    // The index describes one exact string. Editing the source invalidates
+    // it, so the readout goes quiet rather than reporting stale locations.
+    let sourceIndexText = null;
+
+    function setPositions(highlighting) {
+        sourcePositions = (highlighting && highlighting.source_positions) || [];
+        fhirPositions = (highlighting && highlighting.fhir_positions) || [];
+        sourceIndexText = highlighting ? highlighting.display_source_text : null;
+        clearCaret(sourceCaret);
+        clearCaret(fhirCaret);
+    }
+
+    function clearCaret(el) {
+        if (el) el.textContent = "";
+    }
+
+    // The most specific span containing the offset: entries can nest
+    // (a component inside a field inside a segment), and the innermost is
+    // what the reader is actually pointing at.
+    function locationAt(positions, offset) {
+        let best = null;
+        for (const entry of positions) {
+            if (offset < entry.start || offset >= entry.end) continue;
+            if (!best || entry.end - entry.start < best.end - best.start) best = entry;
+        }
+        return best ? best.path : null;
+    }
+
+    function renderCaret(el, label, path) {
+        if (!el) return;
+        el.textContent = "";
+        if (!path) return;
+        const labelEl = document.createElement("span");
+        labelEl.className = "caret-readout-label";
+        labelEl.textContent = label;
+        const pathEl = document.createElement("span");
+        pathEl.className = "caret-readout-path";
+        pathEl.textContent = path;
+        el.append(labelEl, pathEl);
+    }
+
+    // Offset of the caret inside a <pre>, which unlike a textarea has no
+    // selectionStart: measure a range from the element's start to the
+    // caret and take its text length. The rendered text matches the
+    // indexed string exactly (the HL7v2 \r -> \n substitution is
+    // one-for-one), so lengths line up.
+    function preCaretOffset(pre) {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) return null;
+        const range = selection.getRangeAt(0);
+        if (!pre.contains(range.startContainer)) return null;
+        const measured = range.cloneRange();
+        measured.selectNodeContents(pre);
+        measured.setEnd(range.startContainer, range.startOffset);
+        return measured.toString().length;
+    }
+
+    function watchTextarea(el, positionsFor, caretEl, label) {
+        if (!el) return;
+        const update = () => {
+            if (sourceIndexText !== null && el.value !== sourceIndexText) {
+                clearCaret(caretEl);
+                return;
+            }
+            renderCaret(caretEl, label, locationAt(positionsFor(), el.selectionStart));
+        };
+        ["click", "keyup", "select"].forEach((evt) => el.addEventListener(evt, update));
+        el.addEventListener("input", () => clearCaret(caretEl));
+    }
+
+    function watchPre(el, positionsFor, caretEl, label) {
+        if (!el) return;
+        const update = () => {
+            const offset = preCaretOffset(el);
+            renderCaret(caretEl, label, offset === null ? null : locationAt(positionsFor(), offset));
+        };
+        ["click", "keyup"].forEach((evt) => el.addEventListener(evt, update));
+    }
+
+    watchTextarea(textarea, () => sourcePositions, sourceCaret, "Source location:");
+    watchPre(sourcePre, () => sourcePositions, sourceCaret, "Source location:");
+    watchPre(fhirPre, () => fhirPositions, fhirCaret, "FHIR path:");
+
     function showCrosswalk(report, highlighting, dedupSummary) {
         if (!outputPane) return;
+        setPositions(highlighting);
         currentReportEntries = report.entries || [];
         // e.g. "ADT-A01", "CDA-CCD", "EDI-837P" - a filename that says
         // which message the crosswalk came from, since a user comparing
