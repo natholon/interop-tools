@@ -3,38 +3,39 @@ titled "Plan of Care" on History and Physical - one shared template, not
 two) -> DocumentReference+Binary (the narrative) plus one `CarePlan` with
 one `.activity[]` per recognized planned entry.
 
-**No C-CDA on FHIR page covers this section**, and unlike Family History
-the target resource is not an obvious fit either: C-CDA allows a wide
-variety of entry classes here (Planned Act/Encounter/Observation/Procedure/
-Medication Activity/Supply, Instruction, Appointment), most meaning "an
-activity intended, not yet done". **`CarePlan.activity[]` is the disclosed
-choice**: it is designed to hold a heterogeneous list of planned activities
-without forcing each into its own resource, and
-`CarePlanActivityDetail.kind` exists to hint at what an item *would*
-materialize as without building it.
+**No C-CDA on FHIR page covers this section**, and the target resource is
+not an obvious fit either: C-CDA allows a wide variety of entry classes
+here, most meaning "an activity intended, not yet done".
+**`CarePlan.activity[]` is the disclosed choice**: it is designed to hold a
+heterogeneous list of planned activities without forcing each into its own
+resource, and `CarePlanActivityDetail.kind` exists to hint at what an item
+would materialize as without building it.
 
-Scoped to the two moodCode-classified shapes confirmed against real HL7
-C-CDA-Examples:
-- Planned Observation (...4.44) in `<observation moodCode="RQO">`
-- Planned Procedure (...4.41) in `<procedure moodCode="RQO">` - field-for-
-  field identical, just a different outer element.
+Every recognized shape carries the same code/statusCode/effectiveTime, so
+one extraction serves them all; `_RECOGNIZED_ENTRY_SHAPES` maps each to its
+wrapper element and its `kind`. Note two shapes share the `act` tag and two
+share `substanceAdministration`, so dispatch is by templateId, not tag.
 
-Note the Planned Observation example uses `effectiveTime` with
-`<center value="..."/>`, the fourth legal IVL_TS shape (see
-`parser.py::ivl_ts_bounds`).
+**`kind` is a judgement call, not a mapping.** The value set is fixed
+(Appointment, CommunicationRequest, DeviceRequest, MedicationRequest,
+NutritionOrder, Task, ServiceRequest, VisionPrescription) and no crosswalk
+exists. Planned Encounter -> Appointment, Planned Medication/Immunization
+Activity -> MedicationRequest and Instruction -> CommunicationRequest each
+have one obvious counterpart. Everything else keeps the generic
+ServiceRequest, including **Planned Supply**: the value set has no
+SupplyRequest, and a C-CDA supply covers both durable equipment and
+medication, so DeviceRequest would be right only half the time. The code,
+status and schedule are carried either way; only the hint is coarse.
 
-Planned Act/Encounter/Medication Activity/Supply, Instruction and
-Appointment are **not** parsed - each has a genuinely different entry shape
-(a Planned Medication Activity would need its own dosage logic mirroring
-`medications.py`), disclosed as a follow-up rather than guessed at.
+`.status`/`.intent` are likewise self-derived: the CarePlan is fixed
+`status="active"`/`intent="plan"`, since nothing here says whether a plan
+is still current. Per-activity `.status` comes from the entry's own
+`statusCode` (not moodCode, which is uniformly RQO and carries no
+distinction), falling back to `"unknown"`.
 
-`.status`/`.intent`/`.kind` are disclosed, self-derived, with no IG
-crosswalk to check against: the CarePlan is fixed `status="active"`/
-`intent="plan"` (nothing here says whether a plan is still current), and
-every activity's `.kind` is fixed to `"ServiceRequest"` - the closest
-general-purpose fit for "a planned clinical service". Per-activity
-`.status` comes from the entry's own `statusCode` (not moodCode, which is
-uniformly RQO and carries no distinction), falling back to `"unknown"`."""
+Scope limit: Planned Coverage (...22.4.129) is not recognized - it plans
+insurance coverage rather than a clinical activity, and none of the `kind`
+codes describes one."""
 
 import uuid
 
@@ -50,8 +51,14 @@ from app.provenance.location import xpath_location
 SECTION_TEMPLATE_ID = PLAN_OF_TREATMENT_TEMPLATE_ID
 PLANNED_OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.44"
 PLANNED_PROCEDURE_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.41"
+PLANNED_ENCOUNTER_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.40"
+PLANNED_MEDICATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.42"
+PLANNED_IMMUNIZATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.120"
+PLANNED_SUPPLY_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.43"
+PLANNED_INTERVENTION_ACT_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.146"
+INSTRUCTION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.20"
 
-_ACTIVITY_KIND = "ServiceRequest"
+_DEFAULT_ACTIVITY_KIND = "ServiceRequest"
 
 # Disclosed, self-derived - see module docstring for why no official
 # crosswalk exists to verify this against.
@@ -65,12 +72,34 @@ STATUS_MAP = {
 }
 _DEFAULT_STATUS = "unknown"
 
-# (entry_tag, templateId) - both confirmed real shapes, see module
-# docstring. Order doesn't matter; both feed the identical extraction
-# logic in _build_activity_detail.
+# (entry_tag, templateId, CarePlanActivityDetail.kind). Every wrapper
+# element name and templateId was read off the published C-CDA
+# StructureDefinitions; all of them carry the same code/statusCode/
+# effectiveTime shape, which is why one extraction serves them all.
+#
+# `kind` is a hint at what a planned item *would* materialize as. The
+# value set is fixed (Appointment, CommunicationRequest, DeviceRequest,
+# MedicationRequest, NutritionOrder, Task, ServiceRequest,
+# VisionPrescription) and no IG crosswalk exists, so three of these are
+# unambiguous and three are disclosed judgement calls:
+#   - Planned Encounter -> Appointment, Planned Medication/Immunization
+#     Activity -> MedicationRequest, Instruction -> CommunicationRequest
+#     each have one obvious counterpart.
+#   - Planned Observation/Procedure/Intervention Act keep the generic
+#     ServiceRequest default.
+#   - **Planned Supply also keeps ServiceRequest**: the value set has no
+#     SupplyRequest, and a C-CDA supply covers both durable equipment and
+#     medication, so DeviceRequest would be right only half the time. The
+#     code, status and schedule are still carried; only the hint is coarse.
 _RECOGNIZED_ENTRY_SHAPES = (
-    ("observation", PLANNED_OBSERVATION_TEMPLATE_ID),
-    ("procedure", PLANNED_PROCEDURE_TEMPLATE_ID),
+    ("observation", PLANNED_OBSERVATION_TEMPLATE_ID, _DEFAULT_ACTIVITY_KIND),
+    ("procedure", PLANNED_PROCEDURE_TEMPLATE_ID, _DEFAULT_ACTIVITY_KIND),
+    ("encounter", PLANNED_ENCOUNTER_TEMPLATE_ID, "Appointment"),
+    ("substanceAdministration", PLANNED_MEDICATION_TEMPLATE_ID, "MedicationRequest"),
+    ("substanceAdministration", PLANNED_IMMUNIZATION_TEMPLATE_ID, "MedicationRequest"),
+    ("supply", PLANNED_SUPPLY_TEMPLATE_ID, _DEFAULT_ACTIVITY_KIND),
+    ("act", PLANNED_INTERVENTION_ACT_TEMPLATE_ID, _DEFAULT_ACTIVITY_KIND),
+    ("act", INSTRUCTION_TEMPLATE_ID, "CommunicationRequest"),
 )
 
 
@@ -80,14 +109,17 @@ def _resolve_status(element) -> str:
     return STATUS_MAP.get(code, _DEFAULT_STATUS)
 
 
-def _build_activity_detail(planned_element, entry_tag: str, index: int, resource_id: str | None = None, recorder=None):
+def _build_activity_detail(
+    planned_element, entry_tag: str, index: int, kind: str = _DEFAULT_ACTIVITY_KIND,
+    resource_id: str | None = None, recorder=None,
+):
     code_element = find_child(planned_element, "code")
     code = build_codeable_concept_from_cd(code_element)
     if code is None:
         return None
 
     status = _resolve_status(planned_element)
-    detail = CarePlanActivityDetail(code=code, status=status, kind=_ACTIVITY_KIND)
+    detail = CarePlanActivityDetail(code=code, status=status, kind=kind)
     entry_base = xpath_location(f"entry[{index}]", entry_tag)
 
     if recorder and resource_id:
@@ -118,8 +150,10 @@ def _build_activity_detail(planned_element, entry_tag: str, index: int, resource
         recorder.record_inferred(
             resource_id,
             f"activity[{index}].detail.kind",
-            'Fixed to "ServiceRequest" - the closest general-purpose CarePlanActivityKind fit for a planned clinical activity this app never materializes as its own separate resource.',
-            _ACTIVITY_KIND,
+            f'Chosen from the entry\'s own template ("{entry_tag}"), not read from a source field - '
+            "CarePlanActivityKind is a hint at what this planned item would materialize as, and no IG "
+            "crosswalk defines it.",
+            kind,
         )
 
     effective_time = find_child(planned_element, "effectiveTime")
@@ -165,11 +199,13 @@ def build_plan_of_treatment_resources(section, patient_id: str, recorder=None) -
     care_plan_id = str(uuid.uuid4())
     activities = []
     for index, entry in enumerate(find_all(section, "entry")):
-        for entry_tag, template_id in _RECOGNIZED_ENTRY_SHAPES:
+        for entry_tag, template_id, kind in _RECOGNIZED_ENTRY_SHAPES:
             planned_element = find_child(entry, entry_tag)
             if planned_element is None or not has_template_id(planned_element, template_id):
                 continue
-            detail = _build_activity_detail(planned_element, entry_tag, index, resource_id=care_plan_id, recorder=recorder)
+            detail = _build_activity_detail(
+                planned_element, entry_tag, index, kind, resource_id=care_plan_id, recorder=recorder
+            )
             if detail is not None:
                 activities.append(CarePlanActivity(detail=detail))
             break

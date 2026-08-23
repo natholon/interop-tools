@@ -72,7 +72,16 @@ from app.cda.narrative_sections import (
     SOCIAL_HISTORY_TEMPLATE_ID,
 )
 from app.cda.parser import CDA_NS, parse_document
-from app.cda.plan_of_treatment import PLANNED_OBSERVATION_TEMPLATE_ID, PLANNED_PROCEDURE_TEMPLATE_ID
+from app.cda.plan_of_treatment import (
+    INSTRUCTION_TEMPLATE_ID,
+    PLANNED_ENCOUNTER_TEMPLATE_ID,
+    PLANNED_IMMUNIZATION_TEMPLATE_ID,
+    PLANNED_INTERVENTION_ACT_TEMPLATE_ID,
+    PLANNED_MEDICATION_TEMPLATE_ID,
+    PLANNED_OBSERVATION_TEMPLATE_ID,
+    PLANNED_PROCEDURE_TEMPLATE_ID,
+    PLANNED_SUPPLY_TEMPLATE_ID,
+)
 from app.cda.social_history import BIRTH_SEX_TEMPLATE_ID, GENDER_IDENTITY_TEMPLATE_ID, OBSERVATION_TEMPLATE_ID as SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID
 from app.cda.social_history import SMOKING_STATUS_TEMPLATE_ID
 from app.cda.problems import (
@@ -1409,10 +1418,24 @@ def _random_family_history_entry(rng: random.Random) -> str:
     )
 
 
+# (entry_tag, templateId, classCode, code, display) for the planned entry
+# shapes beyond Observation/Procedure - see app/cda/plan_of_treatment.py's
+# own table for what each maps to.
+_OTHER_PLANNED_SHAPES = [
+    ("encounter", PLANNED_ENCOUNTER_TEMPLATE_ID, "ENC", "185349003", "Encounter for check up"),
+    ("substanceAdministration", PLANNED_MEDICATION_TEMPLATE_ID, "SBADM", "432102000", "Administration of substance"),
+    ("substanceAdministration", PLANNED_IMMUNIZATION_TEMPLATE_ID, "SBADM", "33879002", "Administration of vaccine"),
+    ("supply", PLANNED_SUPPLY_TEMPLATE_ID, "SPLY", "705843002", "Provision of equipment"),
+    ("act", PLANNED_INTERVENTION_ACT_TEMPLATE_ID, "ACT", "410321003", "Intervention"),
+    ("act", INSTRUCTION_TEMPLATE_ID, "ACT", "311401005", "Patient education"),
+]
+
+
 def _random_plan_of_treatment_entry(rng: random.Random) -> str:
-    """A structured Planned Observation or Planned Procedure entry (see
-    app/cda/plan_of_treatment.py) - splits between the two recognized
-    entry shapes, direct fuzz coverage of both."""
+    """A structured planned entry (see app/cda/plan_of_treatment.py) -
+    splits across every recognized shape, so the fuzz covers each one's
+    own CarePlanActivityDetail.kind and the templateId disambiguation two
+    of the tags need."""
     point_in_time, _ = random_time_range(rng, min_days=1, max_days=90)
     status_code = rng.choice(("active", "completed", "cancelled", "suspended")) if maybe(rng, 0.85) else "new"
     if maybe(rng, 0.5):
@@ -1425,14 +1448,27 @@ def _random_plan_of_treatment_entry(rng: random.Random) -> str:
             f'<effectiveTime><center value="{format_hl7_datetime(point_in_time)[:8]}"/></effectiveTime>'
             "</observation></entry>"
         )
-    code, display = rng.choice(_PROCEDURE_CODES)
+    if maybe(rng, 0.5):
+        code, display = rng.choice(_PROCEDURE_CODES)
+        return (
+            f'<entry><procedure classCode="PROC" moodCode="RQO">'
+            f'<templateId root="{PLANNED_PROCEDURE_TEMPLATE_ID}"/>'
+            f'<code code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
+            f'<statusCode code="{status_code}"/>'
+            f'<effectiveTime value="{format_hl7_datetime(point_in_time)[:8]}"/>'
+            "</procedure></entry>"
+        )
+    # One of the other recognized shapes. Two of them share the "act" tag
+    # and two share "substanceAdministration", so generating these is what
+    # fuzzes templateId-based disambiguation within a tag.
+    entry_tag, template_id, class_code, code, display = rng.choice(_OTHER_PLANNED_SHAPES)
     return (
-        f'<entry><procedure classCode="PROC" moodCode="RQO">'
-        f'<templateId root="{PLANNED_PROCEDURE_TEMPLATE_ID}"/>'
+        f'<entry><{entry_tag} classCode="{class_code}" moodCode="RQO">'
+        f'<templateId root="{template_id}"/>'
         f'<code code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
         f'<statusCode code="{status_code}"/>'
         f'<effectiveTime value="{format_hl7_datetime(point_in_time)[:8]}"/>'
-        "</procedure></entry>"
+        f"</{entry_tag}></entry>"
     )
 
 

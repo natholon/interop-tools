@@ -1294,14 +1294,14 @@ def test_family_history_structured_organizer_varies_present_and_absent_across_se
     assert onset_age_seen
 
 
-def test_plan_of_treatment_structured_entry_varies_present_and_absent_and_both_shapes_occur():
-    # Plan of Treatment's own structured entry (see
-    # app/cda/plan_of_treatment.py) splits between a Planned Observation
-    # and a Planned Procedure entry shape - direct fuzz coverage that both
-    # occur, plus the deliberately-unrecognized statusCode's own "unknown"
-    # fallback.
+def test_plan_of_treatment_structured_entry_varies_present_and_absent_and_every_kind_occurs():
+    # Plan of Treatment's structured entry splits across every recognized
+    # shape (see app/cda/plan_of_treatment.py) - direct fuzz coverage that
+    # each one's own CarePlanActivityDetail.kind is reached, plus the
+    # deliberately-unrecognized statusCode's own "unknown" fallback.
     present = absent = 0
     statuses_seen = set()
+    kinds_seen = set()
     for seed in range(200):
         for xml_text in (
             generate_discharge_summary(random.Random(seed)),
@@ -1317,11 +1317,16 @@ def test_plan_of_treatment_structured_entry_varies_present_and_absent_and_both_s
                 assert care_plan.status == "active"
                 assert care_plan.intent == "plan"
                 for activity in care_plan.activity:
-                    assert activity.detail.kind == "ServiceRequest"
+                    kinds_seen.add(activity.detail.kind)
                     statuses_seen.add(activity.detail.status)
     assert present > 0 and absent > 0
     assert "unknown" in statuses_seen  # the deliberately-unrecognized statusCode branch
     assert len(statuses_seen) > 1
+    # Every kind the shape table assigns has to be reachable, or a shape is
+    # generated but never converts.
+    assert kinds_seen == {
+        "ServiceRequest", "Appointment", "MedicationRequest", "CommunicationRequest"
+    }, kinds_seen
 
 
 def test_social_history_patient_extensions_vary_across_seeds():

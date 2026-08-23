@@ -158,3 +158,35 @@ def test_without_recorder_still_works():
     section = _section(_HEADER + _PLANNED_OBSERVATION_ENTRY)
     resources = build_plan_of_treatment_resources(section, "p1")
     assert len(resources) == 3
+
+
+def test_every_recognized_entry_shape_maps_to_its_own_kind():
+    # All eight shapes carry the same code/statusCode/effectiveTime, so one
+    # extraction serves them all; what differs is CarePlanActivityDetail
+    # .kind. Two shapes share the "act" tag and two share
+    # "substanceAdministration", so this also proves the dispatch
+    # disambiguates by templateId rather than tag alone.
+    from app.cda.plan_of_treatment import _RECOGNIZED_ENTRY_SHAPES
+
+    entries = "".join(
+        f'<entry><{tag} classCode="ACT" moodCode="RQO"><templateId root="{template_id}"/>'
+        f'<code code="C{i}" codeSystem="2.16.840.1.113883.6.96" displayName="Planned {i}"/>'
+        f'<statusCode code="active"/>'
+        f'<effectiveTime value="20270101"/>'
+        f"</{tag}></entry>"
+        for i, (tag, template_id, _kind) in enumerate(_RECOGNIZED_ENTRY_SHAPES)
+    )
+    section = _section(entries)
+    care_plan = next(
+        r for r in build_plan_of_treatment_resources(section, "pat-1")
+        if r.get_resource_type() == "CarePlan"
+    )
+
+    assert len(care_plan.activity) == len(_RECOGNIZED_ENTRY_SHAPES)
+    assert [a.detail.kind for a in care_plan.activity] == [
+        kind for _tag, _tid, kind in _RECOGNIZED_ENTRY_SHAPES
+    ]
+    # Both act-tagged shapes resolved, to different kinds.
+    assert {"ServiceRequest", "Appointment", "MedicationRequest", "CommunicationRequest"} <= {
+        a.detail.kind for a in care_plan.activity
+    }
