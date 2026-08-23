@@ -456,7 +456,9 @@ def test_cda_reports_dropped_values():
     decisions = _cda_decisions("ccd_basic.xml")
     dropped = _by_location([d for d in decisions if d.kind == "dropped"])
     assert dropped, "a CCD drops real values - languageCode is never mapped"
-    assert any(loc.endswith("languageCode/@code") for loc in dropped)
+    # A wholly unmapped element reports once, naming the element rather
+    # than one row per attribute.
+    assert any(loc.endswith("/languageCode") for loc in dropped)
 
 
 def test_cda_transformed_values_are_not_reported_as_dropped():
@@ -485,8 +487,13 @@ def test_cda_code_system_is_reported_only_when_its_code_is_unmapped():
     dropped = set(_by_location(_cda_decisions("ccd_basic.xml")))
     # The Problem Observation's value/@code IS mapped, so its codeSystem is not a drop.
     assert not [loc for loc in dropped if loc.endswith("observation/value/@codeSystem")]
-    # ClinicalDocument/code is not mapped, so its codeSystem is reported with it.
-    assert any(loc.endswith("ClinicalDocument/code/@codeSystem") for loc in dropped)
+    # ClinicalDocument/code is not mapped at all, so it reports as one
+    # element-level row whose detail names every attribute it carried,
+    # codeSystem included.
+    doc_code = next(d for d in _cda_decisions("ccd_basic.xml")
+                    if d.source_location == "ClinicalDocument/code")
+    assert "@codeSystem=" in (doc_code.detail or "")
+    assert "@displayName=" in (doc_code.detail or "")
 
 
 def test_cda_narrative_block_reports_once_not_per_paragraph():
@@ -513,3 +520,31 @@ def test_cda_display_and_unit_are_not_reported_when_the_mapper_carried_them():
     medications = set(_by_location(_cda_decisions("ccd_medications_basic.xml")))
     assert not [loc for loc in medications if loc.endswith("routeCode/@displayName")]
     assert not [loc for loc in medications if loc.endswith("doseQuantity/@unit")]
+
+
+def test_cda_wholly_unmapped_element_reports_once_not_per_attribute():
+    """An unmapped <code> produced three rows (@code, @codeSystem,
+    @displayName) telling a reviewer one fact. The HL7v2 half already
+    reports a wholly unmapped field once; this brings C-CDA in line."""
+    dropped = _by_location(_cda_decisions("ccd_basic.xml"))
+    doc_code = dropped["ClinicalDocument/code"]
+    assert "@code=" in doc_code.detail and "@codeSystem=" in doc_code.detail
+    assert not [loc for loc in dropped if loc.startswith("ClinicalDocument/code/@")]
+
+
+def test_cda_repeated_shapes_collapse_with_a_count():
+    """A Vital Signs organizer with six readings drops six identical
+    statusCode facts. One row stating the count carries the same
+    information without burying the findings that differ."""
+    dropped = _by_location(_cda_decisions("ccd_vitals_basic.xml"))
+    key = next(loc for loc in dropped if loc.endswith("component/observation/statusCode"))
+    collapsed = dropped[key]
+    assert "occurrences" in (collapsed.detail or "")
+    assert "[" not in collapsed.source_location, "a collapsed row names the shape, not one occurrence"
+
+
+def test_cda_a_single_occurrence_keeps_its_exact_location():
+    """Collapsing must not cost precision where there is nothing to
+    collapse - one occurrence still names the indexed path it came from."""
+    dropped = _by_location(_cda_decisions("ccd_vitals_basic.xml"))
+    assert any("[" in loc for loc in dropped), dropped.keys()

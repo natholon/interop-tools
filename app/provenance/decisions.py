@@ -467,6 +467,72 @@ def scan_populated_cda_values(raw_text: str) -> list[_CdaLeaf]:
     return leaves
 
 
+def _element_path(leaf_path: str) -> str:
+    """The element a leaf sits on - its path without the trailing `@attr`
+    or `text()`."""
+    return leaf_path.rsplit("/", 1)[0]
+
+
+def _leaf_name(leaf: _CdaLeaf) -> str:
+    return f"@{leaf.name}" if leaf.name else "text()"
+
+
+def _is_consumed_qualifier(leaf: _CdaLeaf, siblings: list[_CdaLeaf], is_mapped) -> bool:
+    """A qualifier attribute is consumed only when the attribute it
+    qualifies, on the same element, was itself read - the conditional rule
+    all three formats share."""
+    qualified = CDA_QUALIFIER_OF.get(leaf.name)
+    if qualified is None:
+        return False
+    sibling = next((o for o in siblings if o.name == qualified), None)
+    return sibling is not None and is_mapped(sibling)
+
+
+def _shape_of(location: str) -> str:
+    """A location with its positional indices stripped, so the same kind of
+    drop in a repeating structure collapses onto one shape."""
+    return "/".join(part.split("[")[0] for part in location.split("/"))
+
+
+def _collapse_repeated_shapes(rows: list[tuple[str, str, str, str | None]]) -> list[MappingDecision]:
+    """One decision per *shape*, carrying how many occurrences it covers.
+
+    A Problems section with seven entries drops seven identical
+    `entry/act/id/@root` facts. Seven rows say nothing the first does not,
+    and they bury the findings that differ - so they collapse into one row
+    that states the count and lists the values it covers.
+    """
+    grouped: dict[str, list[tuple[str, str, str, str | None]]] = {}
+    for row in rows:
+        grouped.setdefault(_shape_of(row[0]), []).append(row)
+
+    decisions: list[MappingDecision] = []
+    for shape, group in grouped.items():
+        first_location, label_key, first_value, detail = group[0]
+        count = len(group)
+        if count == 1:
+            summary = f"{first_location} is present in the source but not mapped to any FHIR field."
+        else:
+            summary = (
+                f"{shape} is present {count} times in the source but not mapped to any FHIR field."
+            )
+            values = ", ".join(dict.fromkeys(repr(row[2]) for row in group))
+            detail = f"{count} occurrences, carrying {values}."
+        decisions.append(
+            MappingDecision(
+                id=_decision_id("dropped", shape),
+                kind="dropped",
+                summary=summary,
+                detail=detail,
+                source_location=first_location if count == 1 else shape,
+                field_label=resolve_cda_field_label(label_key),
+                lost_value=first_value,
+                citation=DROP_NOT_YET_CHECKED,
+            )
+        )
+    return decisions
+
+
 def _dropped_cda_decisions(
     report: CrosswalkReport,
     leaves: list[_CdaLeaf],
@@ -491,7 +557,6 @@ def _dropped_cda_decisions(
     carrying the same text are indistinguishable - so it errs toward
     under-reporting, the direction this register has to fail in.
     """
-    decisions: list[MappingDecision] = []
     narrative_sections_seen: set[str] = set()
 
     def is_mapped(leaf: _CdaLeaf) -> bool:
@@ -502,60 +567,63 @@ def _dropped_cda_decisions(
                     return True
         return leaf.value in mapped_values
 
+    by_element: dict[str, list[_CdaLeaf]] = {}
     for leaf in leaves:
-        if is_mapped(leaf):
+        by_element.setdefault(_element_path(leaf.path), []).append(leaf)
+
+    rows: list[tuple[str, str, str, str | None]] = []  # (location, label_key, value, detail)
+    for element_path, element_leaves in by_element.items():
+        reportable = [
+            leaf
+            for leaf in element_leaves
+            if not is_mapped(leaf)
+            and leaf.name not in CDA_STRUCTURAL_ATTRS
+            and not _is_consumed_qualifier(leaf, element_leaves, is_mapped)
+        ]
+        if not reportable:
             continue
-        if leaf.name in CDA_STRUCTURAL_ATTRS:
-            continue
-        qualified = CDA_QUALIFIER_OF.get(leaf.name)
-        if qualified is not None and leaf.tag:
-            # Consumed only if the attribute it qualifies, on this same
-            # element, was itself read - the same conditional rule the
-            # other two formats use.
-            sibling = next(
-                (o for o in leaves if o.path.rsplit("/@", 1)[0] == leaf.path.rsplit("/@", 1)[0]
-                 and o.name == qualified),
-                None,
-            )
-            if sibling is not None and is_mapped(sibling):
-                continue
-        if leaf.in_narrative:
-            # One decision per narrative block, not one per paragraph.
-            section = leaf.path.split(f"/{CDA_NARRATIVE_TAG}/", 1)[0]
+
+        narrative = reportable[0].in_narrative
+        if narrative:
+            # One row per narrative block, not one per paragraph or cell.
+            section = reportable[0].path.split(f"/{CDA_NARRATIVE_TAG}/", 1)[0]
             if section in narrative_sections_seen:
                 continue
             narrative_sections_seen.add(section)
-            decisions.append(
-                MappingDecision(
-                    id=_decision_id("dropped", f"{section}/text()"),
-                    kind="dropped",
-                    summary=f"{section}/text() narrative is not mapped to any FHIR field.",
-                    detail=(
-                        "C-CDA requires a section's narrative to restate its entries for human "
-                        "display. Only the entries are mapped; this block's own wording is not."
-                    ),
-                    source_location=f"{section}/text()",
-                    field_label=resolve_cda_field_label(f"{CDA_NARRATIVE_TAG}/text()"),
-                    lost_value=leaf.value,
-                    citation=DROP_NOT_YET_CHECKED,
+            rows.append(
+                (
+                    f"{section}/{CDA_NARRATIVE_TAG}()",
+                    f"{CDA_NARRATIVE_TAG}/text()",
+                    reportable[0].value,
+                    "C-CDA requires a section's narrative to restate its entries for human display. "
+                    "Only the entries are mapped; this block's own wording is not.",
                 )
             )
             continue
-        decisions.append(
-            MappingDecision(
-                id=_decision_id("dropped", leaf.path),
-                kind="dropped",
-                summary=f"{leaf.path} is present in the source but not mapped to any FHIR field.",
-                detail=f"It carried {leaf.value!r}.",
-                source_location=leaf.path,
-                field_label=resolve_cda_field_label(
-                    f"{leaf.tag}/@{leaf.name}" if leaf.name else f"{leaf.tag}/text()"
-                ),
-                lost_value=leaf.value,
-                citation=DROP_NOT_YET_CHECKED,
+
+        if len(reportable) == len(element_leaves):
+            # Nothing on this element was read. One row saying the element
+            # is unmapped tells a reviewer everything three rows for its
+            # @code/@codeSystem/@displayName would - the same rule the
+            # HL7v2 half already applies to a wholly unmapped field.
+            tag = reportable[0].tag
+            carried = ", ".join(f"{_leaf_name(leaf)}={leaf.value!r}" for leaf in reportable)
+            rows.append((element_path, f"{tag}/text()" if not tag else tag, reportable[0].value, f"Carried {carried}."))
+            continue
+
+        # Partially read: name the specific parts that were not, since the
+        # element as a whole *was* used for something.
+        for leaf in reportable:
+            rows.append(
+                (
+                    leaf.path,
+                    f"{leaf.tag}/@{leaf.name}" if leaf.name else f"{leaf.tag}/text()",
+                    leaf.value,
+                    f"It carried {leaf.value!r}.",
+                )
             )
-        )
-    return decisions
+
+    return _collapse_repeated_shapes(rows)
 
 
 # --- X12 EDI -----------------------------------------------------------
