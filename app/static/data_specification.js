@@ -36,6 +36,62 @@ function highlightJsonFragment(fragment) {
     );
 }
 
+// RFC 4180 field escaping: a field containing a comma, a double quote, or
+// any newline must be quoted, and embedded quotes doubled. All three are
+// genuinely reachable here - `reason` strings are full sentences with
+// commas, and clinical free text (an ORU value, an MDM document body)
+// can carry both quotes and newlines.
+function csvField(value) {
+    const str = value == null ? "" : String(value);
+    return /[",\r\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+// The crosswalk as CSV. Deliberately *lossless* rather than a pixel-copy
+// of the on-screen table: the table folds an inferred entry's `reason`
+// into the Source Location column and encodes direct-vs-inferred purely
+// as italics, neither of which survives into a data format. So reason and
+// derivation each get their own column - an export exists to be analyzed,
+// and conflating two different things into one column to mimic a visual
+// layout would make it worse at that job.
+function crosswalkToCsv(entries) {
+    const header = [
+        "Source Location",
+        "Source Field Name",
+        "FHIR Path",
+        "Source Value",
+        "FHIR Value",
+        "Derivation",
+        "Reason",
+    ];
+    const rows = entries.map((entry) => [
+        entry.source_location,
+        entry.field_label,
+        entry.fhir_path,
+        // Same fallback the table's own Source Value column uses, so the
+        // two can't disagree about what a plain (untransformed) copy shows.
+        displayedSourceValue(entry),
+        entry.value,
+        entry.derivation,
+        entry.reason,
+    ]);
+    // CRLF per RFC 4180.
+    return [header, ...rows].map((row) => row.map(csvField).join(",")).join("\r\n");
+}
+
+// source_value is only recorded when a mapper actually transforms the
+// field (a date reformatted, a code mapped, ...) - a plain copy never
+// sets it, since it would just duplicate `value` verbatim. For a direct
+// entry the untransformed source value *is* `value` in that case, so fall
+// back to it rather than leaving "Source Value" inconsistently blank
+// depending on whether that field happened to need reformatting. Inferred
+// entries have no real source field at all, so there's nothing to fall
+// back to. Top-level (not scoped to the DOMContentLoaded block) so both
+// the table renderer and the CSV export share one definition.
+function displayedSourceValue(entry) {
+    if (entry.derivation === "inferred") return null;
+    return entry.source_value ?? entry.value ?? null;
+}
+
 // Builds the HTML for one pane: `text` interleaved with `<mark>`-wrapped
 // spans at the given (start, end) offsets. `spans` must be pre-sorted by
 // start and non-overlapping (guaranteed by construction - see
@@ -94,6 +150,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const unsupportedBanner = document.getElementById("crosswalk-unsupported-banner");
     const tableWrapper = document.getElementById("crosswalk-table-wrapper");
     const tableBody = document.getElementById("crosswalk-table-body");
+    const downloadCsvBtn = document.getElementById("download-crosswalk-csv");
     const rawJson = document.getElementById("crosswalk-raw-json");
     const toast = document.getElementById("toast");
 
@@ -106,6 +163,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const tooltip = document.getElementById("xwalk-tooltip");
 
     let currentReportEntries = [];
+    let currentReportLabel = "crosswalk";
 
     let toastTimer;
     function showToast(message) {
@@ -147,6 +205,11 @@ document.addEventListener("DOMContentLoaded", () => {
         errorPane.append(strong, pre);
         errorPane.hidden = false;
         if (outputPane) outputPane.hidden = true;
+        // Stale entries must not stay downloadable behind a failed run -
+        // the same "toggle every pane, not just the obvious one" hazard
+        // index.html's own "Use Bundle above" button shipped once.
+        currentReportEntries = [];
+        if (downloadCsvBtn) downloadCsvBtn.hidden = true;
     }
 
     function showEditableSource() {
@@ -168,19 +231,6 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    function displayedSourceValue(entry) {
-        // source_value is only recorded when a mapper actually transforms
-        // the field (a date reformatted, a code mapped, ...) - a plain
-        // copy (e.g. a nested component's raw text) never sets it, since
-        // it would just duplicate `value` verbatim. For a direct entry,
-        // the untransformed source value *is* `value` in that case - fall
-        // back to it so "Source Value" isn't inconsistently blank
-        // depending on whether that particular field happened to need
-        // reformatting. Inferred entries have no real source field at
-        // all, so there's nothing to fall back to for them.
-        if (entry.derivation === "inferred") return null;
-        return entry.source_value ?? entry.value ?? null;
-    }
 
     function renderCrosswalkTable(entries) {
         if (!tableBody) return;
@@ -217,9 +267,39 @@ document.addEventListener("DOMContentLoaded", () => {
         if (rawJson) rawJson.hidden = true;
     }
 
+    function downloadCrosswalkCsv() {
+        if (!currentReportEntries.length) return;
+        // Leading BOM so Excel opens it as UTF-8 - without it, Excel
+        // guesses the local codepage and mangles any non-ASCII patient
+        // name (e.g. "José García"), which real generated samples produce.
+        const blob = new Blob(["﻿" + crosswalkToCsv(currentReportEntries)], {
+            type: "text/csv;charset=utf-8;",
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${currentReportLabel}-crosswalk.csv`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        showToast("Crosswalk downloaded.");
+    }
+
+    if (downloadCsvBtn) downloadCsvBtn.addEventListener("click", downloadCrosswalkCsv);
+
     function showCrosswalk(report, highlighting, dedupSummary) {
         if (!outputPane) return;
         currentReportEntries = report.entries || [];
+        // e.g. "ADT-A01", "CDA-CCD", "EDI-837P" - a filename that says
+        // which message the crosswalk came from, since a user comparing
+        // several downloads otherwise gets a folder of identical names.
+        currentReportLabel =
+            [report.message_type, report.trigger_event]
+                .filter(Boolean)
+                .join("-")
+                .replace(/[^A-Za-z0-9._-]+/g, "_") || "crosswalk";
+        if (downloadCsvBtn) downloadCsvBtn.hidden = currentReportEntries.length === 0;
 
         if (dedupSummaryEl) {
             if (dedupSummary) {

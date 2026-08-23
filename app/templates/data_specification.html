@@ -67,6 +67,10 @@
 <section id="crosswalk-output-pane" class="panel output-panel" aria-live="polite" {% if not crosswalk_result %}hidden{% endif %}>
     <div class="panel-head">
         <h2>Field detail</h2>
+        {# JS-only: the no-JS fallback below renders raw JSON, which is already
+           machine-readable, so this button is shown by showCrosswalk() rather
+           than server-rendered. #}
+        <button type="button" class="btn-panel-action" id="download-crosswalk-csv" hidden>Download CSV</button>
     </div>
     <div id="crosswalk-dedup-summary" class="dedup-summary" {% if not dedup_summary %}hidden{% endif %}>
         {% if dedup_summary %}

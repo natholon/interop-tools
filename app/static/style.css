@@ -300,7 +300,12 @@ button.is-busy .btn-label::before {
     }
 }
 
-.btn-copy {
+/* Small secondary action sitting in a .panel-head. .btn-copy is the
+   copy-to-clipboard case specifically; .btn-panel-action is the same
+   visual role under a neutral name (the Data Specification page's own
+   "Download CSV"), sharing one rule so the two can't drift apart. */
+.btn-copy,
+.btn-panel-action {
     font-size: 0.78rem;
     font-weight: 600;
     padding: 0.35rem 0.7rem;
