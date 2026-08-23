@@ -328,8 +328,18 @@ def build_identifiers(
             index = len(identifiers)
             identifiers.append(identifier)
             if recorder and resource_id and location_prefix:
+                # Point at the attribute the value actually came from, not
+                # the bare <id> element. cda_locator resolves an element
+                # path to its start tag, which it cannot always do for a
+                # childless <id> - so a mapped identifier looked unread and
+                # every CDA id reported as dropped data.
+                value_attribute = "@extension" if id_element.get("extension") else "@root"
                 recorder.record(
-                    resource_id, f"identifier[{index}].value", xpath_location(f"{location_prefix}[{index}]"), identifier.value
+                    resource_id,
+                    f"identifier[{index}].value",
+                    xpath_location(f"{location_prefix}[{index}]", value_attribute),
+                    identifier.value,
+                    source_value=id_element.get(value_attribute.lstrip("@")),
                 )
                 # `@root` drives .system whenever an `@extension` is present
                 # (build_identifier above). Recording only .value left the

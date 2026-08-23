@@ -47,6 +47,14 @@ _UNIVERSAL_ATTR_NAMES: dict[str, str] = {
     "displayName": "Display Name",
     "negationInd": "Negation Indicator",
     "moodCode": "Mood Code",
+    # An II's two halves. They mean the same thing wherever they appear -
+    # @root names the assigning authority (an OID), @extension the id
+    # within it - so they need no parent-tag disambiguation. Shortened the
+    # same way CX.1 is ("ID", not "ID Number") to stay readable in a narrow
+    # table column.
+    "root": "Assigning Authority",
+    "extension": "ID",
+    "codeSystem": "Coding System",
 }
 
 # "@code" alone is ambiguous - keyed by the tag immediately preceding it.

@@ -109,7 +109,10 @@ def test_ccd_basic_crosswalk_matches_known_field_values():
 
     identifier_entry = by_path["Bundle.entry[0].resource.identifier[0].value"]
     assert identifier_entry.value == "998991"
-    assert identifier_entry.source_location == xpath_location("recordTarget", "patientRole", "id[0]")
+    # Points at the attribute the value came from, not the bare <id>:
+    # cda_locator cannot always resolve a childless element, which made
+    # every mapped CDA identifier look unread.
+    assert identifier_entry.source_location == xpath_location("recordTarget", "patientRole", "id[0]", "@extension")
 
     family_entry = by_path["Bundle.entry[0].resource.name[0].family"]
     assert family_entry.value == "Betterhalf"
@@ -215,7 +218,7 @@ def test_ccd_header_multiplicities_records_correct_indices_for_repeating_fields(
     assert encounter_id0.value == "LOCALENC1"
     encounter_id1 = by_path["Bundle.entry[1].resource.identifier[1].value"]
     assert encounter_id1.value == "NATIONALENC1"
-    assert encounter_id1.source_location == xpath_location("componentOf/encompassingEncounter/id[1]")
+    assert encounter_id1.source_location == xpath_location("componentOf/encompassingEncounter/id[1]", "@extension")
 
     # This fixture's own encompassingEncounter/effectiveTime carries only a
     # <low>, no <high> - period.end must never appear.

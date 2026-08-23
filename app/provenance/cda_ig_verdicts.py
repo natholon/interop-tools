@@ -93,6 +93,27 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
         GAP,
         'Problem Observation "..id" maps as source value to Condition.identifier.',
     ),
+    # --- Procedure (CCDA-FHIR Procedure.csv) ----------------------------
+    "procedure/priorityCode": (NOT_SUPPORTED, 'Marked "not supported by target".'),
+    "procedure/methodCode": (NOT_SUPPORTED, 'Marked "not supported by target".'),
+    "entryRelationship/act/code": (
+        GAP,
+        'entryRelationship.act.code [Instruction] maps as source value to Procedure.followUp.',
+    ),
+    # --- Immunization (CCDA-FHIR Immunization.csv) ----------------------
+    # The Immunization Activity's own code is "not supported by target" in
+    # both the EVN and INT mood rows - the vaccine is carried by
+    # consumable/manufacturedMaterial/code, not by this one.
+    "entry/substanceAdministration/code": (
+        NOT_SUPPORTED,
+        'Immunization Activity ".code" is marked "not supported by target" in both mood rows.',
+    ),
+    "manufacturedMaterial/lotNumberText": (
+        NOT_SUPPORTED,
+        'Marked "not supported by target" for the INT-mood (MedicationRequest) case.',
+    ),
+    "substanceAdministration/approachSiteCode": (NOT_SUPPORTED, 'Marked "not supported by target".'),
+    "substanceAdministration/administrationUnitCode": (NOT_SUPPORTED, 'Marked "not supported by target".'),
 }
 
 
