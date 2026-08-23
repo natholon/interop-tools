@@ -86,7 +86,12 @@ def test_round_trips_through_real_converter(generator_fn, trigger_event):
     for seed in range(1000, 1020):
         bundle = convert_hl7_to_bundle(generator_fn(random.Random(seed)))
         resource_types = {e.resource.get_resource_type() for e in bundle.entry}
-        assert resource_types == {"Patient", "Encounter"}
+        # PV1-3/PV1-6 now materialize a chain of real Location resources
+        # (one per populated PL component, per the v2-to-FHIR PL[Location]
+        # map), so a generated message yields Locations too - how many
+        # depends on which components that seed populated.
+        assert {"Patient", "Encounter"} <= resource_types
+        assert resource_types <= {"Patient", "Encounter", "Location"}
 
 
 @pytest.mark.parametrize("generator_fn, trigger_event", _GENERATORS)

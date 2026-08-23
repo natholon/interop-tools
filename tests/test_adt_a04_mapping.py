@@ -20,4 +20,4 @@ def test_register_produces_open_outpatient_encounter():
     assert patient.name[0].family == "Green"
     assert encounter.status == "in-progress"
     assert encounter.class_fhir.code == "AMB"
-    assert encounter.location[0].location.display == "C100"
+    assert encounter.location[0].location.display == "CLINIC, C100"

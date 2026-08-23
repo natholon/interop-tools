@@ -25,24 +25,30 @@ def _by_location(decisions):
     return {d.source_location: d for d in decisions if d.source_location}
 
 
-def test_dropped_pl_components_are_reported():
-    # The reported real-world case: PV1-3 = C100^^A^GENHOSP loses Bed and
-    # Facility, because location_display reads only components 1-2.
+def test_pl_components_are_no_longer_dropped():
+    # PV1-3 = C100^^A^GENHOSP used to lose Bed and Facility, because
+    # location_display read only components 1-2. Now every populated
+    # component becomes its own Location in the IG's partOf chain, so the
+    # register must report nothing for PV1-3 at all - the register acting
+    # as a regression signal for the mapper fix.
     decisions = _decisions(
         _message(
             "PID|1||578324^^^MRN||Doe^Jane||19620305|F",
             "PV1|1|I|C100^^A^GENHOSP|||||||||||||||||V1",
         )
     )
+    assert not [loc for loc in _by_location(decisions) if loc.startswith("PV1-3")]
+
+
+def test_dropped_components_are_still_reported_for_unmapped_fields():
+    # The detection itself must still work - PID-5's Suffix/Prefix/Degree
+    # remain genuinely unmapped.
+    decisions = _decisions(
+        _message("PID|1||578324^^^MRN||Doe^Jane^Q^Jr^Dr||19620305|F", "PV1|1|I|C100|||||||||||||||||V1")
+    )
     by_location = _by_location(decisions)
-    assert by_location["PV1-3.3"].field_label == "Bed"
-    assert by_location["PV1-3.3"].lost_value == "A"
-    assert by_location["PV1-3.4"].field_label == "Facility"
-    assert by_location["PV1-3.4"].lost_value == "GENHOSP"
-    # Components 1-2 are genuinely consumed by the join, so they must NOT
-    # be reported - that is the JOINED_FIELDS allowance doing its job.
-    assert "PV1-3.1" not in by_location
-    assert "PV1-3.2" not in by_location
+    assert by_location["PID-5.4"].field_label == "Suffix"
+    assert by_location["PID-5.4"].lost_value == "Jr"
 
 
 def test_component_that_is_mapped_is_not_reported_as_dropped():
@@ -115,10 +121,13 @@ def test_decision_ids_are_stable_across_runs_and_values():
     )
     assert [d.id for d in first] == [d.id for d in again]
 
-    different_bed = _decisions(
-        _message("PID|1||578324^^^MRN||Doe^Jane||19620305|F", "PV1|1|I|C100^^Z^GENHOSP|||||||||||||||||V1")
+    different_suffix = _decisions(
+        _message("PID|1||578324^^^MRN||Doe^Jane^^Sr||19620305|F", "PV1|1|I|C100^^A^GENHOSP|||||||||||||||||V1")
     )
-    assert _by_location(first)["PV1-3.3"].id == _by_location(different_bed)["PV1-3.3"].id
+    baseline = _decisions(
+        _message("PID|1||578324^^^MRN||Doe^Jane^^Jr||19620305|F", "PV1|1|I|C100^^A^GENHOSP|||||||||||||||||V1")
+    )
+    assert _by_location(baseline)["PID-5.4"].id == _by_location(different_suffix)["PID-5.4"].id
 
 
 def test_scan_ignores_msh_and_non_composite_fields():
@@ -189,10 +198,10 @@ def test_rejecting_a_dropped_field_is_recorded_but_not_applied():
     # the mapper, not something conversion can act on. It must be
     # reported, never silently ignored.
     message = _message(
-        "PID|1||578324^^^MRN||Doe^Jane||19620305|F", "PV1|1|I|C100^^A^GENHOSP|||||||||||||||||V1"
+        "PID|1||578324^^^MRN||Doe^Jane^Q^Jr||19620305|F", "PV1|1|I|C100^^A^GENHOSP|||||||||||||||||V1"
     )
     bundle, decisions = _converted(message)
-    drop = next(d for d in decisions if d.source_location == "PV1-3.4")
+    drop = next(d for d in decisions if d.source_location == "PID-5.4")
 
     _, outcomes = apply_rejections(bundle, decisions, {drop.id})
     assert outcomes[0].applied is False

@@ -56,8 +56,10 @@ from fhir.resources.R4B.bundle import Bundle
 from app.generators.base import segment
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
-from app.transform.common import find_resource, format_hl7_ts
-from app.transform.hl7_common import build_msh, build_pid, reverse_cwe
+from fhir.resources.R4B.reference import Reference
+
+from app.transform.common import find_resource, find_resources, format_hl7_ts
+from app.transform.hl7_common import build_msh, build_pid, reverse_cwe, reverse_pl_field
 
 _AIG_LOCATION_ID_SYSTEM = "urn:interop-tools:location-id"
 
@@ -118,8 +120,12 @@ def _build_aip(index: int, practitioner) -> str:
     return segment("AIP", {1: str(index), 3: f"{identifier}^{family}^{given}"}, 3)
 
 
-def _build_ail(index: int, location) -> str:
-    return segment("AIL", {1: str(index), 3: location.name or ""}, 3)
+def _build_ail(index: int, location, locations_by_id: dict) -> str:
+    """AIL-3 is PL-shaped, so it reverses from the Location's own partOf
+    chain (see reverse_pl_field) rather than from .name - which the
+    forward mapper no longer sets for a PL-derived Location."""
+    pl = reverse_pl_field(Reference(reference=f"urn:uuid:{location.id}"), locations_by_id)
+    return segment("AIL", {1: str(index), 3: pl or (location.name or "")}, 3)
 
 
 def _build_aig(index: int, resource, resource_type: str) -> str:
@@ -168,6 +174,7 @@ class _BaseSiuBuilder(MessageBuilder):
         aip_segments = []
         ail_segments = []
         aig_segments = []
+        locations_by_id = {loc.id: loc for loc in find_resources(bundle, "Location")}
         for participant in appointment.participant or []:
             if not participant.actor or not participant.actor.reference:
                 continue
@@ -187,7 +194,7 @@ class _BaseSiuBuilder(MessageBuilder):
                 if is_aig_location:
                     aig_segments.append(_build_aig(len(aig_segments) + 1, resource, "Location"))
                 else:
-                    ail_segments.append(_build_ail(len(ail_segments) + 1, resource))
+                    ail_segments.append(_build_ail(len(ail_segments) + 1, resource, locations_by_id))
 
         segments = [msh, sch]
         if tq1:

@@ -1,6 +1,7 @@
 import uuid
 
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
+from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.encounter import Encounter
 from fhir.resources.R4B.humanname import HumanName
@@ -92,13 +93,114 @@ def build_patient(pid, recorder=None) -> Patient:
     return patient
 
 
+# PL (person location) -> a chain of Location resources, per the
+# v2-to-FHIR IG's own PL[Location] datatype ConceptMap (fetched as
+# machine-readable JSON from build.fhir.org, not paraphrased). Each
+# populated component becomes its OWN Location carrying the component
+# value as .identifier, a fixed .mode, and a .physicalType coding; the
+# referencing resource points at the most granular Location present, and
+# each links upward via .partOf.
+#
+# Ordered most granular -> least. The IG's ConceptMap indexes these
+# [1]..[6] in exactly this order.
+#
+# **Point of Care has no physicalType code**: the ConceptMap's own fixed
+# value for it is the literal placeholder "/extension??-poc/" - an
+# unresolved item in the IG itself, not a code. FHIR R4's
+# location-physical-type value set has no point-of-care concept either
+# (14 codes, none of them one). So physicalType is omitted for that level
+# rather than substituting a plausible-looking code the IG never
+# specified.
+_PL_LEVELS: tuple[tuple[int, str, str | None], ...] = (
+    (3, "Bed", "bd"),
+    (2, "Room", "ro"),
+    (8, "Floor", "lvl"),
+    (1, "Point of Care", None),
+    (7, "Building", "bu"),
+    (4, "Facility", "si"),
+)
+_PL_PHYSICAL_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/location-physical-type"
+_PL_MODE = "instance"
+_PL_IDENTIFIER_SYSTEM = "urn:interop-tools:hl7v2-location-id"
+
+
 def location_display(segment, field_num: int) -> str:
-    """Build a human-readable display string from a PL-shaped field (facility
-    + room, e.g. PV1-3, PV1-6, AIL-3). Shared across message types since PL
-    fields are formatted identically regardless of which segment they're in."""
-    facility = field_str(segment, field_num, component=1)
-    room = field_str(segment, field_num, component=2)
-    return " ".join(part for part in (facility, room) if part)
+    """Human-readable text for a PL-shaped field, for a Reference.display
+    beside the real Location reference.
+
+    Joins every populated component least-specific first ("GENHOSP, C100,
+    A"), the order locations are conventionally written in narrative. The
+    IG gives no guidance for display text - it specifies the Location
+    resources, not this string - so the ordering is this app's own choice,
+    stated rather than implied.
+
+    Previously this read only components 1-2 and mislabelled them
+    ("facility" for what is actually Point of Care; Facility is component
+    4), so "C100^^A^GENHOSP" displayed as just "C100"."""
+    parts = []
+    for component, _label, _code in reversed(_PL_LEVELS):
+        value = field_str(segment, field_num, component=component)
+        if value:
+            parts.append(value)
+    return ", ".join(parts)
+
+
+def build_location_chain_from_pl(segment, field_num: int, recorder=None) -> list[Location]:
+    """A PL field -> one Location per populated component, linked by
+    .partOf, ordered most granular first. The caller references
+    `chain[0]` (the most granular) and adds every returned Location to the
+    Bundle. Empty list when the field is empty.
+
+    **partOf order follows the IG's narrative, not its ConceptMap** - the
+    two disagree, and only one of them is self-consistent. The narrative
+    gives "Bed to Room to Floor to Point of Care to Building to Facility";
+    the machine-readable ConceptMap instead links Point of Care straight
+    to Facility and links Building to *itself* (`PL.7 ->
+    [5].partOf.reference(Location[5])`), which is impossible - a Location
+    cannot be its own parent. Treated as a defect in the ConceptMap and
+    the narrative followed, with the discrepancy stated here rather than
+    silently resolved."""
+    levels = []
+    for component, label, physical_type in _PL_LEVELS:
+        value = field_str(segment, field_num, component=component)
+        if value:
+            levels.append((component, label, physical_type, value))
+    if not levels:
+        return []
+
+    segment_id = field_str(segment, 0)
+    chain: list[Location] = []
+    for component, label, physical_type, value in levels:
+        location = Location(
+            id=str(uuid.uuid4()),
+            mode=_PL_MODE,
+            identifier=[Identifier(system=_PL_IDENTIFIER_SYSTEM, value=value)],
+        )
+        if physical_type:
+            location.physicalType = CodeableConcept(
+                coding=[Coding(system=_PL_PHYSICAL_TYPE_SYSTEM, code=physical_type)]
+            )
+        if recorder:
+            location_str = hl7_location(segment_id, field_num, component=component)
+            recorder.record(location.id, "identifier[0].value", location_str, value)
+            recorder.record_inferred(
+                location.id,
+                "mode",
+                f"Fixed to {_PL_MODE!r} for every PL level by the v2-to-FHIR PL[Location] map.",
+                _PL_MODE,
+            )
+            if physical_type:
+                recorder.record_inferred(
+                    location.id,
+                    "physicalType.coding[0].code",
+                    f"{label} is fixed to {physical_type!r} by the v2-to-FHIR PL[Location] map.",
+                    physical_type,
+                )
+        chain.append(location)
+
+    for child, parent in zip(chain, chain[1:]):
+        child.partOf = Reference(reference=f"urn:uuid:{parent.id}")
+    return chain
 
 
 def person_display(segment, field_num: int) -> str:

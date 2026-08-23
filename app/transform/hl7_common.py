@@ -137,3 +137,46 @@ def build_minimal_pv1(encounter) -> str | None:
         if visit_number:
             fields[19] = visit_number
     return segment("PV1", fields, 19)
+
+# PL component number per physicalType code, and the one level the IG
+# gives no code for. Reversing the chain means walking .partOf upward and
+# placing each Location's identifier back in its own PL component.
+_PHYSICAL_TYPE_TO_PL_COMPONENT = {"bd": 3, "ro": 2, "lvl": 8, "bu": 7, "si": 4}
+_POINT_OF_CARE_COMPONENT = 1
+
+
+def reverse_pl_field(location_reference, locations_by_id: dict) -> str:
+    """Rebuild a PL field from the Location chain the forward mapper
+    built, rather than from Reference.display.
+
+    Walking .partOf and restoring each identifier to its own component is
+    what makes PV1-3 round-trip exactly; the previous version wrote the
+    joined display string into component 1, which both lost the other
+    components and put a multi-part string where a receiver expects only
+    the point of care."""
+    reference = location_reference.reference if location_reference else None
+    if not reference:
+        # No resolvable chain - fall back to the display text, which at
+        # least preserves something readable.
+        return (location_reference.display if location_reference else None) or ""
+
+    components: dict[int, str] = {}
+    seen: set[str] = set()
+    location_id = reference.removeprefix("urn:uuid:")
+    while location_id and location_id in locations_by_id and location_id not in seen:
+        seen.add(location_id)
+        location = locations_by_id[location_id]
+        value = location.identifier[0].value if location.identifier else None
+        if value:
+            code = (
+                location.physicalType.coding[0].code
+                if location.physicalType and location.physicalType.coding
+                else None
+            )
+            components[_PHYSICAL_TYPE_TO_PL_COMPONENT.get(code, _POINT_OF_CARE_COMPONENT)] = value
+        parent = location.partOf.reference if location.partOf else None
+        location_id = parent.removeprefix("urn:uuid:") if parent else None
+
+    if not components:
+        return ""
+    return "^".join(components.get(i, "") for i in range(1, max(components) + 1))

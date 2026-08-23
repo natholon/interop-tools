@@ -23,7 +23,8 @@ def test_basic_fixture_maps_every_field():
 
     assert bundle.type == "collection"
     # Patient + Appointment + materialized Practitioner (AIP) + Location (AIL) + Device (AIG)
-    assert len(bundle.entry) == 5
+    # Grew by the extra Locations in AIL-3's own PL chain.
+    assert len(bundle.entry) == 8
 
     entries = _entries_by_type(bundle)
     patient = entries["Patient"].resource
@@ -50,7 +51,10 @@ def test_basic_fixture_maps_every_field():
     # The materialized Practitioner/Location/Device resources themselves
     assert practitioner.name[0].family == "Smith"
     assert practitioner.name[0].given == ["John"]
-    assert location.name == "W456 101"
+    # A PL-derived Location carries its component value as .identifier,
+    # not .name - .name is only set for the AIG (CWE-shaped) case.
+    assert location.identifier[0].value == "B"
+    assert location.physicalType.coding[0].code == "bd"
     assert device.deviceName[0].name == "Portable X-Ray"
     assert device.identifier[0].value == "EQ001"
     assert device.type.coding[0].code == "EQUIPMENT"  # AIG-4 category, preserved not just used to pick the branch
@@ -68,7 +72,7 @@ def test_basic_fixture_maps_every_field():
     assert practitioner_participant.actor.display == "Smith, John"
     assert practitioner_participant.type[0].coding[0].code == "ATND"
     assert location_participant.actor.reference == f"urn:uuid:{location.id}"
-    assert location_participant.actor.display == "W456 101"
+    assert location_participant.actor.display == "HOSP, W456, 101, B"
     assert location_participant.type is None
     assert device_participant.actor.reference == f"urn:uuid:{device.id}"
     assert device_participant.actor.display == "Portable X-Ray"

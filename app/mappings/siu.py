@@ -19,7 +19,7 @@ from app.hl7.parser import field_str, optional_segments, raw_field_str, require_
 from app.mappings.base import MessageMapper
 from app.mappings.common import (
     assemble_bundle,
-    build_location_from_pl,
+    build_location_chain_from_pl,
     build_patient,
     build_practitioner_from_xcn,
     build_reference_with_optional_display,
@@ -179,7 +179,13 @@ def _build_participants(
             Coding(system=_PARTICIPATION_TYPE_SYSTEM, code="ATND"),
         )
     for ail in ail_segments:
-        add_participant(build_location_from_pl(ail, 3, recorder=recorder), location_display(ail, 3), hl7_location("AIL", 3))
+        # AIL-3 is PL-shaped, so it yields a chain of Locations (one per
+        # populated component) rather than a single one - the participant
+        # references the most granular; the rest ride along via .partOf.
+        chain = build_location_chain_from_pl(ail, 3, recorder=recorder)
+        if chain:
+            extra_resources.extend(chain[1:])
+            add_participant(chain[0], location_display(ail, 3), hl7_location("AIL", 3))
     for aig in aig_segments:
         result = _build_aig_resource(aig, recorder=recorder)
         if result is not None:

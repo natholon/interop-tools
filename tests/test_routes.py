@@ -39,7 +39,8 @@ def test_api_convert_success():
     assert response.status_code == 200
     body = response.json()
     assert body["bundle"]["resourceType"] == "Bundle"
-    assert len(body["bundle"]["entry"]) == 2
+    # Patient + Encounter + the PV1-3 Location chain.
+    assert len(body["bundle"]["entry"]) == 6
 
 
 def test_api_convert_without_deduplicate_omits_deduplication_key():

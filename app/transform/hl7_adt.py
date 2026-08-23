@@ -56,11 +56,13 @@ from fhir.resources.R4B.bundle import Bundle
 from app.generators.base import segment
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
-from app.transform.common import find_resource, format_hl7_ts
-from app.transform.hl7_common import CLASS_TO_PATIENT_CLASS, build_msh, build_pid
+from app.transform.common import find_resource, find_resources, format_hl7_ts
+from app.transform.hl7_common import CLASS_TO_PATIENT_CLASS, build_msh, build_pid, reverse_pl_field
 
 
-def _build_pv1(encounter) -> str:
+
+def _build_pv1(encounter, locations_by_id: dict | None = None) -> str:
+    locations_by_id = locations_by_id or {}
     fields: dict[int, str] = {1: "1"}
     if encounter is None:
         return segment("PV1", fields, 45)
@@ -75,10 +77,10 @@ def _build_pv1(encounter) -> str:
         # is the current location - PV1-3.
         prior = next((loc for loc in encounter.location if loc.status == "completed"), None)
         current = next((loc for loc in encounter.location if loc.status != "completed"), None)
-        if prior is not None and prior.location and prior.location.display:
-            fields[6] = prior.location.display
-        if current is not None and current.location and current.location.display:
-            fields[3] = current.location.display
+        if prior is not None and prior.location:
+            fields[6] = reverse_pl_field(prior.location, locations_by_id)
+        if current is not None and current.location:
+            fields[3] = reverse_pl_field(current.location, locations_by_id)
 
     if encounter.participant:
         display = encounter.participant[0].individual.display if encounter.participant[0].individual else None
@@ -127,7 +129,8 @@ class _BaseAdtBuilder(MessageBuilder):
         msh, msh_dt = build_msh(bundle, "ADT", self.trigger_event)
         evn = self._build_evn(encounter, msh_dt)
         pid = build_pid(patient)
-        pv1 = _build_pv1(encounter)
+        locations_by_id = {loc.id: loc for loc in find_resources(bundle, "Location")}
+        pv1 = _build_pv1(encounter, locations_by_id)
 
         return "\r".join([msh, evn, pid, pv1]) + "\r"
 

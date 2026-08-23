@@ -21,7 +21,9 @@ def test_basic_fixture_maps_every_field():
     bundle = AdtA01Mapper().to_bundle(message)
 
     assert bundle.type == "collection"
-    assert len(bundle.entry) == 2
+    # Patient + Encounter + one Location per populated PV1-3 component
+    # (the PL chain the v2-to-FHIR PL[Location] map specifies).
+    assert len(bundle.entry) == 6
 
     entries = _entries_by_type(bundle)
     patient = entries["Patient"].resource
@@ -39,7 +41,7 @@ def test_basic_fixture_maps_every_field():
     assert encounter.status == "in-progress"
     assert encounter.class_fhir.code == "IMP"
     assert encounter.identifier[0].value == "V0001"
-    assert encounter.location[0].location.display == "W123 456"
+    assert encounter.location[0].location.display == "HOSP, W123, 456, A"
     assert encounter.participant[0].individual.display == "Smith, John"
     assert encounter.period.start.isoformat() == "2026-08-11T12:00:00+00:00"
 

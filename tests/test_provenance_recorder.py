@@ -134,8 +134,12 @@ def test_adt_a01_basic_crosswalk_matches_known_field_values():
     assert class_entry.value == "IMP"
     assert class_entry.source_value == "I"
 
-    location_entry = by_path["Bundle.entry[1].resource.location[0].location.display"]
-    assert location_entry.value == "W123 456"
+    # PV1-3 no longer records a display fact - it records one fact per
+    # PL component, each against its own Location resource in the chain.
+    bed = next(e for e in entries if e.source_location == hl7_location("PV1", 3, component=3))
+    assert bed.value == "A"
+    facility = next(e for e in entries if e.source_location == hl7_location("PV1", 3, component=4))
+    assert facility.value == "HOSP"
 
     participant_entry = by_path["Bundle.entry[1].resource.participant[0].individual.display"]
     assert participant_entry.value == "Smith, John"
@@ -171,22 +175,33 @@ def test_adt_a01_crosswalk_entries_carry_a_human_readable_field_label():
     assert status_entry.field_label is None
 
 
-def test_adt_a02_transfer_reindexes_location_provenance_after_insert():
-    # AdtA02Mapper inserts the prior location at index 0, shifting the
-    # current location (already recorded by build_encounter_core at
-    # location[0]) to location[1] - both facts must reflect the final,
-    # post-insert indices, not the stale pre-insert one.
+def test_adt_a02_transfer_records_both_location_chains_independently():
+    # This previously guarded a reindexing hazard: the prior location was
+    # inserted at Encounter.location[0], shifting the already-recorded
+    # current location to [1], so both display facts had to be re-recorded
+    # at their post-insert indices. That hazard is gone - PV1-3/PV1-6 now
+    # record per-component facts against their own Location resources, so
+    # no fact is keyed by a mutable Encounter.location index at all.
     message = parse_message(read_fixture("adt_a02_basic.hl7"))
     recorder = ProvenanceRecorder(source_format="HL7v2")
     bundle = AdtA02Mapper().to_bundle(message, recorder=recorder)
     entries = resolve_bundle_paths(bundle, recorder)
-    by_path = {e.fhir_path: e for e in entries}
 
-    assert by_path["Bundle.entry[1].resource.location[0].location.display"].source_location == hl7_location("PV1", 6)
-    assert by_path["Bundle.entry[1].resource.location[1].location.display"].source_location == hl7_location("PV1", 3)
-    # No stray fact left over for an index that no longer means what it
-    # used to (there must be exactly these two location facts, not three).
-    assert sum(1 for path in by_path if "location[" in path) == 2
+    current = [e for e in entries if (e.source_location or "").startswith("PV1-3.")]
+    prior = [e for e in entries if (e.source_location or "").startswith("PV1-6.")]
+    assert current, "PV1-3's own chain must be recorded"
+    assert prior, "PV1-6's own chain must be recorded"
+
+    # Each fact points at a real Location resource, and the two chains
+    # never share one - a transfer's prior and current locations are
+    # genuinely different places.
+    current_entries = {e.fhir_path.split(".resource.")[0] for e in current}
+    prior_entries = {e.fhir_path.split(".resource.")[0] for e in prior}
+    assert current_entries and prior_entries
+    assert not (current_entries & prior_entries)
+
+    # No Encounter.location fact is keyed by index any more.
+    assert not [e for e in entries if ".location[" in e.fhir_path and e.fhir_path.endswith(".display")]
 
 
 def test_adt_a11_cancel_admit_never_leaks_evn2_period_start_into_crosswalk():

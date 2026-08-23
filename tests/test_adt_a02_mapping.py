@@ -19,9 +19,9 @@ def test_transfer_adds_prior_location_history():
     assert len(encounter.location) == 2
     prior, current = encounter.location
     assert prior.status == "completed"
-    assert prior.location.display == "W123 456"
+    assert prior.location.display == "HOSP, W123, 456, A"
     assert current.status == "active"
-    assert current.location.display == "W456 101"
+    assert current.location.display == "HOSP, W456, 101, B"
 
 
 def test_transfer_without_prior_location_keeps_single_current_entry():
@@ -32,4 +32,4 @@ def test_transfer_without_prior_location_keeps_single_current_entry():
     encounter = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter"][0]
 
     assert len(encounter.location) == 1
-    assert encounter.location[0].location.display == "W456 101"
+    assert encounter.location[0].location.display == "HOSP, W456, 101, B"
