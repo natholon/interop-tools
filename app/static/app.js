@@ -538,7 +538,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
 
-    function renderCrosswalkTable(entries) {
+    function citationNode(citation) {
+    const cite = document.createElement("span");
+    cite.className = citation.authoritative ? "decision-cite" : "decision-cite is-unverified";
+    if (citation.url) {
+        const link = document.createElement("a");
+        link.href = citation.url;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = citation.title;
+        cite.appendChild(link);
+    } else {
+        cite.textContent = citation.title;
+    }
+    if (citation.note) {
+        cite.appendChild(document.createTextNode(` \u2014 ${citation.note}`));
+    }
+    return cite;
+}
+
+function renderCrosswalkTable(entries) {
         if (!tableBody) return;
         tableBody.innerHTML = "";
         for (const entry of entries) {
@@ -611,6 +630,13 @@ document.addEventListener("DOMContentLoaded", () => {
                     : "decision-badge decision-badge-direct";
                 badge.textContent = transformed ? "Transformed" : "Direct copy";
                 decisionCell.appendChild(badge);
+                // A transformed value was governed by something - a
+                // ConceptMap, a code table, a datatype's own format rules,
+                // or a disclosed local decision. Cite it, so the row says
+                // why the value changed rather than only that it did.
+                if (transformed && entry.transform_citation) {
+                    decisionCell.appendChild(citationNode(entry.transform_citation));
+                }
             }
 
             tr.append(locationCell, fieldNameCell, pathCell, sourceValueCell, valueCell, decisionCell);

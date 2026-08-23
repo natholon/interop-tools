@@ -12,6 +12,7 @@ findings into a FHIR `OperationOutcome`."""
 from typing import Literal
 
 from pydantic import BaseModel
+from app.provenance.citations import Citation
 
 SourceFormat = Literal["HL7v2", "CDA", "EDI"]
 Derivation = Literal["direct", "inferred"]
@@ -39,6 +40,12 @@ class ProvenanceEntry(BaseModel):
     derivation: Derivation = "direct"
     source_location: str | None = None
     field_label: str | None = None
+    # What governs a transformed value - the ConceptMap, code table or
+    # datatype rule that turned source_value into value. Only set for a
+    # direct entry whose two values genuinely differ; None where nothing
+    # has been checked, so the crosswalk shows the transformation without
+    # claiming a source for it. See app/provenance/transform_citations.py.
+    transform_citation: Citation | None = None
     reason: str | None = None
     source_value: str | None = None
     value: str | None = None

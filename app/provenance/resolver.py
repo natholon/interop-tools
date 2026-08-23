@@ -13,6 +13,7 @@ from app.provenance.hl7_field_names import resolve_hl7_field_label
 from app.provenance.hl7_locator import parse_hl7_location
 from app.provenance.models import ProvenanceEntry
 from app.provenance.recorder import ProvenanceRecorder
+from app.provenance.transform_citations import citation_for
 
 
 def _resolve_field_label(source_format: str, source_location: str | None) -> str | None:
@@ -38,6 +39,18 @@ def _resolve_field_label(source_format: str, source_location: str | None) -> str
     if source_format == "CDA":
         return resolve_cda_field_label(source_location)
     return None
+
+
+def _resolve_transform_citation(source_format, fhir_path, fact):
+    """Only a direct fact whose recorded source value genuinely differs
+    from what was built counts as transformed - the same test the
+    crosswalk's own "Transformed" badge applies, kept here so the two
+    cannot disagree about which rows claim a citation."""
+    if fact.derivation != "direct":
+        return None
+    if fact.source_value is None or fact.source_value == fact.value:
+        return None
+    return citation_for(source_format, fhir_path)
 
 
 def resolve_bundle_paths(bundle: Bundle, recorder: ProvenanceRecorder) -> list[ProvenanceEntry]:
@@ -76,6 +89,9 @@ def resolve_bundle_paths(bundle: Bundle, recorder: ProvenanceRecorder) -> list[P
                 derivation=fact.derivation,
                 source_location=fact.source_location,
                 field_label=_resolve_field_label(recorder.source_format, fact.source_location),
+                transform_citation=_resolve_transform_citation(
+                    recorder.source_format, fhir_path, fact
+                ),
                 reason=fact.reason,
                 source_value=fact.source_value,
                 value=fact.value,
