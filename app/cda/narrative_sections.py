@@ -1,79 +1,37 @@
-"""Narrative-only C-CDA sections -> DocumentReference + Binary - the
-Discharge Summary/History and Physical follow-up that closes their own
-long-disclosed gap (Hospital Course, Plan of Treatment, and H&P's own nine
-required narrative sections were all previously silently skipped, see
-CLAUDE.md's own prior disclosure).
+"""Narrative-only C-CDA sections -> DocumentReference + Binary.
 
-**Why DocumentReference+Binary, not a full FHIR-Document Bundle(type=
-"document")+Composition** - confirmed with the user directly, not assumed:
-`Composition.author` is FHIR-required (1..1+) and this app has never parsed
-`ClinicalDocument/author` at all; a real Bundle(type="document") redesign
-would also ripple into app/dedup.py, app/provenance/, app/transform/
-cda_*.py, and every existing test asserting Bundle.type=="collection" - a
-much larger, cross-cutting undertaking than this slice. Instead, each
-present narrative section becomes its own DocumentReference (LOINC-coded
-`.type`, read live from the section's own real `<code>`, not hardcoded)
-referencing a Binary (the extracted plain-text narrative) - mirroring this
-app's own already-established MDM/TXA -> DocumentReference+Binary pattern
-(app/mappings/mdm.py::build_document_reference/_build_binary_from_obx)
-exactly. Purely additive: Bundle.type stays "collection", nothing about any
-other pillar changes.
+**Why not a FHIR-Document Bundle(type="document") + Composition**:
+`Composition.author` is required (1..1+) and this app never parses
+`ClinicalDocument/author`; the redesign would also ripple into
+app/dedup.py, app/provenance/, app/transform/cda_*.py and every test
+asserting `Bundle.type == "collection"`. Instead each section becomes a
+DocumentReference (LOINC `.type` read live from the section's own
+`<code>`) referencing a Binary holding the extracted plain text - the
+same pattern app/mappings/mdm.py already uses for TXA. Purely additive.
 
-**Verified against the real HL7 C-CDA-Examples GitHub documents** (`Documents/
-Discharge Summary/Discharge_Summary.xml`, `Documents/History and Physical/
-History_and_Physical.xml`), not guessed - both the templateId/LOINC pairs
-below and the real narrative shapes (`<paragraph>`, `<list>`/`<item>`,
-`<table>`, plain mixed text) `extract_narrative_text` handles. **A genuine
-gotcha found during that research**: four of these sections do NOT live in
-the `2.16.840.1.113883.10.20.22.2.x` namespace every other section in this
-app uses - Hospital Course/History of Present Illness/Review of Systems are
-legacy IHE PCC templates (`1.3.6.1.4.1.19376.1.5.3.1.3.x`), Physical Exam/
-General Status are legacy HITSP/C32 templates (`2.16.840.1.113883.10.20.2.x`
-- one OID segment shorter than the native C-CDA ones, easy to transcribe
-wrong) - both root trees confirmed directly against the real example
-documents' own `<templateId root="...">` values, not assumed from the C-CDA
-2.1 IG's own naming conventions alone.
+**templateId gotcha**: four of these do NOT live in the
+`2.16.840.1.113883.10.20.22.2.x` namespace every other section uses.
+Hospital Course/History of Present Illness/Review of Systems are legacy
+IHE PCC (`1.3.6.1.4.1.19376.1.5.3.1.3.x`); Physical Exam/General Status
+are legacy HITSP/C32 (`2.16.840.1.113883.10.20.2.x` - one OID segment
+shorter than the native ones, easy to transcribe wrong). Both confirmed
+against the real HL7 C-CDA-Examples documents, which also pinned the
+narrative shapes `extract_narrative_text` handles (`<paragraph>`,
+`<list>`/`<item>`, `<table>`, plain mixed text).
 
-**Plan of Treatment and "Plan of Care" are the same template, not two**:
-`2.16.840.1.113883.10.20.22.2.10` (LOINC 18776-5) is required by both
-Discharge Summary and History and Physical - real documents just title it
-differently ("PLAN OF CARE" on H&P, confirmed directly in the real fetched
-example) - so registering it once in SECTION_BUILDERS covers both document
-types for free, the same "one shared templateId, multiple document types"
-shape Problems/Medications/etc. already established.
+**Plan of Treatment and "Plan of Care" are one template**, not two
+(`2.16.840.1.113883.10.20.22.2.10`, LOINC 18776-5) - real documents just
+title it differently - so registering it once covers both document types.
 
-**Three of these eleven registered templateIds - Plan of Treatment, Social
-History, Family History - can carry real structured entries in the wild**
-(a Plan of Care Activity Observation, Social History/Smoking Status
-Observations, a Family History Organizer with member Observations,
-confirmed by inspecting the real fetched examples' own entry content) -
-this slice deliberately does not parse any of them; the narrative
-DocumentReference is the only representation added here, disclosed as a
-natural next slice rather than attempted, the same "map the general case
-now, disclose the special case as a later slice" precedent this app's
-Vitals/Results sections already established for their own deferred
-grouping special cases. **That follow-up slice has since shipped**: see
-`app/cda/social_history.py`/`family_history.py`/`plan_of_treatment.py`,
-each of which overrides this module's own `SECTION_BUILDERS` registration
-for its one templateId with a combined builder that still calls
-`build_narrative_document_reference` internally (the narrative pair keeps
-being built unconditionally) *and* parses the section's own real
-structured entries into `Observation`/`FamilyMemberHistory`/
-`CarePlan.activity[]` resources alongside it, with full provenance
-recording - not a redesign of this module, just a second registration
-layered on top of it for those three templateIds specifically.
-
-**New validation rules for these sections (`cda.narrative-section-missing-
-text`) and provenance instrumentation (`.type`/`.description`/`Binary.data`
-facts) both shipped as immediate follow-up slices** - see
-`app/cda/validation.py`'s and this module's own recorder-aware code for
-each. **Bidirectional transform (regenerating these sections on a FHIR ->
-C-CDA reverse pass) shipped as a third follow-up slice too** - see
-`app/transform/cda_ccd.py::_build_narrative_section`, which resolves which
-of these twelve templateIds to regenerate via `LOINC_TO_TEMPLATE_ID` (this
-module's own reverse lookup, below) keyed off
-`DocumentReference.type.coding[0].code` - the one signal a bare FHIR
-DocumentReference reliably carries back to its real originating section."""
+Plan of Treatment, Social History, and Family History can also carry real
+structured entries. Those are parsed by app/cda/social_history.py/
+family_history.py/plan_of_treatment.py, which override this module's
+SECTION_BUILDERS registration with a builder that still calls
+`build_narrative_document_reference` and adds structured resources
+alongside it. Validation (`cda.narrative-section-missing-text`),
+provenance, and reverse transform (app/transform/cda_ccd.py::
+_build_narrative_section, keyed off `DocumentReference.type.coding[0]`)
+all cover these sections too."""
 
 import base64
 import uuid

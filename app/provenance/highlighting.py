@@ -1,125 +1,40 @@
-"""Orchestrates the Data Specification page's correlated highlighting: for
-an already-built `Bundle`/`CrosswalkReport` pair, resolves every direct
-`ProvenanceEntry` to a character span in both the raw source text and the
-pretty-printed FHIR JSON text, so the frontend can wrap matching spans in
-same-colored `<mark>` tags.
+"""Resolves every direct `ProvenanceEntry` to a character span in both the
+raw source text and the pretty-printed FHIR JSON, so the Data
+Specification page can wrap matching spans in same-colored `<mark>` tags.
 
-Deliberately a post-processing step over an already-resolved
-`CrosswalkReport` - `app/provenance/{models,recorder,resolver,dispatch}.py`
-and every existing test of them stay completely untouched. Called only
-from `app/routes/data_specification.py`.
+A post-processing step over an already-resolved `CrosswalkReport`, so
+`app/provenance/{models,recorder,resolver,dispatch}.py` stay untouched.
+Called only from `app/routes/data_specification.py`.
 
-**The occurrence-claiming problem**: a `source_location` string alone
-(e.g. `"OBX-5"`, `"SV1-1.2"`, `"act/entryRelationship[SUBJ]/observation/
-value/@code"`) doesn't say *which* physical occurrence of a repeating
-segment/element it came from when a message has more than one (several
-OBX segments across several DiagnosticReports, several LX/SV1 line items
-within one Claim, several Concern Act entries in a Problems section) -
-harmless when the crosswalk was just a table of strings, but now needs to
-resolve to one specific span. Fixed via a **claim key** = `(root_key,
-scope_hint, index_tuple)`, where `root_key` is the segment id (HL7v2/EDI)
-or first path segment (CDA), `scope_hint` disambiguates same-named C-CDA
-sections (see `app/provenance/cda_locator.py`'s own docstring - `None` for
-HL7v2/EDI, which have no equivalent collision), and `index_tuple` is the
-`Bundle.entry[N]` index plus - for EDI only - a `.item[N]` index when
-present (see `_index_tuple`'s own docstring for why only these two, not
-every bracketed integer in `fhir_path`). Entries are processed in the
-order `CrosswalkReport.entries` already lists them (confirmed, by reading
-`app/provenance/recorder.py`/`resolver.py` directly, to preserve the exact
-order `.record()` was called during mapping - every mapper in this
-codebase walks its own source segments/elements in document order); the
-first entry with a given claim key claims the next unclaimed physical
-occurrence of `root_key`, and every later entry sharing that same claim
-key reuses it.
+Three correctness problems drive the design, each found by a real failure:
 
-**The shared-physical-segment problem, and how it's resolved**: some
-fields belong to a genuinely *different* resource than the one whose own
-segment they're physically embedded in - ORU's OBX-16 (Responsible
-Observer) builds a separate `Practitioner` resource, but OBX-16 lives
-*inside* the identical physical `OBX` segment the referencing
-`Observation`'s own OBX-2/3/5/6/7/8/11/14 fields do. Both resources share
-`root_key="OBX"`, but as *different* resources they'd naturally claim
-*different* occurrences under the scheme above - reproduced directly
-during this module's own development: a `Practitioner`'s own OBX-16 claim
-consumed an occurrence slot, silently shifting every *later* Observation's
-own claim off by one and resolving it against the wrong physical OBX
-segment entirely (not just the Practitioner's own highlight being
-approximate - genuinely wrong data for unrelated, later resources). Fixed
-by `_build_reference_map()`: before claiming a *new* occurrence for a
-resource, check whether that resource is referenced (via *any* `Reference`
-field, found the same generic recursive way `app/dedup.py::
-_rewrite_references` walks a resource's own fields, reused here for the
-identical "a Reference can be at any depth on any resource" reason) by
-some *other* resource that already holds a claim for the same
-`(root_key, scope_hint)` - if so, the referenced resource borrows that
-same occurrence instead of claiming its own. Checked in both directions
-(referenced-by and references-to) so processing order doesn't matter.
+**Which occurrence?** A `source_location` like "OBX-5" doesn't say which
+physical OBX it came from when a message has several. Resolved by a claim
+key of `(root_key, scope_hint, index_tuple)` - segment id or first path
+segment, a C-CDA section disambiguator (see `cda_locator.py`), and the
+`Bundle.entry[N]` index plus an EDI `.item[N]` index. Entries arrive in
+mapping order (recorders walk their source in document order), so the
+first entry with a key claims the next unclaimed occurrence and later
+entries with that key reuse it.
 
-**Content-verified occurrence claiming, a second and genuinely different
-correctness problem from the shared-physical-segment one above** - found
-while wiring dedup-aware provenance (see `app/provenance/dispatch.py`'s
-own docstring) and verifying the result against a real, un-deduplicated
-837P fixture in an actual browser, not caught by this module's own
-original 1464-entry sweep (that sweep cross-checked a resolved span
-against `entry.source_value`, which every EDI-family fact leaves `None` -
-so it silently skipped exactly the entries this bug affects; re-running it
-with `entry.value` as the fallback comparison, the way `_claim_fresh_
-occurrence` below now uses it, immediately surfaced 837P/837I/837D's own
-shared bug). The *original* claiming scheme (before this fix) assigned
-strictly sequential occurrence numbers - 0, 1, 2, ... - to each newly-seen
-`(root_key, scope_hint)` claim, in the order facts were recorded, and
-trusted that the Nth *distinct fact-bearing resource*, in that order,
-really was the Nth *physical* occurrence of `root_key` in the raw text.
-That assumption silently breaks whenever either holds: (a) some physical
-occurrences of `root_key` never produce any fact at all (837P/837I/837D
-all carry two leading, untracked `NM1` loops - 1000A Submitter and 1000B
-Receiver - before the first `NM1` loop this app actually maps to a FHIR
-field), or (b) the mapper's own resource-build order doesn't match
-physical document order (`Edi837pBuilder.build_bundle()` builds Billing
-Provider, then Payer, then Subscriber, then Rendering Provider - but their
-own `NM1` segments appear in the raw text as Billing, Subscriber, Payer,
-Rendering). Reproduced directly against the real `edi_837p_basic.x12`
-fixture: with (a) and (b) both present, the sequential scheme resolved
-*every* NM1-rooted fact to a different, wrong physical segment entirely -
-not an approximation, e.g. the Billing Provider's own recorded family name
-`"KILDARE"` highlighted the Submitter's `"PREMIER BILLING SERVICE"` text
-instead.
+**Shared physical segments.** ORU's OBX-16 builds a separate Practitioner
+but lives inside the same physical OBX as the Observation's own fields.
+As different resources they'd claim different occurrences, which shifted
+every later Observation's claim off by one - wrong data for unrelated
+resources, not just an approximate highlight. `_build_reference_map()`
+lets a resource borrow the occurrence held by a resource it's connected
+to by a Reference (checked both directions, so processing order doesn't
+matter). Only *original* claims can be borrowed, or a shared Practitioner
+would relay one referencer's occurrence to an unrelated second one.
 
-Fixed by trying **content-based verification first**, only falling back to
-the original sequential scheme when it can't apply: `_claim_fresh_
-occurrence()` takes the fact's own already-recorded `source_value`
-(falling back to `value` when `source_value` wasn't recorded - see
-`ProvenanceRecorder.record()`'s own two-argument shape) and searches every
-*not-yet-claimed* physical occurrence of `root_key` for the one whose
-*own, field-scoped* resolved text - via the same `.locate()` every
-occurrence would otherwise be checked with - matches it exactly. This is
-safe for the cases the original scheme already got right, not just the
-one it got wrong: a transformed/derived value (`person_display`/`location_
-display`'s own space-joined, non-literal display strings; a parsed date;
-a mapped code) never matches any physical text byte-for-byte, so the
-search finds nothing and falls straight through to the original,
-already-correct sequential fallback - no regression risk for HL7v2/CDA,
-whose own field values verified as content-matchable were already being
-assigned the right occurrence by the sequential scheme anyway (confirmed
-by re-running the very same sweep this bug fix was found through, with the
-new logic in place, before considering it done). For the genuine multiple-
-identical-value case this app's own dedup feature exists to collapse (the
-solo-practitioner shape, `"KILDARE"`/`"BEN"`/the same NPI, legitimately
-repeated at both the Billing and Rendering Provider's own physical `NM1`
-loops) content matching still resolves correctly *in order*: the first
-resource whose facts get processed claims the first unclaimed matching
-occurrence, and the second resource - since that first occurrence is now
-excluded from the search - correctly finds the *other* one instead,
-rather than both racing for the same physical segment.
-
-Occurrence tracking itself had to change shape to support this:
-`next_occurrence: dict[count_key, int]` (a bare monotonic counter, correct
-only when occurrences are always claimed in ascending order) became
-`used_occurrences: dict[count_key, set[int]]` (every occurrence already
-spoken for, in either direction - borrowed occurrences are added too, not
-just fresh ones, so a later content-matching search can never collide with
-one), since content matching can legitimately jump straight to occurrence
-4 before occurrence 1 ever gets claimed."""
+**Order can't be trusted.** 837P/837I/837D carry untracked leading NM1
+loops and build resources in an order that doesn't match document order,
+so sequential claiming resolved every NM1 fact to the wrong segment.
+`_claim_fresh_occurrence()` first tries to match the fact's own recorded
+text against each unclaimed occurrence, falling back to sequential order
+when nothing matches - a derived value (a display string, a mapped code)
+never matches literal source text, so that fallback is the proven-correct
+path for HL7v2/CDA."""
 
 import re
 
