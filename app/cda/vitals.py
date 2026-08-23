@@ -306,7 +306,7 @@ def _build_blood_pressure_panel(systolic, diastolic, patient_id: str, recorder=N
         for component_index, (index, code_element, code, value_element, value) in enumerate(resolved):
             member_base = _member_base(index)
             component_path = f"component[{component_index}]"
-            recorder.record(panel_id, f"{component_path}.code.coding[0].code", f"{member_base}/code/@code", code_element.get("code"))
+            record_coding(recorder, panel_id, f"{component_path}.code", f"{member_base}/code", code)
             recorder.record(
                 panel_id, f"{component_path}.valueQuantity.value", f"{member_base}/value/@value", value_element.get("value")
             )

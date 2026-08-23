@@ -91,7 +91,15 @@ from fhir.resources.R4B.range import Range
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.specimen import Specimen, SpecimenCollection
 
-from app.cda.common import build_codeable_concept_from_cd, build_identifiers, build_quantity_from_pq, effective_time_location, parse_partial_ts
+from app.cda.common import (
+    build_codeable_concept_from_cd,
+    build_identifiers,
+    build_quantity_from_pq,
+    effective_time_location,
+    parse_partial_ts,
+    record_coding,
+    record_quantity,
+)
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, xsi_type
 from app.provenance.location import xpath_location
 
@@ -369,13 +377,9 @@ def _build_specimen(specimen_element, location_base: str, recorder=None) -> Spec
         quantity = build_quantity_from_pq(quantity_element)
         if quantity:
             specimen.collection = SpecimenCollection(quantity=quantity)
-            if recorder:
-                recorder.record(
-                    specimen_id,
-                    "collection.quantity.value",
-                    xpath_location(entity_base, "quantity", "@value"),
-                    quantity_element.get("value"),
-                )
+            record_quantity(
+                recorder, specimen_id, "collection.quantity", xpath_location(entity_base, "quantity"), quantity
+            )
 
         desc_element = find_child(playing_entity, "desc")
         desc = (desc_element.text or "").strip() if desc_element is not None else ""
@@ -476,27 +480,21 @@ def _build_result_observation(
     interpretation = build_codeable_concept_from_cd(interpretation_element)
     if interpretation:
         observation.interpretation = [interpretation]
-        if recorder:
-            recorder.record(
-                observation_id,
-                "interpretation[0].coding[0].code",
-                f"{member_base}/interpretationCode/@code",
-                interpretation.coding[0].code,
-            )
+        record_coding(
+            recorder, observation_id, "interpretation[0]", f"{member_base}/interpretationCode", interpretation
+        )
 
     method_element = find_child(observation_element, "methodCode")
     method = build_codeable_concept_from_cd(method_element)
     if method:
         observation.method = method
-        if recorder:
-            recorder.record(observation_id, "method.coding[0].code", f"{member_base}/methodCode/@code", method.coding[0].code)
+        record_coding(recorder, observation_id, "method", f"{member_base}/methodCode", method)
 
     body_site_element = find_child(observation_element, "targetSiteCode")
     body_site = build_codeable_concept_from_cd(body_site_element)
     if body_site:
         observation.bodySite = body_site
-        if recorder:
-            recorder.record(observation_id, "bodySite.coding[0].code", f"{member_base}/targetSiteCode/@code", body_site.coding[0].code)
+        record_coding(recorder, observation_id, "bodySite", f"{member_base}/targetSiteCode", body_site)
 
     reference_ranges = _build_reference_range(observation_element, resource_id=observation_id, member_base=member_base, recorder=recorder)
     if reference_ranges:

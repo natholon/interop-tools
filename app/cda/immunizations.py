@@ -21,7 +21,14 @@ import uuid
 from fhir.resources.R4B.immunization import Immunization
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, effective_time_location, parse_partial_ts
+from app.cda.common import (
+    build_codeable_concept_from_cd,
+    build_quantity_from_pq,
+    effective_time_location,
+    parse_partial_ts,
+    record_coding,
+    record_quantity,
+)
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
 from app.provenance.location import xpath_location
 
@@ -163,22 +170,15 @@ def _build_immunization(substance_administration, patient_id: str, recorder=None
     route = build_codeable_concept_from_cd(route_element)
     if route:
         immunization.route = route
-        if recorder:
-            recorder.record(
-                immunization_id, "route.coding[0].code", xpath_location(_ENTRY_BASE, "routeCode", "@code"), route.coding[0].code
-            )
+        record_coding(recorder, immunization_id, "route", xpath_location(_ENTRY_BASE, "routeCode"), route)
 
     dose_quantity_element = find_child(substance_administration, "doseQuantity")
     dose_quantity = build_quantity_from_pq(dose_quantity_element)
     if dose_quantity:
         immunization.doseQuantity = dose_quantity
-        if recorder:
-            recorder.record(
-                immunization_id,
-                "doseQuantity.value",
-                xpath_location(_ENTRY_BASE, "doseQuantity", "@value"),
-                dose_quantity_element.get("value"),
-            )
+        record_quantity(
+            recorder, immunization_id, "doseQuantity", xpath_location(_ENTRY_BASE, "doseQuantity"), dose_quantity
+        )
 
     return immunization
 

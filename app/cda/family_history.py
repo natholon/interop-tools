@@ -76,7 +76,11 @@ from fhir.resources.R4B.age import Age
 from fhir.resources.R4B.familymemberhistory import FamilyMemberHistory, FamilyMemberHistoryCondition
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq
+from app.cda.common import (
+    build_codeable_concept_from_cd,
+    build_quantity_from_pq,
+    record_coding,
+)
 from app.cda.narrative_sections import FAMILY_HISTORY_TEMPLATE_ID, build_narrative_document_reference
 from app.cda.parser import find_all, find_child, has_template_id
 from app.provenance.location import xpath_location
@@ -243,10 +247,13 @@ def _build_family_member_history(organizer_element, patient_id: str, recorder=No
         sex = build_codeable_concept_from_cd(gender_element)
         if sex:
             history.sex = sex
-            if recorder:
-                recorder.record(
-                    history_id, "sex.coding[0].code", xpath_location("subject", "relatedSubject", "subject", "administrativeGenderCode", "@code"), sex.coding[0].code
-                )
+            record_coding(
+                recorder,
+                history_id,
+                "sex",
+                xpath_location("subject", "relatedSubject", "subject", "administrativeGenderCode"),
+                sex,
+            )
 
         deceased_ind = _sdtc_child(relative_subject, "deceasedInd")
         if deceased_ind is not None:
