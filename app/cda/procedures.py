@@ -71,6 +71,7 @@ from fhir.resources.R4B.resource import Resource
 
 from app.cda.common import (
     build_codeable_concept_from_cd,
+    record_coding,
     build_contact_point_from_telecom,
     build_identifier,
     build_identifiers,
@@ -697,10 +698,9 @@ def _build_procedure(procedure_element, patient_id: str, recorder=None) -> tuple
     body_site = build_codeable_concept_from_cd(body_site_element)
     if body_site:
         procedure.bodySite = [body_site]
-        if recorder:
-            recorder.record(
-                procedure_id, "bodySite[0].coding[0].code", xpath_location(_ENTRY_BASE, "targetSiteCode", "@code"), body_site.coding[0].code
-            )
+        record_coding(
+            recorder, procedure_id, "bodySite[0]", xpath_location(_ENTRY_BASE, "targetSiteCode"), body_site
+        )
 
     extra_resources: list[Resource] = []
 

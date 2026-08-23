@@ -61,7 +61,13 @@ from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.observation import Observation, ObservationComponent
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, effective_time_location, parse_partial_ts
+from app.cda.common import (
+    build_codeable_concept_from_cd,
+    build_quantity_from_pq,
+    effective_time_location,
+    parse_partial_ts,
+    record_coding,
+)
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
 from app.provenance.location import xpath_location
 
@@ -197,29 +203,21 @@ def _apply_common_observation_fields(observation: Observation, observation_eleme
     interpretation = build_codeable_concept_from_cd(interpretation_element)
     if interpretation:
         observation.interpretation = [interpretation]
-        if recorder:
-            recorder.record(
-                observation.id,
-                "interpretation[0].coding[0].code",
-                f"{member_base}/interpretationCode/@code",
-                interpretation.coding[0].code,
-            )
+        record_coding(
+            recorder, observation.id, "interpretation[0]", f"{member_base}/interpretationCode", interpretation
+        )
 
     method_element = find_child(observation_element, "methodCode")
     method = build_codeable_concept_from_cd(method_element)
     if method:
         observation.method = method
-        if recorder:
-            recorder.record(observation.id, "method.coding[0].code", f"{member_base}/methodCode/@code", method.coding[0].code)
+        record_coding(recorder, observation.id, "method", f"{member_base}/methodCode", method)
 
     body_site_element = find_child(observation_element, "targetSiteCode")
     body_site = build_codeable_concept_from_cd(body_site_element)
     if body_site:
         observation.bodySite = body_site
-        if recorder:
-            recorder.record(
-                observation.id, "bodySite.coding[0].code", f"{member_base}/targetSiteCode/@code", body_site.coding[0].code
-            )
+        record_coding(recorder, observation.id, "bodySite", f"{member_base}/targetSiteCode", body_site)
 
 
 def _build_vital_sign_observation(

@@ -11,7 +11,14 @@ from fhir.resources.R4B.period import Period
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.timing import Timing, TimingRepeat
 
-from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, effective_time_location, parse_partial_ts
+from app.cda.common import (
+    build_codeable_concept_from_cd,
+    build_quantity_from_pq,
+    effective_time_location,
+    parse_partial_ts,
+    record_coding,
+    record_quantity,
+)
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
 from app.provenance.location import xpath_location
 
@@ -112,10 +119,9 @@ def _build_dosage(
     dosage = Dosage()
     if route:
         dosage.route = route
-        if recorder and resource_id and relative_path:
-            route_code = route.coding[0].code
-            recorder.record(
-                resource_id, f"{relative_path}.route.coding[0].code", xpath_location(_ENTRY_BASE, "routeCode", "@code"), route_code
+        if resource_id and relative_path:
+            record_coding(
+                recorder, resource_id, f"{relative_path}.route", xpath_location(_ENTRY_BASE, "routeCode"), route
             )
     if patient_instruction:
         dosage.patientInstruction = patient_instruction
@@ -130,12 +136,13 @@ def _build_dosage(
         dose_and_rate = DosageDoseAndRate()
         if dose_quantity:
             dose_and_rate.doseQuantity = dose_quantity
-            if recorder and resource_id and relative_path:
-                recorder.record(
+            if resource_id and relative_path:
+                record_quantity(
+                    recorder,
                     resource_id,
-                    f"{relative_path}.doseAndRate[0].doseQuantity.value",
-                    xpath_location(_ENTRY_BASE, "doseQuantity", "@value"),
-                    dose_quantity_element.get("value"),
+                    f"{relative_path}.doseAndRate[0].doseQuantity",
+                    xpath_location(_ENTRY_BASE, "doseQuantity"),
+                    dose_quantity,
                 )
         if rate_quantity:
             dose_and_rate.rateQuantity = rate_quantity

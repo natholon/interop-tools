@@ -223,6 +223,36 @@ def find_nested_observation(parent, type_code: str, template_id: str):
     return None
 
 
+def record_coding(recorder, resource_id: str, relative_path: str, base_location: str, concept) -> None:
+    """Record a CodeableConcept's own `code` *and* `display`.
+
+    Call sites that recorded only `.coding[0].code` left `@displayName`
+    looking unread, so the drop register reported it as lost data even
+    though the mapper had carried it into `.coding[0].display`. Recording
+    both together in one helper keeps the pair from drifting apart again.
+    """
+    if not recorder or concept is None or not concept.coding:
+        return
+    coding = concept.coding[0]
+    if coding.code:
+        recorder.record(resource_id, f"{relative_path}.coding[0].code", f"{base_location}/@code", coding.code)
+    if coding.display:
+        recorder.record(
+            resource_id, f"{relative_path}.coding[0].display", f"{base_location}/@displayName", coding.display
+        )
+
+
+def record_quantity(recorder, resource_id: str, relative_path: str, base_location: str, quantity) -> None:
+    """Record a Quantity's own `value` *and* `unit` - `@unit` is read by
+    build_quantity_from_pq but was never recorded by several callers."""
+    if not recorder or quantity is None:
+        return
+    if quantity.value is not None:
+        recorder.record(resource_id, f"{relative_path}.value", f"{base_location}/@value", str(quantity.value))
+    if quantity.unit:
+        recorder.record(resource_id, f"{relative_path}.unit", f"{base_location}/@unit", quantity.unit)
+
+
 def build_quantity_from_pq(element) -> Quantity | None:
     """A PQ-shaped element (@value/@unit directly on the element, e.g.
     doseQuantity, Vital Sign Observation/value, Result Observation/value)

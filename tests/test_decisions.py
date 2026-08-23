@@ -491,3 +491,19 @@ def test_cda_narrative_block_reports_once_not_per_paragraph():
     narrative = [d for d in decisions if (d.source_location or "").endswith("/text()")
                  and "section" in (d.source_location or "")]
     assert len({d.source_location for d in narrative}) == len(narrative)
+
+
+def test_cda_display_and_unit_are_not_reported_when_the_mapper_carried_them():
+    """A caller that recorded only `.coding[0].code` left `@displayName`
+    looking unread, and build_quantity_from_pq reads `@unit` that several
+    callers never recorded - so the register called all of them lost data
+    while the mapper had in fact carried them through."""
+    vitals = set(_by_location(_cda_decisions("ccd_vitals_basic.xml")))
+    assert not [loc for loc in vitals if loc.endswith("interpretationCode/@displayName")]
+
+    procedures = set(_by_location(_cda_decisions("ccd_procedures_basic.xml")))
+    assert not [loc for loc in procedures if loc.endswith("procedure/targetSiteCode/@displayName")]
+
+    medications = set(_by_location(_cda_decisions("ccd_medications_basic.xml")))
+    assert not [loc for loc in medications if loc.endswith("routeCode/@displayName")]
+    assert not [loc for loc in medications if loc.endswith("doseQuantity/@unit")]
