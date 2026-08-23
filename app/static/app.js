@@ -74,7 +74,7 @@ function csvField(value) {
 // derivation each get their own column - an export exists to be analyzed,
 // and conflating two different things into one column to mimic a visual
 // layout would make it worse at that job.
-function crosswalkToCsv(entries) {
+function crosswalkToCsv(entries, dropped = []) {
     const header = [
         "Source Location",
         "Source Field Name",
@@ -95,8 +95,20 @@ function crosswalkToCsv(entries) {
         entry.derivation,
         entry.reason,
     ]);
+    // Dropped source data, with the FHIR columns empty - the export shows
+    // the same findings the table does, or the two disagree about what the
+    // conversion actually did.
+    const droppedRows = dropped.map((decision) => [
+        decision.source_location,
+        decision.field_label,
+        "",
+        decision.lost_value,
+        "",
+        "dropped",
+        decision.detail,
+    ]);
     // CRLF per RFC 4180.
-    return [header, ...rows].map((row) => row.map(csvField).join(",")).join("\r\n");
+    return [header, ...rows, ...droppedRows].map((row) => row.map(csvField).join(",")).join("\r\n");
 }
 
 // source_value is only recorded when a mapper actually transforms the
@@ -205,6 +217,10 @@ document.addEventListener("DOMContentLoaded", () => {
     // produced it instead of making a reader cross-reference two lists.
     let decisionsByPath = new Map();
     let rejectionOutcomeById = new Map();
+    // Dropped source data. It has no conversion of its own, so it renders
+    // as its own rows in the crosswalk with the FHIR columns blank -
+    // source data that went nowhere is still part of the specification.
+    let currentDroppedDecisions = [];
     // Review state for the conversion at hand only. Kept in the browser -
     // nothing is stored server-side - and replayed on each request.
     const rejectedDecisionIds = new Set();
@@ -219,6 +235,13 @@ document.addEventListener("DOMContentLoaded", () => {
         decisionsByPath = new Map(
             (decisions || []).filter((d) => d.kind === "inferred" && d.fhir_path).map((d) => [d.fhir_path, d])
         );
+        // Both lookups are set before the element guard below: the register
+        // block no longer exists, so anything after that guard never runs,
+        // and the crosswalk table depends on these.
+        currentDroppedDecisions = (decisions || []).filter((d) => d.kind !== "inferred");
+        rejectionOutcomeById = new Map((outcomes || []).map((o) => [o.decision_id, o]));
+        // The register block was removed once both inferred and dropped
+        // decisions moved into the crosswalk table itself.
         if (!decisionRegister || !decisionList) return;
         const outcomeById = new Map((outcomes || []).map((o) => [o.decision_id, o]));
         rejectionOutcomeById = outcomeById;
@@ -234,7 +257,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // is the opposite of what showing them inline is for. Dropped
         // decisions have no crosswalk row (nothing was converted), so this
         // is where they live.
-        const registerDecisions = decisions.filter((d) => d.kind !== "inferred");
+        const registerDecisions = [];
         if (!registerDecisions.length) {
             decisionRegister.hidden = true;
             return;
@@ -593,16 +616,59 @@ document.addEventListener("DOMContentLoaded", () => {
             tr.append(locationCell, fieldNameCell, pathCell, sourceValueCell, valueCell, decisionCell);
             tableBody.appendChild(tr);
         }
+
+        // Dropped source data, as rows of the same table. The FHIR columns
+        // stay empty because nothing was produced - that emptiness is the
+        // finding, and it reads better beside the conversions than in a
+        // separate block above them.
+        for (const decision of currentDroppedDecisions) {
+            const tr = document.createElement("tr");
+            tr.className = "crosswalk-dropped";
+
+            const cells = [
+                decision.source_location || "",
+                decision.field_label || "",
+                "",
+                decision.lost_value || "",
+                "",
+            ].map((text) => {
+                const td = document.createElement("td");
+                td.textContent = text;
+                return td;
+            });
+
+            const decisionCell = document.createElement("td");
+            decisionCell.className = "crosswalk-decision";
+            const badge = document.createElement("span");
+            badge.className = "decision-badge decision-badge-dropped";
+            badge.textContent = "Dropped";
+            decisionCell.appendChild(badge);
+            const cite = document.createElement("span");
+            cite.className = decision.citation.authoritative
+                ? "decision-cite"
+                : "decision-cite is-unverified";
+            cite.textContent = decision.citation.title;
+            decisionCell.appendChild(cite);
+            if (decision.detail) {
+                const detail = document.createElement("span");
+                detail.className = "decision-outcome";
+                detail.textContent = decision.detail;
+                decisionCell.appendChild(detail);
+            }
+
+            tr.append(...cells, decisionCell);
+            tableBody.appendChild(tr);
+        }
         if (tableWrapper) tableWrapper.hidden = false;
         if (rawJson) rawJson.hidden = true;
     }
 
     function downloadCrosswalkCsv() {
-        if (!currentReportEntries.length) return;
+        if (!currentReportEntries.length && !currentDroppedDecisions.length) return;
         // Leading BOM so Excel opens it as UTF-8 - without it, Excel
         // guesses the local codepage and mangles any non-ASCII patient
         // name (e.g. "José García"), which real generated samples produce.
-        const blob = new Blob(["﻿" + crosswalkToCsv(currentReportEntries)], {
+        const blob = new Blob(["﻿" + crosswalkToCsv(currentReportEntries, currentDroppedDecisions)], {
             type: "text/csv;charset=utf-8;",
         });
         const url = URL.createObjectURL(blob);
@@ -629,7 +695,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 .filter(Boolean)
                 .join("-")
                 .replace(/[^A-Za-z0-9._-]+/g, "_") || "crosswalk";
-        if (downloadCsvBtn) downloadCsvBtn.hidden = currentReportEntries.length === 0;
+        if (downloadCsvBtn) downloadCsvBtn.hidden = currentReportEntries.length === 0 && currentDroppedDecisions.length === 0;
 
         if (dedupSummaryEl) {
             if (dedupSummary) {

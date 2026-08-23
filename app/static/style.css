@@ -905,3 +905,13 @@ pre {
     margin-top: 0.2rem;
     font-size: 0.75rem;
 }
+
+/* Dropped source data renders as crosswalk rows with the FHIR columns
+   empty - the emptiness is the finding. */
+#crosswalk-table tr.crosswalk-dropped td {
+    opacity: 0.85;
+}
+.decision-badge-dropped {
+    background: var(--drop-bg, #fdecea);
+    color: var(--drop-fg, #b3261e);
+}

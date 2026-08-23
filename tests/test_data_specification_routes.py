@@ -368,3 +368,17 @@ def test_rejecting_a_decision_changes_the_displayed_bundle_too():
     # The displayed Bundle must agree with the returned one.
     assert '"status": "unknown"' in rejected["highlighting"]["fhir_json_text"]
     assert '"status": "in-progress"' not in rejected["highlighting"]["fhir_json_text"]
+
+
+def test_crosswalk_page_has_no_separate_decision_register_block():
+    """Inferred decisions render beside the conversion they produced, and
+    dropped ones as their own crosswalk rows with the FHIR columns empty -
+    so the separate block above the table has nothing left to show, and
+    keeping it would list everything twice."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'id="decision-register"' not in response.text
+    assert 'id="decision-list"' not in response.text
+    # The table is where all of it lives now.
+    assert "Specification Crosswalk" in response.text
+    assert "<th>Mapping Decision</th>" in response.text
