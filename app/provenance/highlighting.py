@@ -361,10 +361,25 @@ def _resolve_source_span(
         # an item-indexed fact always claims its own occurrence directly.
         if item_index is None and resource_id is not None:
             borrowed = _borrow_occurrence(resource_id, count_key, resource_claims, reference_map)
+        used = used_occurrences.setdefault(count_key, set())
+        if borrowed is None and item_index is None and resource_id is not None:
+            # Once every physical occurrence is claimed, a further resource
+            # cannot have one of its own - several resources routinely come
+            # from one source element (a C-CDA Vital Signs organizer builds
+            # a panel plus one Observation per reading). Sharing a
+            # connected resource's occurrence resolves; claiming an index
+            # past the end resolves to nothing at all, which is what left
+            # Vitals/Results/Procedures highlighting mostly blank.
+            total = _occurrence_count(source_locator, root_key, scope_hint)
+            if total and len(used) >= total:
+                borrowed = _borrow_occurrence(
+                    resource_id, count_key, resource_claims, reference_map, allow_relayed=True
+                )
+                if borrowed is None:
+                    borrowed = min(used)
         if borrowed is not None:
             occurrence, is_original = borrowed, False
         else:
-            used = used_occurrences.setdefault(count_key, set())
             occurrence = _claim_fresh_occurrence(source_locator, entry, root_key, scope_hint, used)
             is_original = True
         claimed_occurrence[claim_key] = occurrence
@@ -381,7 +396,11 @@ def _resolve_source_span(
 
 
 def _borrow_occurrence(
-    resource_id: str, count_key: tuple, resource_claims: dict[str, dict[tuple, tuple[int, bool]]], reference_map: dict[str, set[str]]
+    resource_id: str,
+    count_key: tuple,
+    resource_claims: dict[str, dict[tuple, tuple[int, bool]]],
+    reference_map: dict[str, set[str]],
+    allow_relayed: bool = False,
 ) -> int | None:
     """If some other resource directly connected to `resource_id` by a
     Reference (in either direction) already holds an *original* (counter-
@@ -402,11 +421,23 @@ def _borrow_occurrence(
     Practitioner can be borrowed *from* by its first referencer, but can't
     relay that borrowed occurrence on to a second, independent referencer -
     which then correctly falls through to claiming its own, fresh
-    occurrence instead."""
+    occurrence instead.
+
+    `allow_relayed` lifts that restriction, and is set only when every
+    physical occurrence is already spoken for. The bug above depended on a
+    *fresh* occurrence still being available for the second referencer to
+    take; when none is, relaying is strictly better than inventing an index
+    past the end that cannot resolve at all. That is the ordinary case
+    wherever one source element builds several resources - a C-CDA Vital
+    Signs organizer produces a panel plus one Observation per reading, all
+    from the one `<organizer>`."""
+    relayed: int | None = None
     for related_id in reference_map.get(resource_id, ()):
         claims = resource_claims.get(related_id)
         if claims and count_key in claims:
             occurrence, is_original = claims[count_key]
             if is_original:
                 return occurrence
-    return None
+            if relayed is None:
+                relayed = occurrence
+    return relayed if allow_relayed else None

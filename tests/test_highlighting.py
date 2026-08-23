@@ -539,3 +539,43 @@ def test_835_multi_claim_details_each_resolve_to_their_own_clp_segment():
     assert second_amount_entry.value == "0.00"
     assert _resolved_source_text(payload, first_amount_match) == "250.00"
     assert _resolved_source_text(payload, second_amount_match) == "0.00"
+
+
+def test_several_resources_from_one_cda_organizer_all_resolve():
+    """One <organizer> builds a Vital Signs panel plus an Observation per
+    reading. Each got its own fresh occurrence of "organizer", but only one
+    exists - so every resource past the first claimed an index off the end
+    and resolved to nothing, leaving most of the Vitals crosswalk with no
+    highlight at all."""
+    raw = read_fixture("ccd_vitals_basic.xml")
+    bundle, report, _ = convert_with_provenance(raw)
+    payload = build_highlighting_payload(bundle, report, raw, report.source_format)
+
+    organizer_facts = [
+        (entry, match)
+        for entry, match in zip(report.entries, payload.matches)
+        if (entry.source_location or "").startswith("organizer/")
+    ]
+    assert len(organizer_facts) > 10, "the vitals fixture records many organizer-relative facts"
+    unresolved = [e.source_location for e, m in organizer_facts if m.source_span is None]
+    assert not unresolved, unresolved
+
+    # And they resolve to their own distinct readings, not all to one.
+    resolved = {_resolved_source_text(payload, m) for _, m in organizer_facts}
+    assert len(resolved) > 5
+
+
+def test_borrowing_still_refuses_to_relay_while_an_occurrence_is_free():
+    """The relay allowance is limited to the case where every physical
+    occurrence is already claimed. An ORU carries one OBX per result, so a
+    Practitioner shared by two of them must NOT bridge them - the second
+    Observation has its own unclaimed OBX and must take it."""
+    raw = read_fixture("oru_r01_shared_performer.hl7")
+    bundle, report, _ = convert_with_provenance(raw)
+    payload = build_highlighting_payload(bundle, report, raw, report.source_format)
+    by_path = _match_by_path(report, payload)
+
+    first = by_path["Bundle.entry[2].resource.valueQuantity.value"][1]
+    second = by_path["Bundle.entry[4].resource.valueQuantity.value"][1]
+    assert _resolved_source_text(payload, first) == "7.2"
+    assert _resolved_source_text(payload, second) == "13.5"
