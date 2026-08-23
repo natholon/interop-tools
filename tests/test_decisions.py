@@ -423,23 +423,24 @@ def test_edi_qualifier_is_reported_when_its_target_is_unmapped():
 def test_joined_field_allowance_applies_only_where_something_read_the_field():
     # JOINED_FIELDS exists so a mapper that collapses several components
     # into one value does not look like it dropped the rest. Where nothing
-    # read the field it collapsed nothing: MDM never reads PV1-3, so
-    # suppressing its point-of-care and room hid real drops.
-    raw = (Path(__file__).parent / "fixtures" / "mdm_t02_basic.hl7").read_text()
-    _, report, _ = convert_with_provenance(raw)
-    assert not any((e.source_location or "").startswith("PV1-3") for e in report.entries)
-    reported = _by_location(compute_decisions(report, raw))
-    assert "PV1-3" in reported
-    assert reported["PV1-3"].lost_value.startswith("W789^105")
-
-    # ADT does read every PL component, so nothing is reported there.
-    adt = (Path(__file__).parent / "fixtures" / "adt_a01_basic.hl7").read_text()
-    _, adt_report, _ = convert_with_provenance(adt)
-    adt_reported = _by_location(compute_decisions(adt_report, adt))
-    assert not [loc for loc in adt_reported if loc.startswith("PV1-3")]
-
-
-# --- C-CDA -----------------------------------------------------------
+    # read the field it collapsed nothing, and the whole field is the drop.
+    #
+    # PV1-6 (Prior Patient Location) is the case: only ADT^A02 reads it, so
+    # on an A01 it is entirely unmapped. This used to be demonstrated with
+    # PV1-3 on an MDM message, until MDM started building the PV1-3 Location
+    # chain the IG maps - at which point no message type ignored PV1-3 any
+    # more and the test was asserting something no longer true.
+    decisions = _decisions(
+        _message(
+            "PID|1||578324^^^MRN||Doe^Jane||19620305|F",
+            _segment("PV1", {1: "1", 2: "I", 3: "C100^^A^GENHOSP", 6: "W200^^B^OTHERFAC", 19: "V1"}),
+        )
+    )
+    reported = _by_location([d for d in decisions if d.kind == "dropped"])
+    assert "PV1-6" in reported
+    assert reported["PV1-6"].lost_value.startswith("W200")
+    # ADT does read PV1-3, so its joined components stay suppressed.
+    assert not [loc for loc in reported if loc.startswith("PV1-3")]
 
 
 def _cda_decisions(fixture: str):
@@ -731,3 +732,36 @@ def test_hl7v2_drops_cite_the_v2_to_fhir_ig():
     # PV1-7.7 was a GAP until ADT started materialising a real Practitioner
     # for PV1-7; XCN.7 now has somewhere to go, so it is not a drop at all.
     assert "PV1-7.7" not in by_location
+
+
+def test_rejection_strategies_cover_cda_and_edi_resources():
+    """The review workflow only knew HL7v2's resources, so rejecting an
+    inferred Coverage.status or Task.intent reported "no verified
+    conformant representation" and did nothing. Each row was read off the
+    published R4 CodeSystem - fhir.resources does not validate value sets,
+    so it cannot be derived."""
+    import json
+
+    from app.provenance.decisions import REJECTION_STRATEGY, apply_rejections
+
+    # A null-flavour code exists for these two, so rejection rewrites them.
+    assert REJECTION_STRATEGY[("Task", "intent")] == "code"
+    assert REJECTION_STRATEGY[("CarePlan", "status")] == "code"
+    # fm-status and claim-use have none, so rejection must drop the value
+    # and carry data-absent-reason instead.
+    for key in [("Coverage", "status"), ("Claim", "status"), ("Claim", "use")]:
+        assert REJECTION_STRATEGY[key] == "absent", key
+
+    raw = (Path(__file__).parent / "fixtures" / "edi_837p_basic.x12").read_text()
+    bundle, report, _ = convert_with_provenance(raw)
+    decisions = compute_decisions(report, raw)
+    coverage_status = next(
+        d for d in decisions
+        if d.kind == "inferred" and (d.fhir_path or "").endswith(".status") and "Coverage" not in ""
+        and d.lost_value == "active"
+    )
+    built = json.loads(bundle.model_dump_json(exclude_none=True))
+    built, outcomes = apply_rejections(built, decisions, {coverage_status.id})
+    outcome = next(o for o in outcomes if o.decision_id == coverage_status.id)
+    assert outcome.applied is True
+    assert outcome.strategy == "absent"

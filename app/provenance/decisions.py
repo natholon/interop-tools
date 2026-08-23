@@ -868,6 +868,34 @@ REJECTION_STRATEGY: dict[tuple[str, str], str] = {
     ("DiagnosticReport", "status"): "code",    # value set includes "unknown"
     ("Appointment", "status"): "absent",       # no null code; Required binding
     ("DocumentReference", "status"): "absent",  # current|superseded|entered-in-error only
+    # --- C-CDA and X12 EDI resources -------------------------------------
+    # Every row below was read off the published R4 CodeSystem, not the
+    # ValueSet page and not from memory - task-intent in particular would
+    # have been got wrong either way: its own CodeSystem contains *only*
+    # "unknown" (the request-intent codes arrive via the ValueSet), so
+    # "unknown" really is a valid Task.intent.
+    ("Task", "intent"): "code",                # task-intent CodeSystem is exactly {"unknown"}
+    ("CarePlan", "status"): "code",            # request-status includes "unknown"
+    # fm-status is active|cancelled|draft|entered-in-error - no null flavour,
+    # and the binding is Required, so the only conformant option is absent.
+    ("Coverage", "status"): "absent",
+    ("Claim", "status"): "absent",
+    ("ClaimResponse", "status"): "absent",
+    ("CoverageEligibilityRequest", "status"): "absent",
+    ("CoverageEligibilityResponse", "status"): "absent",
+    ("PaymentReconciliation", "status"): "absent",
+    # claim-use is claim|preauthorization|predetermination.
+    ("Claim", "use"): "absent",
+    ("ClaimResponse", "use"): "absent",
+    # task-status has no "unknown"; remittance-outcome is
+    # queued|complete|error|partial.
+    ("Task", "status"): "absent",
+    ("CoverageEligibilityResponse", "outcome"): "absent",
+    # history-status does carry "health-unknown", but that states the
+    # *relative's health* is unknown, not that the record's status is - a
+    # different concept, so it is not usable as a null flavour here.
+    ("FamilyMemberHistory", "status"): "absent",
+    ("CarePlan", "intent"): "absent",          # care-plan-intent is proposal|plan|order|option
 }
 NULL_FLAVOUR_CODE = "unknown"
 

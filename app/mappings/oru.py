@@ -288,8 +288,13 @@ class BaseOruMapper(MessageMapper):
             pv1 = require_segment(message, "PV1")
         except MissingSegmentError:
             pv1 = None
+        # Declared before the encounter so PV1-3's Location chain can be
+        # collected into it (see build_minimal_encounter).
+        extra_resources: list[Resource] = []
         if pv1 is not None:
-            encounter = build_minimal_encounter(pv1, patient.id, recorder=recorder)
+            encounter = build_minimal_encounter(
+                pv1, patient.id, recorder=recorder, extra_resources=extra_resources
+            )
         encounter_id = encounter.id if encounter is not None else None
 
         groups = group_segments_by_leader(message, "OBR", ["OBX"])
@@ -297,7 +302,6 @@ class BaseOruMapper(MessageMapper):
             raise MissingSegmentError("ORU messages require at least one OBR segment with result data")
 
         diagnostic_reports: list[DiagnosticReport] = []
-        extra_resources: list[Resource] = []
         performer_cache: dict[str, Practitioner] = {}
         for obr, obx_segments in groups:
             observation_ids = []

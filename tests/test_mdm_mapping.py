@@ -27,8 +27,10 @@ def test_basic_fixture_maps_every_field():
     by_type = _entries_by_type(bundle)
 
     # Patient + Encounter (PV1 present) + DocumentReference + Binary (OBX
-    # content present) + 2 materialized Practitioners (originator, authenticator)
-    assert len(bundle.entry) == 6
+    # content present) + 2 materialized Practitioners (originator,
+    # authenticator) + the PV1-3 Location chain, which the IG maps to
+    # Encounter.location and this app used to drop for a minimal encounter.
+    assert len(bundle.entry) == 10
     assert len(by_type["Practitioner"]) == 2
 
     document_reference = by_type["DocumentReference"][0]
@@ -123,5 +125,6 @@ def test_other_triggers_produce_same_shape_as_t02(mapper_cls):
     bundle = mapper_cls().to_bundle(message)
     by_type = _entries_by_type(bundle)
 
-    assert len(bundle.entry) == 6
+    # Same shape as T02, PV1-3 Location chain included.
+    assert len(bundle.entry) == 10
     assert by_type["DocumentReference"][0].status == "current"

@@ -3,7 +3,7 @@ import uuid
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
-from fhir.resources.R4B.encounter import Encounter
+from fhir.resources.R4B.encounter import Encounter, EncounterLocation
 from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.identifier import Identifier
 from fhir.resources.R4B.location import Location
@@ -343,7 +343,7 @@ def build_visit_identifier(pv1) -> Identifier | None:
     return Identifier(system="urn:interop-tools:visit-number", value=visit_number)
 
 
-def build_minimal_encounter(pv1, patient_id: str, recorder=None) -> Encounter:
+def build_minimal_encounter(pv1, patient_id: str, recorder=None, extra_resources=None) -> Encounter:
     """A minimal Encounter for message types whose PV1 (when present) gives
     context rather than an admit/discharge lifecycle event - ORU's optional
     result-reporting encounter and MDM's optional document-context encounter
@@ -374,6 +374,22 @@ def build_minimal_encounter(pv1, patient_id: str, recorder=None) -> Encounter:
         encounter.identifier = [visit_identifier]
         if recorder:
             recorder.record(encounter_id, "identifier[0].value", hl7_location("PV1", 19), visit_identifier.value)
+
+    # PV1-3 -> location[1].location(Location), per the v2-to-FHIR
+    # PV1[Encounter] map. This encounter is minimal in the sense of having
+    # no lifecycle to infer, not in the sense of ignoring the location the
+    # PV1 actually carries - which was simply dropped before. `location[].
+    # status` is left unset: the IG maps PV1-3 to it too, but nothing in a
+    # result or document context says whether the patient is still there.
+    if extra_resources is not None:
+        locations = build_location_chain_from_pl(pv1, 3, recorder=recorder)
+        if locations:
+            extra_resources.extend(locations)
+            encounter.location = [
+                EncounterLocation(
+                    location=build_reference_with_optional_display(locations[0].id, location_display(pv1, 3))
+                )
+            ]
     return encounter
 
 

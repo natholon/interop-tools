@@ -333,7 +333,12 @@ class BaseMdmMapper(MessageMapper):
             pv1 = None
 
         patient = build_patient(pid, recorder=recorder)
-        encounter = build_minimal_encounter(pv1, patient.id, recorder=recorder) if pv1 is not None else None
+        encounter_locations: list[Resource] = []
+        encounter = (
+            build_minimal_encounter(pv1, patient.id, recorder=recorder, extra_resources=encounter_locations)
+            if pv1 is not None
+            else None
+        )
         encounter_id = encounter.id if encounter is not None else None
 
         binary = _build_binary_from_obx(obx_segments, txa, recorder=recorder)
@@ -343,6 +348,7 @@ class BaseMdmMapper(MessageMapper):
 
         resources_in_order = (
             ([encounter] if encounter is not None else [])
+            + encounter_locations
             + [document_reference]
             + ([binary] if binary is not None else [])
             + extra_resources
