@@ -193,10 +193,17 @@ def _dropped_decisions(
     mapped = _mapped_components(report)
     decisions = []
     for key, components in sorted(populated.items()):
-        segment_id, field, repetition = key
+        segment_id, occurrence, field, repetition = key
         if (segment_id, field) in UNMAPPABLE_FIELDS:
             continue
-        consumed = set(mapped.get(key, set())) | JOINED_FIELDS.get((segment_id, field), set())
+        # Consumption is looked up without the segment occurrence, because
+        # no hl7_location() string carries one - "OBX-5" cannot say which
+        # of an ORU's OBX segments it came from. Same aggregation, and same
+        # disclosed trade, as the X12 half: rows are per occurrence, but an
+        # element read on any occurrence counts as read on all of them.
+        consumed = set(mapped.get((segment_id, field, repetition), set())) | JOINED_FIELDS.get(
+            (segment_id, field), set()
+        )
         if _WHOLE_FIELD_MAPPED in consumed:
             continue
 
@@ -206,10 +213,11 @@ def _dropped_decisions(
         # row doesn't already say, and the noise buries the fields where
         # only *part* was dropped.
         rep = _repetition_suffix(repetition)
+        seg_rep = _repetition_suffix(occurrence)
         if not consumed:
             whole = SEGMENT_FIELD_NAMES.get(segment_id, {}).get(field)
             raw = "^".join(components.get(i, "") for i in range(1, max(components) + 1))
-            field_location = f"{segment_id}-{field}{rep}"
+            field_location = f"{segment_id}{seg_rep}-{field}{rep}"
             decisions.append(
                 MappingDecision(
                     id=_decision_id("dropped", field_location),
@@ -227,7 +235,7 @@ def _dropped_decisions(
         for component, value in sorted(components.items()):
             if component in consumed:
                 continue
-            location = f"{segment_id}-{field}{rep}.{component}"
+            location = f"{segment_id}{seg_rep}-{field}{rep}.{component}"
             names = component_names_for_field(segment_id, field)
             label = names.get(component) if names else None
             decisions.append(
@@ -269,9 +277,17 @@ def compute_decisions(report: CrosswalkReport, raw_text: str | None = None) -> l
     return decisions
 
 
-def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int], dict[int, str]]:
-    """(segment, field, repetition) -> {component: value} for every
-    non-empty component in the message.
+def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int, int], dict[int, str]]:
+    """(segment, segment_occurrence, field, repetition) -> {component:
+    value} for every non-empty component in the message.
+
+    **HL7v2 repeats whole segments as well as fields**, and the two are
+    different axes: an ORU carries one OBX per result, a SIU one AIP per
+    participant, and any segment can be trailed by several NTEs. Keying
+    only by (segment, field, repetition) let the third OBX overwrite the
+    first two, so a component dropped by an earlier segment was invisible -
+    the same completeness hole as skipping non-composite fields, one axis
+    over.
 
     Re-splits the raw text rather than walking the parsed `hl7.Message`,
     for the same reason `app/provenance/hl7_locator.py` does: the library
@@ -286,7 +302,8 @@ def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int], dict[
     noise, not decisions.
     """
     normalized = truncate_to_first_message(normalize_segment_separators(raw_text))
-    populated: dict[tuple[str, int, int], dict[int, str]] = {}
+    populated: dict[tuple[str, int, int, int], dict[int, str]] = {}
+    seen_count: dict[str, int] = {}
     for line in normalized.split("\r"):
         if not line.strip():
             continue
@@ -294,6 +311,8 @@ def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int], dict[
         segment_id = fields[0]
         if segment_id == "MSH":
             continue
+        occurrence = seen_count.get(segment_id, 0)
+        seen_count[segment_id] = occurrence + 1
         for field_index, field_text in enumerate(fields[1:], start=1):
             if not field_text:
                 continue
@@ -308,7 +327,7 @@ def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int], dict[
                 components = repetition_text.split("^")
                 values = {i: v for i, v in enumerate(components, start=1) if v}
                 if values:
-                    populated[(segment_id, field_index, repetition)] = values
+                    populated[(segment_id, occurrence, field_index, repetition)] = values
     return populated
 
 

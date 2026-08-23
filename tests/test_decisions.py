@@ -6,7 +6,13 @@ wolf gets ignored, and one that misses a decision defeats the sign-off it
 exists to support. These tests pin both properties.
 """
 
-from app.provenance.decisions import compute_decisions, scan_populated_components
+from pathlib import Path
+
+from app.provenance.decisions import (
+    compute_decisions,
+    scan_populated_components,
+    scan_populated_edi_elements,
+)
 from app.provenance.dispatch import convert_with_provenance
 
 _MSH = "MSH|^~\\&|A|B|C|D|20260101120000||ADT^A01|M1|P|2.5"
@@ -202,11 +208,36 @@ def test_scan_ignores_msh_but_sees_non_composite_fields():
     populated = scan_populated_components(
         _message("PID|1||578324^^^MRN||Doe^Jane||19620305|F", "PV1|1|I|C100|||||||||||||||||V1")
     )
-    assert not any(segment == "MSH" for segment, _, _ in populated)
+    assert not any(segment == "MSH" for segment, _, _, _ in populated)
     # A field with no "^" is one component, not "nothing to drop" - skipping
     # it made every non-composite field invisible to the register no matter
     # what it carried.
-    assert populated[("PV1", 3, 0)] == {1: "C100"}
+    assert populated[("PV1", 0, 3, 0)] == {1: "C100"}
+
+
+def test_repeated_segments_each_report_their_own_drops():
+    # HL7v2 repeats whole segments as well as fields - an ORU carries one
+    # OBX per result. Keying only by (segment, field, repetition) let the
+    # last OBX overwrite the earlier ones, so a component dropped by an
+    # earlier segment was invisible no matter what it carried.
+    raw = (Path(__file__).parent / "fixtures" / "oru_r01_basic.hl7").read_text()
+    lines = raw.replace("\n", "\r").split("\r")
+    for i, line in enumerate(lines):
+        if line.startswith("OBX"):
+            fields = line.split("|")
+            fields[3] = fields[3] + "^^^ONLYONFIRST"
+            lines[i] = "|".join(fields)
+            break
+    patched = "\r".join(lines)
+
+    _, report, _ = convert_with_provenance(patched)
+    decisions = compute_decisions(report, patched)
+    assert any(d.lost_value == "ONLYONFIRST" for d in decisions)
+
+    # And each OBX reports its own drop rather than one standing for all.
+    obx = [d for d in decisions if (d.source_location or "").startswith("OBX")]
+    assert len({d.id for d in obx}) == len(obx)
+    assert any("[1]" in (d.source_location or "") for d in obx)
 
 
 # --- rejection -------------------------------------------------------
@@ -287,10 +318,6 @@ def test_unrejected_decisions_leave_the_bundle_untouched():
 
 
 # --- X12 EDI ---------------------------------------------------------
-
-from pathlib import Path
-
-from app.provenance.decisions import scan_populated_edi_elements
 
 _EDI_FIXTURES = Path(__file__).parent / "fixtures"
 
