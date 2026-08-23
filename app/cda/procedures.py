@@ -1,100 +1,58 @@
 """Procedures section (templateId 2.16.840.1.113883.10.20.22.2.7.1) ->
-Procedure, per the official "C-CDA on FHIR" IG's CF-procedures.html
-guidance and its underlying CCDA-FHIR Procedure.csv mapping table
-(build.fhir.org/ig/HL7/ccda-on-fhir/, github.com/HL7/ccda-on-fhir), plus
-its own published ConceptMap-CF-ProcedureStatus. Section/entry templateIds
-confirmed against a real HL7 C-CDA-Examples CCD document, not assumed from
-the IG page's own abbreviated XPath (LOINC code only, not the templateId
-OID).
+Procedure, per the C-CDA on FHIR IG's CF-procedures guidance, its
+`CCDA-FHIR Procedure.csv` mapping table, and ConceptMap-CF-ProcedureStatus.
 
-**Template selection, per the IG's own explicit guidance, not this app's
-own judgment call**: C-CDA 2.1 defined three Procedure templates
-(Procedure Activity Act, Procedure Activity Observation, Procedure
-Activity Procedure); the IG maps only the Procedure Activity Procedure
-template ("the most complete... most vendors successfully and exclusively
-use" it, per the C-CDA 2.1 Companion Guide the IG itself cites), and notes
-the Act/Observation variants were removed entirely as of C-CDA 3.0. This
-module follows the IG's own scoping exactly - only Procedure Activity
-Procedure entries are recognized; a Procedure Activity Observation (which
-the IG says is better modeled as a Results-shaped Observation, not a
-Procedure) is out of scope, not silently mismapped.
+**Template selection follows the IG, not this app's judgment**: of C-CDA
+2.1's three Procedure templates, the IG maps only Procedure Activity
+Procedure ("the most complete... most vendors exclusively use it"), and
+notes the Act/Observation variants were removed in C-CDA 3.0. A Procedure
+Activity Observation is better modelled as a Results-shaped Observation,
+so it is out of scope rather than mismapped.
 
-**`performer`/`participant`** (per the real `Procedure.csv` mapping table,
-fetched raw, plus a real fetched HL7 C-CDA-Examples XML - `Encounters/
-Inpatient Encounter Discharged to Rehab Location` - which shares the
-identical generic `assignedEntity`/`participantRole[classCode=SDLOC]` CDA
-datatypes this module reuses verbatim): `performer/assignedEntity` maps to
-`Procedure.performer.actor` as a real **PractitionerRole** (not a bare
-Practitioner - the CSV's own target is `Procedure.performer.actor
-[PractitionerRole]`, confirmed with the user directly as the shape to
-build rather than a simpler `Practitioner`+`.onBehalfOf` shortcut),
-wrapping a `Practitioner` (from `assignedPerson/name`, genuinely optional
-per the real fetched example - a real performer can carry only an `id`
-and no name at all) plus an optional `Organization` (from
-`representedOrganization/name`) and an optional `Location` (from
-`assignedEntity/addr`, referenced via `PractitionerRole.location` - FHIR
-has no field for embedding an address directly on `PractitionerRole`
-itself). `participant[@typeCode=LOC]/participantRole[@classCode=SDLOC]`
-(confirmed real templateId `2.16.840.1.113883.10.20.22.4.32`) maps
-directly to `Procedure.location` - a separate `Location`, unrelated to the
-performer's own machinery, since `Procedure.location` is a plain
-`Reference`, confirmed via `model_fields` introspection.
+`STATUS_MAP` is ConceptMap-CF-ProcedureStatus; `held`/`new`/`obsolete`/
+`suspended` have no row and fall back to `"unknown"`. `negationInd="true"`
+overrides statusCode entirely to `"not-done"`. `performedDateTime` and
+`performedPeriod` are mutually exclusive per the IG, distinguished by
+`ivl_ts_bounds`. `Procedure.code` is genuinely optional in R4 (confirmed
+via `model_fields`), so a code-less procedure is still built.
 
-**Indication and Comment Activity cross-references, and `author` ->
-`Procedure.recorder`, shipped as a follow-up slice** once each was
-actually researched against a primary source (not guessed at from the
-CSV's own terse row labels): `entryRelationship[typeCode="RSON"]` wraps a
-nested Indication Observation (templateId `2.16.840.1.113883.10.20.22.4.19`
-- confirmed a general-purpose C-CDA template "used by many templates in
-C-CDA R2.1", not Procedure-specific, and directly observed in a real
-fetched example nested under an unrelated act's own RSON relationship)
-whose own `<value>` maps to `Procedure.reasonCode`, per the real
-`Procedure.csv` row (`entryRelationship[Indication].value ->
-Procedure.reasonCode`) - the CSV's own second target, `reasonReference`
-(resolving the Indication to a separate already-materialized resource),
-is deliberately not attempted, the same "map the direct value, disclose
-the reference case" precedent this app's every other partial mapping
-already establishes. `entryRelationship[typeCode="SUBJ",
-inversionInd="true"]` wraps a Comment Activity act (templateId
-`2.16.840.1.113883.10.20.22.4.64`, fixed LOINC code `48767-8` "Annotation
-Comment") - the typeCode/inversionInd combo is the standard IHE
-PCC/C-CDA convention for "this act's own subject is the containing act",
-i.e. a comment *about* the parent, confirmed via the same combination
-this app's own Allergies Criticality Observation already uses for an
-unrelated nested observation, not guessed at. Per the C-CDA on FHIR IG's
-own `mappingGuidance.html` Comment Activity table (fetched directly, the
-IG page this reason string points readers to): `<text>` (plain inline
-text - a `<reference value="#...">`-anchored, narrative-only comment with
-no inline text is a disclosed, deferred shape, the dominant real-world
-case being inline text per the IG's own worked example) -> `.text` (FHIR-
-required at construction, confirmed by direct `Annotation()` construction
-despite `model_fields` not flagging it - a Comment Activity with no
-resolvable text is skipped entirely), `author/time` -> `.time`,
-`author/assignedAuthor` -> `.authorReference`. `author` (the general
-"Author Participation" template, `2.16.840.1.113883.10.20.22.4.119`,
-confirmed "appropriate at any place CDA allows an author... CDA Entry")
-as a **direct child of the procedure element itself** maps to
-`Procedure.recorder` the same way, reusing the identical assignedAuthor
-shape (id/assignedPerson/addr/telecom - confirmed against a real fetched
-CCD document's own header `<author>`, byte-for-byte the same shape as
-performer's own `assignedEntity`) - built as a plain `Practitioner`, not
-the `PractitionerRole` the IG's own prose loosely suggests for
-`Annotation.authorReference` ("ideally...", not a hard requirement),
-since direct `fhir.resources` introspection confirms `Annotation.
-authorReference`'s own real `enum_reference_types` is `Practitioner`/
-`Patient`/`RelatedPerson`/`Organization` - no `PractitionerRole` at all -
-so the base FHIR R4 resource's own actual binding overrides the IG's
-looser suggestion, the same "verify by construction, don't trust prose
-alone" discipline this app applies everywhere. `Procedure.recorder`'s own
-CSV row has no `[PractitionerRole]` bracket annotation either (unlike
-`performer.actor`'s), confirming a plain `Practitioner` is the correct,
-disclosed target for this field specifically, not an inconsistency with
-performer's own richer shape. No cross-performer/cross-procedure
-deduplication of the Practitioner/Organization/Location resources
-materialized here is attempted - this app's existing opt-in
-`app/dedup.py::deduplicate_bundle` already covers the cross-resource case
-generically, the same way it does for X12 837P/837I's own billing-vs-
-rendering-provider duplication."""
+**performer/participant**: `performer/assignedEntity` ->
+`Procedure.performer.actor` as a real **PractitionerRole** (the CSV's own
+target, confirmed with the user over a simpler `Practitioner` +
+`.onBehalfOf` shortcut), wrapping a Practitioner plus an optional
+Organization and an address-only Location (FHIR has nowhere to put an
+address on PractitionerRole itself). `assignedPerson/name` is genuinely
+optional - a real fetched example carries a performer with only an `id`.
+`participant[@typeCode=LOC]/participantRole[@classCode=SDLOC]` ->
+`Procedure.location`, a separate Location unrelated to the performer
+machinery (`Procedure.location` is a plain Reference).
+
+**Indication / Comment Activity / recorder**:
+  - `entryRelationship[typeCode="RSON"]` wraps an Indication Observation
+    (`...4.19`, a general-purpose template) whose `<value>` ->
+    `Procedure.reasonCode`. The CSV's second target, `reasonReference`,
+    would need the Indication resolved to an already-materialized
+    resource and is not attempted.
+  - `entryRelationship[typeCode="SUBJ", inversionInd="true"]` wraps a
+    Comment Activity act (`...4.64`, fixed LOINC `48767-8`) ->
+    `Procedure.note`. Per the IG's mappingGuidance Comment Activity
+    table: `<text>` -> `.text` (required at construction despite
+    `model_fields` not flagging it, so a text-less comment is skipped),
+    `author/time` -> `.time`, `author/assignedAuthor` ->
+    `.authorReference`. A narrative-only comment carrying just a
+    `<reference>` is a disclosed, deferred shape.
+  - A direct-child `<author>` (Author Participation, `...4.119`) ->
+    `Procedure.recorder`, reusing the identical assignedAuthor shape.
+    Built as a plain **Practitioner**, not the PractitionerRole the IG's
+    prose loosely suggests ("ideally..."), because
+    `Annotation.authorReference`'s real `enum_reference_types` has no
+    PractitionerRole - and `Procedure.recorder`'s CSV row carries no
+    `[PractitionerRole]` annotation either, unlike `performer.actor`'s.
+
+**Scope limits**: `author` -> a real Provenance *resource* is a
+deliberate permanent exclusion (see app/provenance/dispatch.py). No
+cross-procedure dedup of the materialized Practitioner/Organization/
+Location is attempted - `app/dedup.py` covers that generically."""
 
 import uuid
 

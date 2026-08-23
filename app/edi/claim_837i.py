@@ -1,128 +1,47 @@
 """X12 837I (Health Care Claim: Institutional, 005010X223A2) -> FHIR
 `Claim` (`use="claim"`, `type="institutional"`).
 
-**Disclosed verification-source gap, same as every EDI phase in this app**:
-X12's own authoritative TR3 for 837I is paywalled (X12 sells it commercially -
-no official, free X12-to-FHIR ConceptMap IG exists for this transaction set,
-unlike HL7v2's v2-to-FHIR or C-CDA's C-CDA on FHIR). The X12-side segment
-shape below is verified against a real X12.org-published example (fetched
-and quoted verbatim, not paraphrased from a secondary source) plus
-cross-referenced free companion guides (CMS/Palmetto/CGS) where the one
-example alone didn't label a field's exact position (e.g. `CL1`'s three
-elements) - not the paywalled primary TR3 itself. The FHIR (target) side is
-on firmer footing: every CodeSystem/value-set claim below (NUBC Revenue
-Codes, NUBC Patient Discharge Status, `ClaimInformationCategoryCodes`,
-`claimcareteamrole`) was confirmed by direct fetch of `hl7.org`/
-`terminology.hl7.org`, not assumed from memory or a summarized secondary
-page.
+**Verification gap, shared by every EDI family here**: X12's TR3 is
+paywalled and no free X12-to-FHIR crosswalk exists. The segment shape is
+verified against a real X12.org example
+(`005010x223/example-1a-institutional-claim`) plus free CMS/Palmetto/CGS
+companion guides. The FHIR side is firmer - NUBC Revenue Codes, NUBC
+Patient Discharge Status, `ClaimInformationCategoryCodes` and
+`claimcareteamrole` were each confirmed by direct fetch.
 
-**The second real consumer of 837P's own 3-level HL chain** - verified
-directly against a real X12.org-published example
-(`x12.org/examples/005010x223/example-1a-institutional-claim`, quoted
-verbatim rather than trusted from a secondary source) that the top-level
-loop shape is genuinely identical to 837P's, not coincidentally similar:
-2000A (HL03="20", Billing Provider, `NM1*85`), 2000B (HL03="22",
-Subscriber, `NM1*IL`+`DMG`, with the payer `NM1*PR` nested inside this same
-loop's own members - not its own root loop), 2000C (HL03="23", Patient,
-optional, `NM1*QC`+`DMG`). At the time this module was written it kept its
-own `resolve_837i_loops()` rather than importing `claim_837p.py`'s
-directly - deliberately, not an oversight: this codebase's own established
-discipline is "extract a shared helper only once a second real,
-independently-tested consumer exists," and pre-emptively coupling this
-module to 837P's resolver before 837I's own test suite had independently
-proven every edge case (the `claim_loop`/`patient_is_dependent` two-gate
-split in particular) would have risked the exact "assumed-identical,
-actually diverged" trap that prompted extracting `build_coverage`/
-`build_diagnosis_codeable_concepts` in the first place. `claim_837d.py`
-became that third, independently-tested consumer once it shipped, proving
-the resolver (and the trivially-duplicated `find_nm1_by_entity_code`/
-`find_dtp_by_qualifier`/`DTP_SERVICE_DATE` alongside it) genuinely
-identical across all three variants, not just superficially similar -
-`resolve_837_loops()`/`Resolved837Loops` now live in `common.py`, shared
-by all three 837 builders.
+Shares 837P's 3-level HL chain (2000A Billing Provider / 2000B Subscriber,
+with the payer `NM1*PR` nested in that same loop / optional 2000C
+Patient), confirmed against the real example rather than assumed from the
+family name. `resolve_837_loops()` lives in `common.py` now that 837D is a
+third independently-tested consumer.
 
-**Where 837I genuinely diverges from 837P - confirmed by the same real
-example, not assumed from the family name alone:**
-  - `CLM05-1` is NOT a Place-of-Service code the way 837P's is - it's the
-    first two digits of the UB-04 Type of Bill (Facility Type Code, e.g.
-    "14"=Other, "11"=Hospital Inpatient), a genuinely different vocabulary.
-    No verified free FHIR-canonical CodeSystem was found for it (unlike
-    837P's real, verified CMS POS system) - disclosed and left unmapped
-    entirely, rather than reusing `Claim.item.locationCodeableConcept`
-    (which would be semantically wrong here: CLM05-1 for institutional
-    claims describes what *kind* of stay this was, not *where* the service
-    happened).
-  - **`CL1` (Institutional Claim Code) has no 837P equivalent at all** -
-    CL101 Admission Type Code, CL102 Admission Source Code, CL103 Patient
-    Status Code. Only CL103 is mapped this slice, via `Claim.supportingInfo`
-    with `category` = the real `discharge` code from FHIR's own
-    `ClaimInformationCategoryCodes` value set ("Discharge status and
-    discharge to locations" - a direct semantic match, confirmed by fetch)
-    and `code` on the real, verified NUBC Patient Discharge Status
-    CodeSystem (`https://www.nubc.org/CodeSystem/PatDischargeStatus` -
-    confirmed by fetch, including a dedicated HL7 Terminology Authority
-    page naming CL103 specifically). CL101/CL102 (admission type/source)
-    have no comparably-fitting code in that value set (`hospitalized` is
-    the closest conceptual neighbor but describes a span, not a type/source
-    code) and are left disclosed-and-unmapped rather than forcing a
-    mismatched category onto them.
-  - **`HI`'s much richer institutional usage is only partially mapped this
-    slice**: only the diagnosis-qualified composites (`ABK`/`ABF`/`BK`/`BF`
-    - the identical qualifier set 837P and Phase 3's 278 both already use)
-    feed `Claim.diagnosis[]`, via the same shared
-    `common.py::build_diagnosis_codeable_concepts` 837P already uses -
-    genuinely the same composite shape, confirmed by the real example.
-    Occurrence codes (`BH` qualifier), value codes (`BE`), and condition
-    codes (`BG`) - all real, present-in-the-actual-example HI usages with
-    no equivalent in 837P at all - are disclosed and deliberately deferred:
-    each would need its own `Claim.supportingInfo` category mapping
-    decided independently (none map cleanly to `ClaimInformationCategoryCodes`
-    either, confirmed by fetch), a large enough scope on its own to be a
-    future slice rather than bundled into this one, matching this
-    project's own "one thing per slice" precedent.
-  - **`SV2` (Institutional Service Line) replaces `SV1` - a related but
-    NOT identical composite shape, confirmed by direct verification, not
-    assumed from the "both are service line segments" family
-    resemblance**: `SV2-01` (Revenue Code) is the required, primary field
-    - unlike `SV1-01`'s always-present procedure code, `SV2-02` (the
-    composite procedure identifier) is genuinely *optional* in real
-    institutional lines (e.g. a bare room-and-board revenue-code line
-    carries no procedure code at all) - `ClaimItem.productOrService` is
-    still FHIR-required regardless (confirmed by direct construction, the
-    same "don't trust `model_fields`" lesson every EDI phase has already
-    learned at least once), so this module falls back to
-    `CodeableConcept(text=f"Revenue code {revenue_code}")` rather than a
-    generic placeholder string, since the revenue code itself is always
-    genuinely informative here. `SV2-01` maps to the real, verified NUBC
-    Revenue Codes CodeSystem (`https://www.nubc.org/CodeSystem/RevenueCodes`
-    - confirmed by fetch) via `ClaimItem.revenue`, a field 837P's own
-    `SV1`-derived items never populate (professional claims don't carry
-    revenue codes at all). **`SV2` has no diagnosis-pointer composite at
-    all, unlike `SV1-07`** - confirmed directly (not assumed): institutional
-    diagnoses apply at the claim level via `HI`, not per-service-line, so
-    `Claim.item[].diagnosisSequence` is never populated by this module, a
-    genuine structural fact about 837I, not a missing feature carried over
-    incompletely from 837P.
-  - **Attending Provider (`NM1*71`) replaces 837P's Rendering Provider
-    (`NM1*82`)** as the one 2310-level provider role this slice
-    materializes - institutional claims' primary "who is responsible for
-    this patient" role is the attending physician, not a per-line
-    rendering provider (which 837I also supports via its own `2310`
-    sub-loop shapes, deferred here the same way 837P defers Service
-    Facility Location). Mapped to `Claim.careTeam[]` with `role="primary"`
-    (the same closest-fit code 837P's own rendering-provider mapping
-    already uses, confirmed against the same 4-code
-    `claimcareteamrole` value set - there's no `"attending"` code in that
-    value set either).
+**Where 837I genuinely differs from 837P:**
+  - `CLM05-1` is a UB-04 Type of Bill, not a Place of Service - a
+    different vocabulary describing what *kind* of stay this was, not
+    where service happened. No free FHIR-canonical CodeSystem was found
+    for it, so it is unmapped rather than forced into
+    `Claim.item.locationCodeableConcept`.
+  - `CL1` has no 837P equivalent. Only CL103 (Patient Status) is mapped,
+    to `Claim.supportingInfo` with category `discharge` and the NUBC
+    Patient Discharge Status CodeSystem. CL101/CL102 have no fitting
+    category and are unmapped.
+  - `HI` carries occurrence/value/condition codes (`BH`/`BE`/`BG`)
+    alongside diagnoses, and institutional claims split them across
+    several `HI` segments. Only diagnosis-qualified composites are read
+    (see `iter_diagnosis_hi_segments`); the rest are skipped so they
+    cannot pollute `Claim.diagnosis[]`, and are unmapped.
+  - `SV2` replaces `SV1`: `SV2-01` (Revenue Code, NUBC) is required and
+    primary, `SV2-02`'s procedure composite is optional, and there is no
+    diagnosis-pointer composite at all - institutional diagnoses apply at
+    claim level via `HI`.
+  - Attending Provider (`NM1*71`) replaces 837P's Rendering Provider
+    (`NM1*82`) as the one 2310-level role mapped, to `Claim.careTeam[]`
+    with role `primary` (no `attending` code exists in the 4-code value
+    set).
 
-Disclosed Phase scope limits, decided up front (mirroring 837P's own
-disclosure style): only the first 2300 claim per transaction set is
-mapped; 2010AB Pay-to Provider, 2310B Operating Physician, 2310C Other
-Operating Physician, 2310E Service Facility Location, and the 2320/2330
-Other Subscriber Information (COB) loops are never read; `CLM05-1`,
-`CL101`/`CL102`, and `HI`'s occurrence/value/condition-code usages have no
-mapped FHIR target this slice (see above); `SV206`/`SV207` (non-covered
-charges) are not read."""
+**Scope limits**: only the first 2300 claim per transaction set; 2010AB,
+2310B/C, 2310E and the 2320/2330 COB loops are never read; `SV206`/
+`SV207` (non-covered charges) are not read."""
 
 import uuid
 

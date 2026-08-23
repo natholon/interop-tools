@@ -1,128 +1,47 @@
-"""X12 837D (Health Care Claim: Dental, 005010X224) -> FHIR `Claim`
-(`use="claim"`, `type="oral"`).
+"""X12 837D (Health Care Claim: Dental, 005010X224A2) -> FHIR `Claim`
+(`use="claim"`, `type="oral"`), completing the "big five" HIPAA suite.
 
-**Disclosed verification-source gap, same as every EDI phase in this app**:
-X12's own TR3 for 837D is paywalled (no official free X12-to-FHIR IG exists
-for this transaction set). The X12-side segment shape below is verified
-against a real X12.org-published example
-(`x12.org/examples/005010x224/example-01-commercial-health-insurance`,
-fetched and quoted verbatim) plus cross-referenced free sources (a Stedi
-X12 segment reference for `SV3`'s own element list, since the one real
-example alone doesn't label every position) - not the paywalled primary
-TR3 itself. The FHIR-side CodeSystem claims (ADA Code on Dental Procedures
-and Nomenclature/CDT, ADA Universal Tooth Designation System, ADA Tooth
-Surface Codes) were each confirmed by direct fetch of `terminology.hl7.org`.
+**Verification gap, shared by every EDI family here**: X12's TR3 is
+paywalled and no free X12-to-FHIR crosswalk exists. Verified against a
+real X12.org example (`005010x224/example-01-commercial-health-insurance`)
+plus a Stedi segment reference; the FHIR side (CDT, ADA Universal Tooth
+Designation, ADA Tooth Surface Codes) confirmed by direct fetch.
 
-**The third real consumer of the same 3-level HL chain 837P/837I already
-established, confirmed genuinely identical by the same real example, not
-assumed from the "another 837 variant" family resemblance**: 2000A(`"20"`,
-Billing Provider)->`NM1*85`, 2000B(`"22"`, Subscriber)->`NM1*IL`+`DMG` with
-the payer `NM1*PR` nested in the same loop's own members, 2000C(`"23"`,
-Patient, optional)->`NM1*QC`+`DMG`. This app's own "extract on second use,
-once genuinely proven, not preemptively" discipline meant `claim_837i.py`
-kept its own independent resolver rather than importing `claim_837p.py`'s
-- but this module (837D) is the third independently-tested implementation
-that discipline itself was waiting for: `resolve_837_loops()`/
-`Resolved837Loops` (and the trivially-duplicated `find_nm1_by_entity_code`/
-`find_dtp_by_qualifier`/`DTP_SERVICE_DATE`) now live in `common.py`,
-shared by all three 837 builders, once a follow-up review confirmed all
-three copies really were byte-for-byte identical, not just superficially
-similar.
+Shares 837P/837I's 3-level HL chain via the shared `resolve_837_loops()`.
 
-**Where 837D genuinely diverges from 837P/837I, confirmed by the same real
-example and a cross-referenced X12 segment reference, not assumed**:
-  - **`CLM05-1` uses the SAME Place-of-Service vocabulary as 837P's - NOT
-    837I's UB-04 Type of Bill** (confirmed both by the real example's own
-    value, `"11"` = Office, and by `SV3-03`'s own field description,
-    "Place of Service Codes for Professional **or Dental** Services" -
-    the two formats genuinely share this vocabulary, not a coincidence).
-    This module reuses `common.py::POS_CODE_SYSTEM`/
-    `build_place_of_service_from_clm05` directly - the same claim-wide
-    default pattern 837P already established (a per-line `SV3-03`
-    override is real but out of scope this slice, the same simplification
-    837P already made for its own analogous `SV1-05`).
-  - **`SV3` (Dental Service) replaces `SV1`/`SV2` - genuinely different
-    from both**: `SV3-01`'s procedure-code qualifier is `"AD"` in the real
-    example (American Dental Association / CDT codes) - unlike 837P's own
-    `"HC"` qualifier (a genuinely unresolvable CPT-vs-HCPCS-Level-II
-    ambiguity, disclosed there), dental claims overwhelmingly use exactly
-    one code system (CDT) for procedure codes in practice, so `"AD"` maps
-    directly to the real, verified `http://www.ada.org/cdt` canonical
-    system rather than a disclosed local placeholder - any other qualifier
-    (rare in practice) still falls back to a disclosed local system, the
-    same "canonical when recognized, disclosed fallback otherwise"
-    pattern every other coded lookup in this app follows. `SV3-06`
-    (Quantity/Procedure Count) -> `Claim.item.quantity`. `SV3-11`
-    (Diagnosis Code Pointer) -> `Claim.item.diagnosisSequence`, resolved
-    against `Claim.diagnosis[]` the identical way 837P's own `SV1-07`
-    already is (up to 4 1-based positions, out-of-range/non-numeric
-    pointers silently skipped) - **confirmed, not just inferred by
-    analogy**: the one real X12.org example this builder was verified
-    against never populates SV3-11 itself, so this shape was originally
-    disclosed as inferred-by-analogy-only; a follow-up review fetched a
-    2025 CMS/CGS 837D companion guide and two independent X12 5010
-    segment schemas, all of which confirm SV3-11 genuinely is the
-    identical `C004` Composite Diagnosis Code Pointer `SV1-07` uses, not
-    a caret-repeated simple element as an earlier, since-corrected
-    secondary-source check briefly suggested. `SV3-04` (Oral Cavity
-    Designation, a genuinely separate concept from tooth number/surface)
-    has no FHIR target mapped this slice.
-  - **`TOO` (Tooth Information) is its own segment, not part of `SV3` at
-    all, but a member of the identical `LX` service-line group** - the
-    real example confirms this directly (`LX*1~` / `SV3*...~` / `TOO*...~`
-    / `LX*2~`, `TOO` following `SV3` within one line group). `TOO02`
-    (tooth number) -> `Claim.item.bodySite`, `TOO03` (a genuinely
-    *sub-composite* shape - up to 5 colon-separated single-letter surface
-    codes, since a real tooth has at most 5 relevant surfaces) ->
-    `Claim.item.subSite` (a `list[CodeableConcept]`, confirmed via direct
-    construction that this field is genuinely a list, unlike `bodySite`).
-    `TOO01` (Code List Qualifier) is `"JP"` in the real example - the
-    Universal/National Tooth Designation System, the dominant real-world
-    US system - confirmed to map to the real, verified
-    `http://terminology.hl7.org/CodeSystem/ADAUniversalToothDesignationSystem`
-    canonical system; **deliberately NOT the FHIR `ex-tooth`/`tooth`
-    ValueSet's own backing CodeSystem**, which is FDI (international)
-    numbering - a genuinely different vocabulary using different digits
-    for the same physical tooth, confirmed by direct fetch rather than
-    assumed from the shared "tooth numbering" concept. `TOO03`'s own
-    surface letters (`M`/`O`/`D`/`B`/`L`/`F`/`I`) map to the real, verified
-    `http://terminology.hl7.org/CodeSystem/ADAToothSurfaceCodes` -
-    confirmed to use the identical letter codes by direct fetch, not
-    assumed from the similar-sounding international `FDI-surface`
-    CodeSystem (a real trap this app has hit before with similarly-named-
-    but-different vocabularies, e.g. CDA's `F`/`M`/`UN` gender codes vs.
-    HL7v2's `M`/`F`/`O`). Any `TOO01` other than `"JP"` falls back to a
-    disclosed local system for `bodySite` rather than being forced into
-    the Universal system's own numbering, since no other qualifier's
-    mapping was verified.
-  - **`DTP*472` (Service Date) commonly appears at the CLAIM level (2300)
-    for dental claims, not per-service-line (2400) the way 837P/837I's own
-    service lines carry it** - confirmed directly by the real example,
-    where neither of its two service lines carries its own `DTP`, but one
-    claim-level `DTP*472` does. This module resolves `Claim.item.
-    servicedDate` per line from a per-line `DTP*472` when present (the
-    same qualifier-filtered `find_dtp_by_qualifier` every sibling family
-    already uses), falling back to the one claim-level `DTP*472` as a
-    claim-wide default otherwise - the same "claim-wide default, per-line
-    override when present" pattern `CLM05-1`'s own place-of-service
-    mapping already establishes, applied here because the real example
-    genuinely needs it to produce a useful `servicedDate` at all.
-  - **Rendering Provider uses `NM1*82` - the same code as 837P's, NOT
-    837I's `NM1*71` Attending Provider** - confirmed directly by the real
-    example. Mapped to `Claim.careTeam[]` with `role="primary"` the
-    identical way 837P's own rendering-provider mapping already is, with
-    every `Claim.item[]` carrying `careTeamSequence=[1]` back to it when
-    present (a follow-up code review caught this exact linkage missing
-    once already, for 837I - built correctly here from the start).
+**Where 837D differs:**
+  - `CLM05-1` uses the *same* Place-of-Service vocabulary as 837P (not
+    837I's UB-04 Type of Bill), confirmed by `SV3-03`'s own field
+    description covering "Professional or Dental Services".
+  - `SV3` replaces `SV1`/`SV2`. `SV3-01`'s qualifier is `"AD"` (CDT) in
+    practice, mapped to the real `http://www.ada.org/cdt` system; any
+    other qualifier falls back to a disclosed local system. `SV3-11` is
+    the same `C004` Composite Diagnosis Code Pointer as `SV1-07` -
+    originally disclosed as inferred-by-analogy since the example never
+    populates it, later confirmed against a 2025 CMS/CGS companion guide
+    and two X12 5010 segment schemas.
+  - **`TOO` (Tooth Information) is its own segment**, a member of the
+    `LX` line group rather than part of `SV3`. `TOO02` ->
+    `Claim.item.bodySite`, `TOO03` (up to 5 colon-separated surface
+    letters) -> `Claim.item.subSite` (confirmed a list, unlike
+    `bodySite`). `TOO01="JP"` maps to ADAUniversalToothDesignationSystem -
+    deliberately NOT FHIR's `ex-tooth` ValueSet, which is FDI numbering:
+    a different vocabulary using different digits for the same tooth.
+    Surface letters likewise map to ADAToothSurfaceCodes, not the
+    similarly-named international `FDI-surface` (the same
+    similar-name-different-vocabulary trap CDA's `F`/`M`/`UN` gender codes
+    already sprang once). A non-`JP` qualifier falls back to a local
+    system rather than assuming Universal numbering.
+  - **`DTP*472` is commonly claim-level (2300) for dental**, not per-line
+    - the real example's two service lines carry none. Resolved per line
+    when present, else from the one claim-level default.
+  - Rendering Provider is `NM1*82` (as 837P, not 837I's `NM1*71`), mapped
+    to `Claim.careTeam[]` role `primary`, with each item carrying
+    `careTeamSequence=[1]`.
 
-Disclosed Phase-7 scope limits, decided up front, mirroring 837P/837I's own
-disclosure style: only the first 2300 claim per transaction set is mapped;
-2010AB Pay-to Provider, 2310C Service Facility Location, and the 2320/2330
-Other Subscriber Information (COB) loops are never read; `SV3-03`'s own
-per-line place-of-service override, `SV3-04` (Oral Cavity Designation),
-`SV3-05` (Prosthesis/Crown/Inlay Code), `SV3-07` through `SV3-10` (free-text
-reason, copay status, provider agreement, predetermination indicator) have
-no mapped FHIR target this slice."""
+**Scope limits**: only the first 2300 claim; 2010AB, 2310C and the
+2320/2330 COB loops are never read; `SV3-03`'s per-line place-of-service
+override, `SV3-04`, `SV3-05` and `SV3-07`-`SV3-10` are unmapped."""
 
 import uuid
 
