@@ -37,15 +37,35 @@ def build_patient(pid, recorder=None) -> Patient:
         value = component_str(repetition, 1)
         if not value:
             continue
-        system = component_str(repetition, 4) or "urn:interop-tools:patient-id"
+        assigning_authority = component_str(repetition, 4)
+        system = assigning_authority or "urn:interop-tools:patient-id"
         identifiers.append(Identifier(system=system, value=value))
         if recorder:
+            index = len(identifiers) - 1
             recorder.record(
                 patient_id,
-                f"identifier[{len(identifiers) - 1}].value",
+                f"identifier[{index}].value",
                 hl7_location("PID", 3, repetition=idx, component=1),
                 value,
             )
+            # PID-3.4 genuinely drives .system, so it needs its own fact -
+            # without it the crosswalk shows no source for .system at all,
+            # and a completeness check can't tell "mapped but unrecorded"
+            # apart from "dropped".
+            if assigning_authority:
+                recorder.record(
+                    patient_id,
+                    f"identifier[{index}].system",
+                    hl7_location("PID", 3, repetition=idx, component=4),
+                    system,
+                )
+            else:
+                recorder.record_inferred(
+                    patient_id,
+                    f"identifier[{index}].system",
+                    "PID-3.4 (Assigning Authority) was empty, so a local placeholder system is used.",
+                    system,
+                )
 
     patient = Patient(id=patient_id)
     if identifiers:

@@ -107,10 +107,12 @@ SEGMENT_FIELD_NAMES: dict[str, dict[int, str]] = {
 # here has no component-level label to offer - SEGMENT_FIELD_NAMES'
 # whole-field name is used instead.
 _FIELD_DATATYPES: dict[str, dict[int, str]] = {
-    "PID": {3: "CX", 5: "XPN", 11: "XAD"},
+    "PID": {3: "CX", 5: "XPN", 11: "XAD", 13: "XTN"},
     "AIG": {3: "CWE"},
+    "AIL": {3: "PL"},
     "AIP": {3: "XCN"},
     "OBX": {16: "XCN"},
+    "PV1": {3: "PL", 6: "PL", 7: "XCN", 19: "CX"},
     "TXA": {9: "XCN", 10: "XCN"},
     "SCH": {11: "TQ"},
 }
@@ -119,6 +121,30 @@ _FIELD_DATATYPES: dict[str, dict[int, str]] = {
 # component numbering, scoped to the datatypes this app's own mappers
 # actually decompose into components.
 _COMPONENT_NAMES: dict[str, dict[int, str]] = {
+    # PL (person location), per the HL7 v2.5 standard's own component
+    # order - note component 1 is Point of Care, NOT Facility (which is
+    # component 4); getting that backwards is an easy and costly mistake.
+    "PL": {
+        1: "Point of Care",
+        2: "Room",
+        3: "Bed",
+        4: "Facility",
+        5: "Location Status",
+        6: "Person Location Type",
+        7: "Building",
+        8: "Floor",
+        9: "Location Description",
+    },
+    "XTN": {
+        1: "Telephone Number",
+        2: "Telecommunication Use Code",
+        3: "Telecommunication Equipment Type",
+        4: "Email Address",
+        5: "Country Code",
+        6: "Area/City Code",
+        7: "Local Number",
+        8: "Extension",
+    },
     "CX": {
         1: "ID",
         2: "Check Digit",
@@ -144,6 +170,9 @@ _COMPONENT_NAMES: dict[str, dict[int, str]] = {
         5: "Zip or Postal Code",
         6: "Country",
         7: "Address Type",
+        8: "Other Geographic Designation",
+        9: "County/Parish Code",
+        10: "Census Tract",
     },
     "XCN": {
         1: "ID",
@@ -192,3 +221,11 @@ def resolve_hl7_field_label(parsed: ParsedHl7Location) -> str | None:
         if component_name:
             return component_name
     return SEGMENT_FIELD_NAMES.get(parsed.segment_id, {}).get(parsed.field)
+
+
+def component_names_for_field(segment_id: str, field: int) -> dict[int, str] | None:
+    """Component names for a field, or None when its datatype isn't one
+    this table covers. Public so app/provenance/decisions.py can label a
+    dropped component without re-deriving the datatype lookup."""
+    datatype = _FIELD_DATATYPES.get(segment_id, {}).get(field)
+    return _COMPONENT_NAMES.get(datatype) if datatype else None
