@@ -448,6 +448,18 @@ def _build_result_observation(
     )
 
     member_base = _member_base(index)
+
+    # /id -> .identifier, per the IG's own CF-results mapping table. Every
+    # entry-level id here was dropped before.
+    identifiers = build_identifiers(
+        find_all(observation_element, "id"),
+        "urn:interop-tools:cda-result-id",
+        resource_id=observation_id,
+        location_prefix=xpath_location(member_base, "id"),
+        recorder=recorder,
+    )
+    if identifiers:
+        observation.identifier = identifiers
     if recorder:
         _record_status(recorder, observation_id, observation_element, status, member_base)
         _record_category(recorder, observation_id)
@@ -585,6 +597,17 @@ def build_diagnostic_reports(section, patient_id: str, recorder=None) -> list[Ob
         )
         if organizer_specimen is not None:
             report.specimen = [Reference(reference=f"urn:uuid:{organizer_specimen.id}")]
+
+        # organizer/id -> .identifier, per CF-results' own mapping table.
+        organizer_identifiers = build_identifiers(
+            find_all(organizer, "id"),
+            "urn:interop-tools:cda-result-panel-id",
+            resource_id=report_id,
+            location_prefix=xpath_location("organizer", "id"),
+            recorder=recorder,
+        )
+        if organizer_identifiers:
+            report.identifier = organizer_identifiers
 
         if recorder:
             _record_status(recorder, report_id, organizer, report_status, "organizer")

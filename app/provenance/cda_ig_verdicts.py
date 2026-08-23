@@ -29,6 +29,15 @@ tag means different things at different depths - a Problem Concern Act's
 own `id` is "not supported by target" while the Problem Observation's `id`
 inside it maps to `Condition.identifier`.
 
+**A shape is not always enough, and a key that over-reaches is worse than
+no key at all.** Two GAP verdicts were withdrawn after they turned out to
+be matching a *different section's* element at the same depth: an Allergy
+Reaction Observation's `id` was being given the Problem Observation's
+verdict, and a Comment Activity's `code` was being given the Instruction
+act's. Telling those apart needs the templateId, which the drop register
+does not carry - so where a shape cannot distinguish them, no verdict is
+asserted and the honest "not yet checked" stands.
+
 **Scope, stated rather than implied.** The verdicts below come from the
 Patient and Problem-Condition tables plus the header guidance above.
 Allergy, Immunization, MedicationRequest and Procedure each publish their
@@ -48,10 +57,21 @@ from app.provenance.citations import (
 
 NOT_SUPPORTED = "not_supported"
 NO_MAP = "no_map"
+SUPERSEDED = "superseded"
 GAP = "gap"
+
+# The IG defines a target this app builds from a different part of the same
+# element - so the dropped piece is not a missing capability.
+CDA_IG_SUPERSEDED = Citation(
+    title="C-CDA on FHIR target built from another part of this element",
+    url="https://build.fhir.org/ig/HL7/ccda-on-fhir/",
+    authoritative=True,
+    note="The IG's target for this element is built by this app from a sibling attribute; this piece has no target of its own.",
+)
 
 _CITATION_BY_VERDICT = {
     NOT_SUPPORTED: CDA_IG_NOT_SUPPORTED,
+    SUPERSEDED: CDA_IG_SUPERSEDED,
     NO_MAP: CDA_IG_NO_MAP_SPECIFIED,
     GAP: CDA_IG_DEFINES_TARGET,
 }
@@ -89,17 +109,53 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
         NOT_SUPPORTED,
         'Problem Observation "..negationInd" is marked "not supported by target".',
     ),
-    "entryRelationship/observation/id": (
-        GAP,
-        'Problem Observation "..id" maps as source value to Condition.identifier.',
+    # NOTE: no entry for "entryRelationship/observation/id". Condition.identifier
+    # is now built, so the Problems case is not a gap - and the shape alone
+    # cannot tell a Problem Observation from an Allergy Reaction Observation
+    # nested at the same depth, whose own IG target is .reaction.id instead.
+    # Claiming the Problems verdict for both was a real misattribution; the
+    # remaining hits (a negated or REFR-wrapped entry that produces no
+    # resource at all) keep the honest "not yet checked" citation rather
+    # than a verdict borrowed from a different section.
+    "entryRelationship/observation/statusCode": (
+        NO_MAP,
+        "The Problem-Condition table maps the Problem Observation's value, id, code and "
+        "effectiveTime, and the Problem Status Observation's own value - but lists no row for the "
+        "observation's own statusCode.",
+    ),
+    "entryRelationship/observation/code": (
+        NOT_SUPPORTED,
+        "Problem Observation \"..code\" is listed against Condition.category with the IG's own "
+        'comment "map not feasible" - it names a target and then says it cannot be made.',
+    ),
+    "entry/act/code": (
+        NO_MAP,
+        "The Problem-Condition table lists no row for the Concern Act's own code - it is the fixed "
+        "CONC act type, not patient data.",
+    ),
+    # --- Encounters (CF-encounters.md) -----------------------------------
+    "encompassingEncounter/code": (
+        SUPERSEDED,
+        "The Encounters table maps /code to .class for V3 ActCode values, which this app builds; "
+        "the display name alongside it has no target of its own.",
+    ),
+    # --- Vitals / Results (CF-vitals.md, CF-results.md) ------------------
+    "organizer/code": (
+        NOT_SUPPORTED,
+        "CF-vitals fixes the panel code to 85353-1 - the organizer's own narrative-only /code is "
+        "never read into it.",
     ),
     # --- Procedure (CCDA-FHIR Procedure.csv) ----------------------------
     "procedure/priorityCode": (NOT_SUPPORTED, 'Marked "not supported by target".'),
     "procedure/methodCode": (NOT_SUPPORTED, 'Marked "not supported by target".'),
-    "entryRelationship/act/code": (
-        GAP,
-        'entryRelationship.act.code [Instruction] maps as source value to Procedure.followUp.',
-    ),
+    # NOTE: no entry for "entryRelationship/act/code" either. The IG maps it
+    # to Procedure.followUp *for an Instruction act specifically*, and the
+    # bare shape cannot tell an Instruction from the Comment Activity nested
+    # at the same depth - whose own code is a fixed template marker. Keying
+    # on the shape alone labelled a Comment Activity with the Instruction's
+    # verdict, which is the same misattribution as the observation/id case
+    # above. Distinguishing them needs the templateId, which the drop
+    # register does not carry, so both keep the honest "not yet checked".
     # --- Immunization (CCDA-FHIR Immunization.csv) ----------------------
     # The Immunization Activity's own code is "not supported by target" in
     # both the EVN and INT mood rows - the vaccine is carried by

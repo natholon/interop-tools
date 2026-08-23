@@ -562,6 +562,20 @@ def test_cda_drops_cite_a_real_ig_verdict_not_unchecked():
     assert any("not supported by target" in t for t in titles)
 
 
+def test_cda_verdicts_do_not_reach_across_sections():
+    """Two GAP verdicts were withdrawn after they turned out to be matching
+    a different section's element at the same depth - an Allergy Reaction
+    Observation's id given the Problem Observation's verdict, and a Comment
+    Activity's code given the Instruction act's. A shape that cannot tell
+    them apart must assert nothing rather than borrow a verdict."""
+    from app.provenance.cda_ig_verdicts import verdict_for
+
+    for shape in ("entryRelationship/observation/id", "entryRelationship/act/code"):
+        verdict, citation, _ = verdict_for(shape)
+        assert verdict is None, shape
+        assert citation.authoritative is False
+
+
 def test_cda_entry_identifiers_are_built_closing_the_ig_gap():
     """The IG maps each entry's own <id> as a source value to that
     resource's .identifier. Procedure built it; Condition, MedicationRequest,

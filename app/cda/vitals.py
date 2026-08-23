@@ -63,6 +63,7 @@ from fhir.resources.R4B.reference import Reference
 
 from app.cda.common import (
     build_codeable_concept_from_cd,
+    build_identifiers,
     build_quantity_from_pq,
     effective_time_location,
     parse_partial_ts,
@@ -241,6 +242,18 @@ def _build_vital_sign_observation(
     )
 
     member_base = _member_base(index)
+
+    # /id -> .identifier, per the IG's own CF-vitals mapping table. Every
+    # entry-level id here was dropped before.
+    identifiers = build_identifiers(
+        find_all(observation_element, "id"),
+        "urn:interop-tools:cda-vital-sign-id",
+        resource_id=observation_id,
+        location_prefix=xpath_location(member_base, "id"),
+        recorder=recorder,
+    )
+    if identifiers:
+        observation.identifier = identifiers
     if recorder:
         _record_fixed_status_and_category(recorder, observation_id)
         code_value = code_element.get("code")
@@ -510,6 +523,17 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
             subject=Reference(reference=f"urn:uuid:{patient_id}"),
             hasMember=[Reference(reference=f"urn:uuid:{member.id}") for member in member_observations],
         )
+
+        # organizer/id -> .identifier, per CF-vitals' own mapping table.
+        organizer_identifiers = build_identifiers(
+            find_all(organizer, "id"),
+            "urn:interop-tools:cda-vitals-panel-id",
+            resource_id=panel_id,
+            location_prefix=xpath_location("organizer", "id"),
+            recorder=recorder,
+        )
+        if organizer_identifiers:
+            panel.identifier = organizer_identifiers
 
         if recorder:
             _record_fixed_status_and_category(recorder, panel_id)
