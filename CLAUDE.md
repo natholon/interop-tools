@@ -2,6 +2,20 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Comment style — keep it slim
+
+**Do not use this file's own prose as a template for code comments.** Most of what follows is a historical record of how the app was built, written far more densely than new code should be. It is being trimmed; do not add to it in that style.
+
+Write the *shortest* comment that stops the next person making a mistake:
+
+- **Comment the non-obvious**: a spec quirk, a library that lies (`fhir.resources` accepts codes outside a Required binding), a similar-name-different-vocabulary trap (ADA vs FDI tooth numbering), a constraint that looks wrong until you know why. These earn their space.
+- **Skip the narrative**: "shipped once and was caught by code review", "turned out to need zero changes", "the same precedent X already established", "as a follow-up slice". Git history holds all of it, and it ages badly — a "recent" fix reads as current forever.
+- **Skip restating the code.** If the line says what it does, the comment shouldn't.
+- **A module docstring is an orientation, not a design record.** Target ~10-25 lines: what this maps, where the mapping is specified, and the handful of places it genuinely diverges or falls back. Push anything longer into a short bulleted "scope limits" block, not prose.
+- **Cite the source, not the journey.** "Per the v2-to-FHIR PL[Location] map" beats a paragraph on how it was fetched and verified.
+
+**One thing to keep doing**: state a real limitation plainly — an unmapped field, a lossy join, a guessed default. Slim means fewer words, not fewer disclosures. Say it in a sentence rather than a paragraph.
+
 ## Project
 
 `interop-tools` (formerly `hl7-tools`, renamed as scope expanded beyond HL7v2) is a Python/FastAPI web app for converting healthcare messages/documents to FHIR R4 Bundles. The long-term goal (see README.md) covers transformation, validation, deduplication, test-data generation, and mapping across HL7v2/FHIR/CDA/C-CDA/EDI. Currently implemented:
