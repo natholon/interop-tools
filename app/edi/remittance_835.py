@@ -26,8 +26,8 @@ references, not assumed):
     CLP     2100, one per claim: CLP01 id, CLP02 status, CLP03 charge,
             CLP04 paid, CLP05 patient responsibility, CLP06 filing
             indicator, CLP07 payer control number
-      CAS   claim-level adjustments - walked but not mapped
-      SVC   2110 service-line detail - deferred
+      CAS   adjustments -> one detail[] each, see below
+      SVC   2110 service-line amounts - not mapped, see below
 
 `N1` is genuinely simpler than `NM1` (no name split - just `N102` name and
 `N103`/`N104` id qualifier/value), so this has its own
@@ -37,14 +37,36 @@ differs.
 
 `PaymentReconciliation.detail[]` operates at the claim level, not
 service-line ("correlates a payment amount to the adjudicated claim
-amounts", per the R4 spec) - so deferring `SVC` and itemized `CAS` matches
-the resource's own granularity rather than being an arbitrary cut. Per
-`CLP` group: `.type` = CLP02 on a disclosed local system (no free
-authoritative CLP02 table exists the way x12.org publishes STC's),
-`.identifier` = CLP01, `.amount` = CLP04. `.request`/`.response` stay
-unset - a standalone 835 has no `Claim`/`ClaimResponse` in its Bundle to
-reference, and unlike 271's `.request` there is no identifier fallback,
-since `.identifier` is already spoken for by CLP01."""
+amounts", per the R4 spec). Per `CLP` group: `.type` = CLP02 on a
+disclosed local system (no free authoritative CLP02 table exists the way
+x12.org publishes STC's), `.identifier` = CLP01, `.amount` = CLP04.
+`.request`/`.response` stay unset - a standalone 835 has no
+`Claim`/`ClaimResponse` in its Bundle to reference, and unlike 271's
+`.request` there is no identifier fallback, since `.identifier` is
+already spoken for by CLP01.
+
+**CAS adjustments each become their own `detail[]`.** One CAS carries a
+group code plus up to six (reason, amount, quantity) triplets, and each
+triplet is a distinct adjustment with its own amount, so each gets its own
+entry. Every part of this is citable rather than invented:
+
+- `adjustment` is FHIR's own code - the R4 `payment-type` CodeSystem is
+  exactly payment|adjustment|advance.
+- `detail.type` binds to it at **example** strength, so carrying the X12
+  codes in the same CodeableConcept is conformant. This module already
+  puts CLP02 there the same way.
+- CAS01 and CAS02 come from lists X12 publishes free, the same footing as
+  the Claim Status Category Codes `claim_status.py` cites:
+  x12.org/codes/claim-adjustment-group-codes and
+  x12.org/codes/claim-adjustment-reason-codes. FHIR names no canonical
+  system for either, so both keep a disclosed local URI.
+
+**Service-line attribution is lost, and SVC's own amounts are not mapped.**
+PaymentReconciliation has no service-line concept, so a CAS under an SVC
+and one at claim level produce indistinguishable details - the group,
+reason and amount all survive, only the line does not. SVC's own charge and
+paid amounts are deliberately left unmapped: they would double-count
+against the CLP04 already carried on the claim's own detail."""
 
 import uuid
 
@@ -60,7 +82,7 @@ from fhir.resources.R4B.resource import Resource
 
 from app.edi.base import EdiTransactionBuilder
 from app.edi.common import resolve_id_qualifier_system
-from app.edi.parser import Delimiters, Segment, TransactionSet, element, find_segment, parse_decimal
+from app.edi.parser import Delimiters, Segment, TransactionSet, element, find_segment, group_by_leader, parse_decimal
 from app.fhir_models.builders import parse_hl7_date
 from app.hl7.errors import MappingError, MissingSegmentError
 from app.provenance.location import edi_location
@@ -80,6 +102,29 @@ N1_ID_FALLBACK_SYSTEM = "urn:interop-tools:x12-n1-id"
 # local system for PaymentReconciliationDetail.type, same category as
 # claim_status.py's own STC-derived Coding systems.
 CLP_STATUS_SYSTEM = "urn:interop-tools:x12-clp-status-code"
+
+# CAS adjustments. `adjustment` is FHIR's own code for exactly this - the
+# R4 payment-type CodeSystem is payment|adjustment|advance - and
+# PaymentReconciliation.detail.type binds to it at *example* strength, so
+# carrying the X12 codes alongside it in the same CodeableConcept is
+# conformant rather than a stretch. This module already puts CLP02 on
+# detail.type the same way.
+#
+# Both X12 lists are published free by X12 itself, the same footing as the
+# Claim Status Category Codes claim_status.py cites:
+#   CAS01 https://x12.org/codes/claim-adjustment-group-codes  (CO/CR/OA/PI/PR)
+#   CAS02 https://x12.org/codes/claim-adjustment-reason-codes (CARC)
+# FHIR names no canonical system for either, so both keep a disclosed
+# local URI, exactly as CLP_STATUS_SYSTEM does.
+PAYMENT_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/payment-type"
+ADJUSTMENT_PAYMENT_TYPE = "adjustment"
+CAS_GROUP_SYSTEM = "urn:interop-tools:x12-claim-adjustment-group-code"
+CAS_REASON_SYSTEM = "urn:interop-tools:x12-claim-adjustment-reason-code"
+
+# CAS01 is the group code; the rest of the segment is up to six repeating
+# (reason, amount, quantity) triplets starting at element 2.
+_CAS_FIRST_TRIPLET_ELEMENT = 2
+_CAS_MAX_TRIPLETS = 6
 
 
 def _find_n1(segments: list[Segment], entity_code: str) -> Segment | None:
@@ -152,6 +197,79 @@ def _build_detail(clp: Segment, index: int, resource_id: str | None = None, reco
             recorder.record(resource_id, f"{detail_path}.amount.value", edi_location("CLP", 4), claim_paid_raw)
 
     return detail
+
+
+def _build_adjustment_details(
+    cas_segments, first_index: int, resource_id: str | None = None, recorder=None
+) -> list[PaymentReconciliationDetail]:
+    """One detail per CAS adjustment triplet.
+
+    A CAS segment carries one group code (CAS01) and up to six
+    (reason, amount, quantity) triplets after it, so one segment can
+    describe several distinct adjustments; each becomes its own detail,
+    since each has its own amount.
+
+    **Service-line attribution is lost, and that is disclosed.**
+    PaymentReconciliation has no service-line concept at all - .detail[]
+    is defined at the claim/payable level ("correlates a payment amount to
+    the adjudicated claim amounts") - so a CAS nested under an SVC and one
+    at claim level produce indistinguishable details. The adjustment's
+    group, reason and amount all survive; only which line it came from
+    does not.
+    """
+    details: list[PaymentReconciliationDetail] = []
+    for cas in cas_segments:
+        group_code = element(cas, 1)
+        for triplet in range(_CAS_MAX_TRIPLETS):
+            reason_element = _CAS_FIRST_TRIPLET_ELEMENT + triplet * 3
+            reason_code = element(cas, reason_element)
+            amount_raw = element(cas, reason_element + 1)
+            if not reason_code and not amount_raw:
+                # Triplets are positional and left-packed: the first empty
+                # one ends the segment's real content.
+                break
+
+            codings = [Coding(system=PAYMENT_TYPE_SYSTEM, code=ADJUSTMENT_PAYMENT_TYPE)]
+            if group_code:
+                codings.append(Coding(system=CAS_GROUP_SYSTEM, code=group_code))
+            if reason_code:
+                codings.append(Coding(system=CAS_REASON_SYSTEM, code=reason_code))
+
+            detail = PaymentReconciliationDetail(type=CodeableConcept(coding=codings))
+            index = first_index + len(details)
+            detail_path = f"detail[{index}]"
+            if recorder and resource_id:
+                recorder.record_inferred(
+                    resource_id,
+                    f"{detail_path}.type.coding[0].code",
+                    'FHIR\'s own payment-type code for an adjustment - not read from an X12 field, '
+                    "which carries the group and reason codes alongside it.",
+                    ADJUSTMENT_PAYMENT_TYPE,
+                )
+                if group_code:
+                    recorder.record(
+                        resource_id, f"{detail_path}.type.coding[1].code", edi_location("CAS", 1), group_code
+                    )
+                if reason_code:
+                    recorder.record(
+                        resource_id,
+                        f"{detail_path}.type.coding[{len(codings) - 1}].code",
+                        edi_location("CAS", reason_element),
+                        reason_code,
+                    )
+
+            amount = _parse_money(amount_raw)
+            if amount is not None:
+                detail.amount = amount
+                if recorder and resource_id:
+                    recorder.record(
+                        resource_id,
+                        f"{detail_path}.amount.value",
+                        edi_location("CAS", reason_element + 1),
+                        amount_raw,
+                    )
+            details.append(detail)
+    return details
 
 
 def _assemble_835_bundle(trace_number: str, *resources: Resource, recorder=None) -> Bundle:
@@ -259,11 +377,24 @@ class Edi835Builder(EdiTransactionBuilder):
                 bpr02_raw,
             )
 
-        clp_segments = [seg for seg in segments if seg[0] == "CLP"]
+        # Claim payments first, then the adjustments that explain them.
+        # group_by_leader is needed again here (rather than the flat CLP
+        # scan this used to do) because a CAS belongs to whichever claim
+        # precedes it - including one nested under that claim's SVC lines.
+        clp_groups = group_by_leader(segments, "CLP", ["CAS", "SVC", "NM1", "REF", "DTM", "AMT", "QTY"])
         details = [
             _build_detail(clp, i, resource_id=payment_reconciliation_id, recorder=recorder)
-            for i, clp in enumerate(clp_segments)
+            for i, (clp, _members) in enumerate(clp_groups)
         ]
+        for _clp, members in clp_groups:
+            details.extend(
+                _build_adjustment_details(
+                    [seg for seg in members if seg[0] == "CAS"],
+                    len(details),
+                    resource_id=payment_reconciliation_id,
+                    recorder=recorder,
+                )
+            )
         if details:
             payment_reconciliation.detail = details
 

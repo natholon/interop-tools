@@ -26,6 +26,25 @@ def _entries_by_type(bundle):
     return by_type
 
 
+ADJUSTMENT_TYPE = "http://terminology.hl7.org/CodeSystem/payment-type"
+
+
+def _payments(payment_reconciliation):
+    """Claim-payment details only - .detail[] now also carries one entry
+    per CAS adjustment triplet."""
+    return [
+        d for d in payment_reconciliation.detail
+        if not any(c.system == ADJUSTMENT_TYPE for c in (d.type.coding or []))
+    ]
+
+
+def _adjustments(payment_reconciliation):
+    return [
+        d for d in payment_reconciliation.detail
+        if any(c.system == ADJUSTMENT_TYPE for c in (d.type.coding or []))
+    ]
+
+
 def test_basic_fixture_maps_payer_payee_and_one_detail():
     bundle = _build_bundle("edi_835_basic.x12")
     by_type = _entries_by_type(bundle)
@@ -48,7 +67,7 @@ def test_basic_fixture_maps_payer_payee_and_one_detail():
     assert pr.paymentIssuer.reference == f"urn:uuid:{payer.id}"
     assert pr.requestor.reference == f"urn:uuid:{payee.id}"
 
-    assert len(pr.detail) == 1
+    assert len(_payments(pr)) == 1
     detail = pr.detail[0]
     assert detail.identifier.value == "PCN12345"
     assert float(detail.amount.value) == 150.00
@@ -61,9 +80,9 @@ def test_multi_claim_fixture_maps_one_detail_per_claim():
 
     pr = by_type["PaymentReconciliation"][0]
     assert float(pr.paymentAmount.value) == 250.00
-    assert len(pr.detail) == 2
+    assert len(_payments(pr)) == 2
 
-    details_by_claim = {d.identifier.value: d for d in pr.detail}
+    details_by_claim = {d.identifier.value: d for d in _payments(pr)}
     assert set(details_by_claim.keys()) == {"PCN22222", "PCN33333"}
     assert float(details_by_claim["PCN22222"].amount.value) == 250.00
     assert details_by_claim["PCN22222"].type.coding[0].code == "1"
@@ -187,3 +206,38 @@ def test_bundle_round_trips_through_json():
     round_tripped = Bundle.model_validate_json(bundle.model_dump_json())
     assert round_tripped.type == bundle.type
     assert len(round_tripped.entry) == len(bundle.entry)
+
+
+def test_cas_adjustments_become_adjustment_details():
+    # CAS carries one group code and up to six (reason, amount, quantity)
+    # triplets, each a distinct adjustment with its own amount. FHIR's own
+    # payment-type CodeSystem has an "adjustment" code for exactly this,
+    # and detail.type binds to it at example strength - so the X12 group
+    # and reason codes ride alongside it in the same CodeableConcept,
+    # which is what this app already does with CLP02.
+    from app.edi.remittance_835 import CAS_GROUP_SYSTEM, CAS_REASON_SYSTEM
+
+    pr = _entries_by_type(_build_bundle("edi_835_basic.x12"))["PaymentReconciliation"][0]
+
+    adjustments = _adjustments(pr)
+    assert len(adjustments) == 1
+    codings = {c.system: c.code for c in adjustments[0].type.coding}
+    assert codings[ADJUSTMENT_TYPE] == "adjustment"
+    assert codings[CAS_GROUP_SYSTEM] == "CO"
+    assert codings[CAS_REASON_SYSTEM] == "45"
+    assert float(adjustments[0].amount.value) == 350.00
+
+
+def test_each_claims_adjustments_are_all_carried():
+    # Two claims, one adjustment each, with different reason codes - so a
+    # CAS is attributed to the claim that precedes it rather than all of
+    # them landing on the first.
+    from app.edi.remittance_835 import CAS_REASON_SYSTEM
+
+    pr = _entries_by_type(_build_bundle("edi_835_multi_claim.x12"))["PaymentReconciliation"][0]
+
+    reasons = [
+        next(c.code for c in d.type.coding if c.system == CAS_REASON_SYSTEM)
+        for d in _adjustments(pr)
+    ]
+    assert reasons == ["45", "96"]

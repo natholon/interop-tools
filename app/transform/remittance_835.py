@@ -41,7 +41,14 @@ from fhir.resources.R4B.bundle import Bundle
 
 from app.edi.common import NM1_ID_QUALIFIER_SYSTEM
 from app.edi.generator import format_x12_date
-from app.edi.remittance_835 import CLP_STATUS_SYSTEM, N1_ID_FALLBACK_SYSTEM
+from app.edi.remittance_835 import (
+    ADJUSTMENT_PAYMENT_TYPE,
+    CAS_GROUP_SYSTEM,
+    CAS_REASON_SYSTEM,
+    CLP_STATUS_SYSTEM,
+    N1_ID_FALLBACK_SYSTEM,
+    PAYMENT_TYPE_SYSTEM,
+)
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
 from app.transform.common import find_resource
@@ -112,6 +119,27 @@ def _build_bpr_segment(payment_reconciliation) -> str:
     return "BPR*" + "*".join(fields) + "~"
 
 
+def _is_adjustment(detail) -> bool:
+    return any(
+        coding.system == PAYMENT_TYPE_SYSTEM and coding.code == ADJUSTMENT_PAYMENT_TYPE
+        for coding in ((detail.type.coding if detail.type else None) or [])
+    )
+
+
+def _build_cas_segment(detail) -> str:
+    """One CAS per adjustment detail - a single triplet each, since the
+    forward direction splits every triplet into its own detail and keeps
+    no record of which ones shared a segment."""
+    group_code = reason_code = ""
+    for coding in ((detail.type.coding if detail.type else None) or []):
+        if coding.system == CAS_GROUP_SYSTEM:
+            group_code = sanitize_x12_text(coding.code or "")
+        elif coding.system == CAS_REASON_SYSTEM:
+            reason_code = sanitize_x12_text(coding.code or "")
+    amount = f"{detail.amount.value:.2f}" if detail.amount else "0.00"
+    return "CAS*" + "*".join([group_code, reason_code, amount]) + "~"
+
+
 def _build_clp_segment(detail) -> str:
     claim_id = sanitize_x12_text(detail.identifier.value) if detail.identifier and detail.identifier.value else ""
     status_code = ""
@@ -173,7 +201,25 @@ class Edi835Builder(MessageBuilder):
             _build_n1_segment("PR", payer),
             _build_n1_segment("PE", payee),
         ]
-        body_segments = [_build_clp_segment(detail) for detail in (payment_reconciliation.detail or [])]
+        # .detail[] now holds claim payments *and* CAS adjustments; only
+        # the former are CLP segments.
+        details = payment_reconciliation.detail or []
+        payments = [d for d in details if not _is_adjustment(d)]
+        adjustments = [d for d in details if _is_adjustment(d)]
+        body_segments = [_build_clp_segment(detail) for detail in payments]
+        # Adjustments are emitted after the first claim. The forward
+        # direction cannot record which claim (or service line) a CAS
+        # belonged to - PaymentReconciliation has no service-line concept
+        # and .detail[] is flat - so there is nothing to restore it from.
+        # Re-parsing this output yields the identical flat list, so the
+        # round trip is stable at the Bundle level even though the original
+        # segment placement is not reproduced.
+        if adjustments and body_segments:
+            body_segments = (
+                body_segments[:1]
+                + [_build_cas_segment(detail) for detail in adjustments]
+                + body_segments[1:]
+            )
 
         trailer_segments = build_trailer_segments(header_segments, body_segments)
         return "".join(envelope_segments + header_segments + body_segments + trailer_segments)

@@ -1486,11 +1486,31 @@ def test_list_supported_targets_includes_835():
     assert ("EDI", "835", "") in list_supported_targets()
 
 
+_ADJUSTMENT_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/payment-type"
+
+
+def _claim_payments(payment_reconciliation):
+    """Claim-payment details only - .detail[] also carries one entry per
+    CAS adjustment triplet."""
+    return [
+        d for d in payment_reconciliation.detail
+        if not any(c.system == _ADJUSTMENT_TYPE_SYSTEM for c in (d.type.coding or []))
+    ]
+
+
+def _claim_adjustments(payment_reconciliation):
+    return [
+        d for d in payment_reconciliation.detail
+        if any(c.system == _ADJUSTMENT_TYPE_SYSTEM for c in (d.type.coding or []))
+    ]
+
+
 def test_edi_835_round_trip_preserves_payment_and_details():
     forward_x12 = (FIXTURES / "edi_835_basic.x12").read_text()
     bundle = convert_edi_to_bundle(forward_x12)
     original_pr = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation")
-    assert len(original_pr.detail) == 1
+    assert len(_claim_payments(original_pr)) == 1
+    assert len(_claim_adjustments(original_pr)) == 1
 
     message_text = build_message_from_bundle(bundle, "EDI", "835", "")
     assert "ST*835*" in message_text
@@ -1500,9 +1520,20 @@ def test_edi_835_round_trip_preserves_payment_and_details():
     pr = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation")
     assert pr.paymentAmount.value == original_pr.paymentAmount.value
     assert pr.paymentDate == original_pr.paymentDate
-    assert len(pr.detail) == 1
-    assert pr.detail[0].identifier.value == original_pr.detail[0].identifier.value
-    assert pr.detail[0].amount.value == original_pr.detail[0].amount.value
+    payments = _claim_payments(pr)
+    assert len(payments) == 1
+    assert payments[0].identifier.value == _claim_payments(original_pr)[0].identifier.value
+    assert payments[0].amount.value == _claim_payments(original_pr)[0].amount.value
+
+    # The CAS adjustment survives with its group code, reason code and
+    # amount. Which claim it belonged to does not - PaymentReconciliation
+    # has no service-line concept and .detail[] is flat, so the forward
+    # direction never recorded it. Stable from here on, though: re-parsing
+    # yields the identical flat list.
+    adjustments = _claim_adjustments(pr)
+    assert len(adjustments) == 1
+    assert {c.code for c in adjustments[0].type.coding} == {"adjustment", "CO", "45"}
+    assert adjustments[0].amount.value == _claim_adjustments(original_pr)[0].amount.value
 
     original_payer = next(
         e.resource
@@ -1528,15 +1559,29 @@ def test_edi_835_multi_claim_round_trip_preserves_all_claims():
     forward_x12 = (FIXTURES / "edi_835_multi_claim.x12").read_text()
     bundle = convert_edi_to_bundle(forward_x12)
     original_pr = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation")
-    assert len(original_pr.detail) == 2
+    assert len(_claim_payments(original_pr)) == 2
 
     message_text = build_message_from_bundle(bundle, "EDI", "835", "")
     round_tripped_bundle = convert_edi_to_bundle(message_text)
     pr = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation")
-    assert len(pr.detail) == 2
-    original_ids = sorted(d.identifier.value for d in original_pr.detail)
-    ids = sorted(d.identifier.value for d in pr.detail)
+    assert len(_claim_payments(pr)) == 2
+    original_ids = sorted(d.identifier.value for d in _claim_payments(original_pr))
+    ids = sorted(d.identifier.value for d in _claim_payments(pr))
     assert ids == original_ids
+
+    # Both claims' adjustments survive, even though the reverse builder
+    # emits them all after the first claim - the forward direction records
+    # no claim attribution to restore, so the flat list is what round-trips
+    # and it round-trips whole.
+    def reasons(payment_reconciliation):
+        return sorted(
+            c.code
+            for d in _claim_adjustments(payment_reconciliation)
+            for c in d.type.coding
+            if c.system.endswith("claim-adjustment-reason-code")
+        )
+
+    assert reasons(pr) == reasons(original_pr) == ["45", "96"]
 
 
 def test_edi_835_missing_payment_reconciliation_raises_mapping_error():
