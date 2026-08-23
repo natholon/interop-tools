@@ -200,6 +200,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // The converted Bundle, kept so "Use Bundle above" can hand it straight
     // to the FHIR -> Message form without a second round trip.
     let currentBundleJson = "";
+    // Inferred decisions, keyed by the FHIR path they produced, so the
+    // crosswalk table can show each conversion beside the decision that
+    // produced it instead of making a reader cross-reference two lists.
+    let decisionsByPath = new Map();
+    let rejectionOutcomeById = new Map();
     // Review state for the conversion at hand only. Kept in the browser -
     // nothing is stored server-side - and replayed on each request.
     const rejectedDecisionIds = new Set();
@@ -211,24 +216,39 @@ document.addEventListener("DOMContentLoaded", () => {
     const resetDecisionsBtn = document.getElementById("reset-decisions");
 
     function renderDecisions(decisions, outcomes) {
+        decisionsByPath = new Map(
+            (decisions || []).filter((d) => d.kind === "inferred" && d.fhir_path).map((d) => [d.fhir_path, d])
+        );
         if (!decisionRegister || !decisionList) return;
         const outcomeById = new Map((outcomes || []).map((o) => [o.decision_id, o]));
+        rejectionOutcomeById = outcomeById;
         decisionList.innerHTML = "";
 
         if (!decisions.length) {
             decisionRegister.hidden = true;
             return;
         }
+        // Inferred decisions now render inline in the Specification
+        // Crosswalk, beside the conversion each one produced - listing them
+        // here too would duplicate every row and make the page longer, which
+        // is the opposite of what showing them inline is for. Dropped
+        // decisions have no crosswalk row (nothing was converted), so this
+        // is where they live.
+        const registerDecisions = decisions.filter((d) => d.kind !== "inferred");
+        if (!registerDecisions.length) {
+            decisionRegister.hidden = true;
+            return;
+        }
         decisionRegister.hidden = false;
         if (decisionCount) {
-            const rejected = decisions.filter((d) => rejectedDecisionIds.has(d.id)).length;
+            const rejected = registerDecisions.filter((d) => rejectedDecisionIds.has(d.id)).length;
             decisionCount.textContent = rejected
-                ? `(${decisions.length} — ${rejected} rejected)`
-                : `(${decisions.length})`;
+                ? `(${registerDecisions.length} — ${rejected} rejected)`
+                : `(${registerDecisions.length})`;
         }
         if (resetDecisionsBtn) resetDecisionsBtn.hidden = rejectedDecisionIds.size === 0;
 
-        for (const decision of decisions) {
+        for (const decision of registerDecisions) {
             const isRejected = rejectedDecisionIds.has(decision.id);
             const li = document.createElement("li");
             li.className = isRejected ? "decision is-rejected" : "decision";
@@ -523,7 +543,54 @@ document.addEventListener("DOMContentLoaded", () => {
             const valueCell = document.createElement("td");
             valueCell.textContent = entry.value ?? "";
 
-            tr.append(locationCell, fieldNameCell, pathCell, sourceValueCell, valueCell);
+            const decisionCell = document.createElement("td");
+            decisionCell.className = "crosswalk-decision";
+            const decision = decisionsByPath.get(entry.fhir_path);
+            const badge = document.createElement("span");
+            if (decision) {
+                const isRejected = rejectedDecisionIds.has(decision.id);
+                if (isRejected) tr.classList.add("is-rejected");
+                badge.className = "decision-badge decision-badge-inferred";
+                badge.textContent = isRejected ? "Inferred — rejected" : "Inferred";
+                decisionCell.appendChild(badge);
+                if (decision.citation && decision.citation.title) {
+                    const cite = document.createElement("span");
+                    cite.className = decision.citation.authoritative
+                        ? "decision-cite"
+                        : "decision-cite is-unverified";
+                    cite.textContent = decision.citation.title;
+                    decisionCell.appendChild(cite);
+                }
+                // The reject control moved here with the decision, or
+                // rejecting an inferred value would no longer be reachable.
+                const toggle = document.createElement("button");
+                toggle.type = "button";
+                toggle.className = "btn-panel-action decision-inline-toggle";
+                toggle.textContent = isRejected ? "Accept" : "Reject";
+                toggle.addEventListener("click", () => {
+                    if (rejectedDecisionIds.has(decision.id)) rejectedDecisionIds.delete(decision.id);
+                    else rejectedDecisionIds.add(decision.id);
+                    rerunCrosswalk();
+                });
+                decisionCell.appendChild(toggle);
+                const outcome = rejectionOutcomeById.get(decision.id);
+                if (outcome && !outcome.applied) {
+                    const note = document.createElement("span");
+                    note.className = "decision-outcome";
+                    note.textContent = `Not applied: ${outcome.note || "no conformant representation."}`;
+                    decisionCell.appendChild(note);
+                }
+            } else if (entry.derivation === "direct") {
+                const transformed =
+                    entry.source_value != null && entry.value != null && entry.source_value !== entry.value;
+                badge.className = transformed
+                    ? "decision-badge decision-badge-transformed"
+                    : "decision-badge decision-badge-direct";
+                badge.textContent = transformed ? "Transformed" : "Direct copy";
+                decisionCell.appendChild(badge);
+            }
+
+            tr.append(locationCell, fieldNameCell, pathCell, sourceValueCell, valueCell, decisionCell);
             tableBody.appendChild(tr);
         }
         if (tableWrapper) tableWrapper.hidden = false;
@@ -871,8 +938,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 showError(data.error.category, data.error.message);
                 return;
             }
-            showCrosswalk(data.report, data.highlighting, data.deduplication);
+            // Decisions first: the crosswalk table shows each conversion
+            // beside the decision that produced it, so the lookup has to be
+            // populated before the table renders or every inferred row
+            // draws a blank decision cell.
             renderDecisions(data.decisions || [], data.rejection_outcomes || []);
+            showCrosswalk(data.report, data.highlighting, data.deduplication);
         } catch (err) {
             showError("Network error", String(err));
         } finally {

@@ -624,3 +624,43 @@ def test_edi_drops_cite_the_missing_crosswalk_not_unchecked():
     assert dropped
     assert all("No official X12-to-FHIR crosswalk" in d.citation.title for d in dropped)
     assert all(d.citation.authoritative is False for d in dropped)
+
+
+def test_mdm_txa19_is_read_not_dropped():
+    """TXA-19 "AV" maps to DocumentReference.status "current" - a verified
+    mapping. It was recorded inferred and TXA-19 reported as dropped, so
+    the field looked both unread and lost while it had in fact been
+    mapped."""
+    raw = (Path(__file__).parent / "fixtures" / "mdm_t02_basic.hl7").read_text()
+    bundle, report, _ = convert_with_provenance(raw)
+    status = _document_reference_status(bundle, report)
+    assert status.derivation == "direct"
+    assert status.source_location == "TXA-19"
+    assert status.source_value == "AV"
+    assert not [d for d in compute_decisions(report, raw)
+                if d.kind == "dropped" and (d.source_location or "").startswith("TXA-19")]
+
+
+def test_mdm_unverified_txa19_value_stays_inferred():
+    """Only "AV" has a verified target. Anything else still defaults to
+    "current" without being read, so it must stay inferred rather than
+    claim a mapping the IG does not back."""
+    raw = (Path(__file__).parent / "fixtures" / "mdm_t02_basic.hl7").read_text()
+    patched = raw.replace("|AV|", "|UN|")
+    assert patched != raw, "fixture must carry a TXA-19 value to alter"
+    bundle, report, _ = convert_with_provenance(patched)
+    status = _document_reference_status(bundle, report)
+    assert status.derivation == "inferred"
+    assert status.value == "current"
+
+
+def _document_reference_status(bundle, report):
+    """The DocumentReference's own status entry. Selecting by fhir_path
+    suffix alone picks up the Encounter's status too, which is a different
+    resource with a different derivation."""
+    index = next(
+        i for i, entry in enumerate(bundle.entry)
+        if entry.resource.get_resource_type() == "DocumentReference"
+    )
+    path = f"Bundle.entry[{index}].resource.status"
+    return next(e for e in report.entries if e.fhir_path == path)

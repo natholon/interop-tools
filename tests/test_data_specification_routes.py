@@ -338,3 +338,33 @@ def test_data_specification_form_post_no_js_fallback_renders_error():
     response = client.post("/data-specification", data={"hl7_text": "not a real message"})
     assert response.status_code == 200
     assert "Parse error" in response.text
+
+
+def test_rejecting_a_decision_changes_the_displayed_bundle_too():
+    """The pane a reviewer looks at is highlighting.fhir_json_text, which
+    was built from the model before rejections were applied to the
+    serialized dict - so rejecting a value changed the returned bundle but
+    not the Bundle on screen, and read as doing nothing."""
+    raw = read_fixture("adt_a01_basic.hl7")
+    baseline = client.post("/api/data-specification", json={"hl7_text": raw}).json()
+    encounter = next(
+        e["resource"] for e in baseline["bundle"]["entry"] if e["resource"]["resourceType"] == "Encounter"
+    )
+    assert encounter["status"] == "in-progress"
+    decision = next(
+        d for d in baseline["decisions"]
+        if d["kind"] == "inferred" and d.get("fhir_path", "").endswith("resource.status")
+    )
+
+    rejected = client.post(
+        "/api/data-specification",
+        json={"hl7_text": raw, "rejected_decision_ids": [decision["id"]]},
+    ).json()
+    encounter = next(
+        e["resource"] for e in rejected["bundle"]["entry"] if e["resource"]["resourceType"] == "Encounter"
+    )
+    assert encounter["status"] == "unknown"
+    assert rejected["rejection_outcomes"][0]["applied"] is True
+    # The displayed Bundle must agree with the returned one.
+    assert '"status": "unknown"' in rejected["highlighting"]["fhir_json_text"]
+    assert '"status": "in-progress"' not in rejected["highlighting"]["fhir_json_text"]

@@ -622,10 +622,15 @@ def test_mdm_t02_basic_crosswalk_matches_known_field_values():
     doc_ref = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference")
     doc_index = next(i for i, e in enumerate(bundle.entry) if e.resource is doc_ref)
 
+    # TXA-19 "AV" is a verified mapping to "current", so it is a real read -
+    # recording it inferred left the field looking both unread and dropped
+    # when it had in fact been mapped. Any other value still defaults to
+    # "current" without being read, and stays inferred.
     status_entry = by_path[f"Bundle.entry[{doc_index}].resource.status"]
-    assert status_entry.derivation == "inferred"
+    assert status_entry.derivation == "direct"
+    assert status_entry.source_location == "TXA-19"
+    assert status_entry.source_value == "AV"
     assert status_entry.value == "current"
-    assert status_entry.reason
 
     content_type_entry = by_path[f"Bundle.entry[{doc_index}].resource.content[0].attachment.contentType"]
     assert content_type_entry.value == "text/plain"

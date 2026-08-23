@@ -80,8 +80,21 @@ def _run_crosswalk(
     if rejected_decision_ids:
         bundle_dict, outcomes = apply_rejections(bundle_dict, decisions, rejected_decision_ids)
 
+    bundle_json = json.dumps(bundle_dict, indent=2)
+    if rejected_decision_ids:
+        # Rebuilt from the post-rejection JSON so the pane a reviewer looks
+        # at is the Bundle their rejections actually produced. The payload
+        # above is built from the model, i.e. pre-rejection, which made
+        # rejecting a value look like it had done nothing. Only rebuilt when
+        # something was actually rejected - the source-side spans it feeds
+        # to compute_decisions are unaffected either way, since those are
+        # offsets into the raw message rather than into the Bundle.
+        highlighting = build_highlighting_payload(
+            bundle, report, raw_text, report.source_format, fhir_json_text=bundle_json
+        )
+
     return CrosswalkResult(
-        bundle_json=json.dumps(bundle_dict, indent=2),
+        bundle_json=bundle_json,
         report_json=report.model_dump_json(indent=2, exclude_none=True),
         decisions_json=json.dumps([d.model_dump(exclude_none=True) for d in decisions]),
         rejection_outcomes_json=json.dumps([o.model_dump(exclude_none=True) for o in outcomes]),

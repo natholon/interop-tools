@@ -209,14 +209,31 @@ def _build_reference_map(bundle: Bundle) -> dict[str, set[str]]:
     return related
 
 
-def build_highlighting_payload(bundle: Bundle, report: CrosswalkReport, raw_text: str, source_format: str) -> HighlightingPayload:
+def build_highlighting_payload(
+    bundle: Bundle,
+    report: CrosswalkReport,
+    raw_text: str,
+    source_format: str,
+    fhir_json_text: str | None = None,
+) -> HighlightingPayload:
     """The one entry point `app/routes/data_specification.py` calls. Never
     raises - a locator failing to build at all (e.g. `raw_text` somehow
     isn't the text that actually produced `bundle`, defensive, not
     currently reachable) degrades to "no source-side highlighting," and
     each individual entry's own resolution is independently guarded so one
-    malformed location string can't take down the rest."""
-    fhir_json_text = bundle.model_dump_json(indent=2, exclude_none=True)
+    malformed location string can't take down the rest.
+
+    `fhir_json_text` overrides the serialization taken from `bundle`, and
+    exists for one real case: a reviewer's rejections are applied to the
+    serialized dict, not the model (a rejected required value has to be
+    expressed as value-absent-plus-extension, which fhir.resources cannot
+    represent). Without this the displayed Bundle was always the
+    *pre*-rejection one, so rejecting a value changed the returned bundle
+    but not the pane the reviewer was looking at - it read as doing
+    nothing. Spans are computed against whatever text is passed, so they
+    stay aligned with what is actually shown."""
+    if fhir_json_text is None:
+        fhir_json_text = bundle.model_dump_json(indent=2, exclude_none=True)
     json_locations = locate_json_paths(fhir_json_text)
 
     source_locator = None

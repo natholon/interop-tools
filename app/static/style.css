@@ -855,3 +855,53 @@ pre {
     opacity: 0.85;
     margin: 0.15rem 0 0;
 }
+
+
+/* Mapping Decision column - the decision that produced each conversion,
+   beside the conversion itself rather than in a separate list below. */
+#crosswalk-table td.crosswalk-decision {
+    white-space: normal;
+}
+.decision-badge {
+    display: inline-block;
+    padding: 0.05rem 0.4rem;
+    border-radius: 0.6rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.decision-badge-direct {
+    background: var(--ok-bg, #e8f5e9);
+    color: var(--ok-fg, #1b5e20);
+}
+.decision-badge-transformed {
+    background: var(--info-bg, #e3f2fd);
+    color: var(--info-fg, #0d47a1);
+}
+.decision-badge-inferred {
+    background: var(--warn-bg, #fff3e0);
+    color: var(--warn-fg, #e65100);
+}
+.decision-cite {
+    display: block;
+    margin-top: 0.15rem;
+    font-size: 0.75rem;
+    opacity: 0.75;
+}
+
+.decision-inline-toggle {
+    display: block;
+    margin-top: 0.25rem;
+}
+#crosswalk-table tr.is-rejected {
+    opacity: 0.6;
+    text-decoration: line-through;
+}
+#crosswalk-table tr.is-rejected .decision-inline-toggle {
+    text-decoration: none;
+}
+.decision-outcome {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.75rem;
+}

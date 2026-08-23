@@ -82,7 +82,7 @@
 
 <section id="crosswalk-output-pane" class="panel output-panel" aria-live="polite" {% if not crosswalk_result %}hidden{% endif %}>
     <div class="panel-head">
-        <h2>Field detail</h2>
+        <h2>Specification Crosswalk</h2>
         {# JS-only: the no-JS fallback below renders raw JSON, which is already
            machine-readable, so this button is shown by showCrosswalk() rather
            than server-rendered. #}
@@ -123,6 +123,7 @@
                     <th>FHIR Path</th>
                     <th>Source Value</th>
                     <th>FHIR Value</th>
+                    <th>Mapping Decision</th>
                 </tr>
             </thead>
             <tbody id="crosswalk-table-body"></tbody>

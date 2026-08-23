@@ -112,12 +112,28 @@ def _resolve_content_type(txa) -> str:
     return _CONTENT_PRESENTATION_TO_MIME_TYPE.get(code, _DEFAULT_CONTENT_TYPE)
 
 
-def _resolve_status(txa) -> str:
-    """TXA-19 -> DocumentReference.status. Only "AV" (Available) is a
-    verified mapping; everything else (including absent) defaults to
-    "current" too, matching the IG's own stated default - see module
-    docstring for why a fuller crosswalk isn't attempted."""
-    return "current"
+# The one TXA-19 value with a verified target. Everything else defaults to
+# the same status, so only this one is a genuine read.
+_VERIFIED_AVAILABILITY_STATUS = {"AV": "current"}
+
+
+def _resolve_status(txa) -> tuple[str, str | None]:
+    """TXA-19 -> (DocumentReference.status, the TXA-19 value it was read
+    from, or None when the value was not read).
+
+    Only "AV" (Available) is a verified mapping; everything else,
+    including absent, defaults to "current" as well - the IG's own stated
+    default, see the module docstring for why a fuller crosswalk is not
+    attempted. Returning *which* of those happened matters: previously
+    this always returned the literal, so an "AV" that really did drive the
+    status was recorded as inferred and TXA-19 itself was reported as
+    dropped data - the field looked both unread and lost when it had in
+    fact been mapped."""
+    raw = field_str(txa, 19).strip().upper()
+    verified = _VERIFIED_AVAILABILITY_STATUS.get(raw)
+    if verified:
+        return verified, raw
+    return "current", None
 
 
 def _build_binary_from_obx(obx_segments, txa, recorder=None) -> Binary | None:
@@ -170,7 +186,7 @@ def build_document_reference(
     """TXA -> DocumentReference. Returns the DocumentReference plus any extra
     resources materialized for it (originator/authenticator Practitioners)."""
     document_reference_id = str(uuid.uuid4())
-    status = _resolve_status(txa)
+    status, status_source = _resolve_status(txa)
     content_type = _resolve_content_type(txa)
     attachment = Attachment(contentType=content_type)
     if binary_id:
@@ -183,16 +199,24 @@ def build_document_reference(
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
     )
     if recorder:
-        # _resolve_status never actually reads TXA-19's own value (see its
-        # docstring) - it always returns "current" regardless of what's
-        # there, so this is inferred, not a direct read, even in the one
-        # case ("AV") where the result happens to match a verified mapping.
-        recorder.record_inferred(
-            document_reference_id,
-            "status",
-            'TXA-19 (Document Availability Status) has no fuller verified crosswalk beyond "AV"->"current" - every value, including absent, defaults to "current" (the IG\'s own stated default), not read from the field\'s actual value.',
-            status,
-        )
+        if status_source:
+            # A verified read: TXA-19 said "AV", and that is what produced
+            # "current". Recording it inferred left the field looking both
+            # unread and dropped when it had in fact been mapped.
+            recorder.record(
+                document_reference_id,
+                "status",
+                hl7_location("TXA", 19),
+                status,
+                source_value=status_source,
+            )
+        else:
+            recorder.record_inferred(
+                document_reference_id,
+                "status",
+                'TXA-19 (Document Availability Status) has no verified crosswalk beyond "AV"->"current" - any other value, including absent, defaults to "current" (the IG\'s own stated default) rather than being read.',
+                status,
+            )
         recorder.record(
             document_reference_id,
             "content[0].attachment.contentType",
