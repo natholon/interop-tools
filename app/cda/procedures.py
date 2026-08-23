@@ -267,7 +267,27 @@ def _build_practitioner_from_assigned_entity(assigned_entity, location: str, rec
     if identifier:
         practitioner.identifier = [identifier]
         if recorder:
-            recorder.record(practitioner_id, "identifier[0].value", xpath_location(location, "id"), identifier.value)
+            # Point at the attribute that actually supplied the value, the
+            # way build_identifiers already does: an <id> carries its value
+            # in @extension (or @root when that is all it has), never as
+            # element text, so a bare `.../id` location resolves to nothing.
+            value_attribute = "@extension" if id_element.get("extension") else "@root"
+            recorder.record(
+                practitioner_id,
+                "identifier[0].value",
+                xpath_location(location, "id", value_attribute),
+                identifier.value,
+            )
+            if identifier.system:
+                # @root becomes Identifier.system (translated where FHIR
+                # names the OID, kept as urn:oid: otherwise). Recording only
+                # the value left @root looking dropped.
+                recorder.record(
+                    practitioner_id,
+                    "identifier[0].system",
+                    xpath_location(location, "id", "@root"),
+                    identifier.system,
+                )
     if name:
         practitioner.name = [name]
         if recorder:
@@ -679,6 +699,14 @@ def _build_procedure(procedure_element, patient_id: str, recorder=None) -> tuple
             if display_value:
                 recorder.record(
                     procedure_id, "code.coding[0].display", xpath_location(_ENTRY_BASE, "code", "@displayName"), display_value
+                )
+            if code.text:
+                # <originalText>, already de-referenced into the element by
+                # resolve_narrative_references. This site builds its records
+                # by hand rather than through record_coding, so it needed
+                # the same addition separately.
+                recorder.record(
+                    procedure_id, "code.text", xpath_location(_ENTRY_BASE, "code", "originalText"), code.text
                 )
 
     ids = build_identifiers(

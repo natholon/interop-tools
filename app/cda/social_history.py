@@ -98,6 +98,13 @@ def _build_observation_value(observation_element, resource_id: str, recorder=Non
             return {}
         if recorder:
             recorder.record(resource_id, "valueCodeableConcept.coding[0].code", f"{value_base}/@code", concept.coding[0].code)
+            if concept.coding[0].display:
+                recorder.record(
+                    resource_id,
+                    "valueCodeableConcept.coding[0].display",
+                    f"{value_base}/@displayName",
+                    concept.coding[0].display,
+                )
         return {"valueCodeableConcept": concept}
     if value_type == "INT":
         raw = value_element.get("value")

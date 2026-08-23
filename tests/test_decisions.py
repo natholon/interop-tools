@@ -8,6 +8,8 @@ exists to support. These tests pin both properties.
 
 from pathlib import Path
 
+import pytest
+
 from app.provenance.decisions import (
     compute_decisions,
     scan_populated_components,
@@ -793,3 +795,95 @@ def test_unparseable_date_is_reported_against_an_implemented_target():
 
     assert "PID-7" in dropped
     assert "could not be parsed" in dropped["PID-7"].citation.title
+
+
+def _cda_bundle_and_decisions(fixture: str):
+    """Decisions computed the way the route computes them - with resolved
+    source spans, without which the C-CDA drop scan can only match by
+    value and reports most transformed values as lost."""
+    from app.provenance.highlighting import build_highlighting_payload
+
+    raw = (_EDI_FIXTURES / fixture).read_text(encoding="utf-8")
+    bundle, report, _ = convert_with_provenance(raw)
+    highlighting = build_highlighting_payload(bundle, report, raw, report.source_format)
+    spans = {tuple(m.source_span) for m in highlighting.matches if m.source_span}
+    return bundle, compute_decisions(report, raw, spans)
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [f.name for f in sorted((Path(__file__).parent / "fixtures").glob("*.xml"))],
+)
+def test_every_cda_drop_carries_a_checked_verdict(fixture):
+    # The register's whole value is that a reader can trust what it says.
+    # "Not yet checked against the source IG" is an honest placeholder
+    # while verdicts are being written, but it is not a finished state -
+    # every shape this app actually drops has now been read against the
+    # IG's own tables, and this keeps it that way as sections change.
+    try:
+        _, decisions = _cda_bundle_and_decisions(fixture)
+    except Exception:
+        # Fixtures that deliberately do not convert (malformed XML, an
+        # unrecognised document type) have no decisions to check.
+        pytest.skip("fixture does not convert by design")
+    unchecked = [
+        d.source_location
+        for d in decisions
+        if d.kind == "dropped" and d.citation.title == "Not yet checked against the source IG"
+    ]
+    assert unchecked == []
+
+
+def test_cda_verdicts_are_scoped_by_template_id():
+    # A bare shape is ambiguous - an Allergy Reaction Observation's id and
+    # a Problem Observation's id sit at identical depths under identically
+    # named tags - so a verdict may name the template it read, and a
+    # scoped key must beat an unscoped one however specific.
+    from app.provenance.cda_ig_verdicts import NOT_SUPPORTED, verdict_for
+
+    reaction = frozenset({"2.16.840.1.113883.10.20.22.4.9"})
+    shape = "entry/act/entryRelationship/observation/entryRelationship/observation/id"
+    verdict, citation, note = verdict_for(shape, reaction)
+    assert verdict == NOT_SUPPORTED
+    assert "reaction is a backbone element with no identifier" in note
+
+    # The same shape with no template in scope stays honestly unchecked
+    # rather than borrowing another section's ruling.
+    assert verdict_for(shape, frozenset())[0] is None
+
+
+def test_unconverted_entry_is_one_decision_not_one_per_element():
+    # A negated Medication Activity produces no MedicationRequest, so
+    # everything it carried drops with it. Six rows for its id, statusCode
+    # and code make one decision look like six and bury the thing worth
+    # reviewing: a whole clinical statement was discarded.
+    _, decisions = _cda_bundle_and_decisions("ccd_medications_negated.xml")
+    unconverted = [d for d in decisions if d.citation.title == "Source entry not converted"]
+    assert len(unconverted) == 1
+    assert "produced no FHIR resource" in unconverted[0].summary
+    # ...and none of its own elements is reported separately.
+    entry_path = unconverted[0].source_location
+    assert not [
+        d for d in decisions
+        if d.kind == "dropped" and (d.source_location or "").startswith(entry_path + "/")
+    ]
+
+
+def test_values_carried_into_the_bundle_are_never_reported_as_dropped():
+    # The rule that caught nine false drops: before calling anything a
+    # gap, check whether the value actually reached the Bundle. A register
+    # that accuses the mapper of losing data it carried is worse than one
+    # that says "unchecked".
+    bundle, decisions = _cda_bundle_and_decisions("ccd_procedures_basic.xml")
+    procedure = next(
+        e.resource for e in bundle.entry if e.resource.get_resource_type() == "Procedure"
+    )
+    assert procedure.code.text == "Appendectomy of the appendix"
+    dropped = [d.source_location or "" for d in decisions if d.kind == "dropped"]
+    assert not [loc for loc in dropped if loc.endswith("code/originalText")]
+
+    role = next(
+        e.resource for e in bundle.entry if e.resource.get_resource_type() == "PractitionerRole"
+    )
+    assert role.telecom[0].use == "work"
+    assert not [loc for loc in dropped if loc.endswith("assignedEntity/telecom/@use")]

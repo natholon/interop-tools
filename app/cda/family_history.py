@@ -162,6 +162,8 @@ def _build_condition(observation_element, resource_id: str | None = None, index:
         if recorder and resource_id:
             age_base = xpath_location(f"component[{index}]", "observation", "entryRelationship[SUBJ]", "observation", "value")
             recorder.record(resource_id, f"condition[{index}].onsetAge.value", f"{age_base}/@value", str(age_quantity.value))
+            if age_quantity.unit:
+                recorder.record(resource_id, f"condition[{index}].onsetAge.unit", f"{age_base}/@unit", age_quantity.unit)
         break
 
     # next(..., None) is not None rather than any(...) - ElementTree's own
@@ -255,6 +257,19 @@ def _build_family_member_history(organizer_element, patient_id: str, recorder=No
                 sex,
             )
 
+        birth_time = find_child(relative_subject, "birthTime")
+        born_date = _format_partial_date(birth_time.get("value")) if birth_time is not None else None
+        if born_date:
+            history.bornDate = born_date
+            if recorder:
+                recorder.record(
+                    history_id,
+                    "bornDate",
+                    xpath_location("subject", "relatedSubject", "subject", "birthTime", "@value"),
+                    born_date,
+                    source_value=birth_time.get("value"),
+                )
+
         deceased_ind = _sdtc_child(relative_subject, "deceasedInd")
         if deceased_ind is not None:
             deceased = (deceased_ind.get("value") or "").strip().lower() == "true"
@@ -270,20 +285,26 @@ def _build_family_member_history(organizer_element, patient_id: str, recorder=No
             if deceased and deceased_date:
                 history.deceasedDate = deceased_date
                 if recorder:
-                    recorder.record_inferred(
+                    # Direct, not inferred: this is read from a real source
+                    # attribute. Recording it as inferred said no source
+                    # field produced it, which then made sdtc:deceasedTime
+                    # itself look like dropped data.
+                    recorder.record(
                         history_id,
                         "deceasedDate",
-                        "Read from the sdtc:deceasedTime extension attribute's own @value (preferred over the bare sdtc:deceasedInd boolean, since deceased[x] is a FHIR choice type and a real date is strictly more informative).",
+                        xpath_location("subject", "relatedSubject", "subject", "deceasedTime", "@value"),
                         deceased_date,
+                        source_value=deceased_time.get("value"),
                     )
             else:
                 history.deceasedBoolean = deceased
                 if recorder:
-                    recorder.record_inferred(
+                    recorder.record(
                         history_id,
                         "deceasedBoolean",
-                        "Read from the sdtc:deceasedInd extension attribute's own @value.",
+                        xpath_location("subject", "relatedSubject", "subject", "deceasedInd", "@value"),
                         str(deceased),
+                        source_value=deceased_ind.get("value"),
                     )
 
     return history

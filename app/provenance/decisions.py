@@ -328,9 +328,26 @@ def compute_decisions(
         # _dropped_cda_decisions for why a C-CDA location has no inverse.
         mapped_values = {e.value for e in report.entries if e.source_location and e.value}
         mapped_values |= {e.source_value for e in report.entries if e.source_value}
+        # Recorded locations are relative and index-free about which
+        # repeat they came from ("procedure/performer[0]/assignedEntity/id/
+        # @root" for the performer of *every* procedure), so a document
+        # with two procedures records the same string twice and the span
+        # resolver can only attribute it to one of them. Treating the
+        # unattributed twin as dropped accused the mapper of losing data
+        # it had carried - so a leaf whose own relative path was recorded
+        # by somebody counts as read. Same aggregation, and same disclosed
+        # trade, as the X12 half: it errs toward under-reporting, which is
+        # the direction this register has to fail in.
+        mapped_paths = {
+            _strip_first_index(e.source_location) for e in report.entries if e.source_location
+        }
         decisions.extend(
             _dropped_cda_decisions(
-                report, scan_populated_cda_values(raw_text), source_spans or set(), mapped_values
+                report,
+                scan_populated_cda_values(raw_text),
+                source_spans or set(),
+                mapped_values,
+                mapped_paths,
             )
         )
     return decisions
@@ -452,6 +469,13 @@ CDA_STRUCTURAL_ELEMENTS: dict[str, str] = {
 # Conditional qualifiers, the C-CDA mirror of EDI_QUALIFIER_OF: an
 # attribute that says how to read another attribute on the same element is
 # consumed only when that attribute was actually mapped.
+# xmlns declarations. The position-aware parser runs with namespace
+# processing off (it has to, to report real character offsets), so
+# `xmlns:sdtc="urn:hl7-org:sdtc"` arrives as an attribute named `sdtc`
+# carrying the namespace URI - XML plumbing that says how to read the
+# document, reported as if the document had lost a clinical value.
+_XMLNS_ATTRS = {"sdtc", "xsi", "voc", "xmlns"}
+
 CDA_QUALIFIER_OF: dict[str, str] = {
     "codeSystem": "code",
     "codeSystemName": "code",
@@ -533,6 +557,21 @@ def scan_populated_cda_values(raw_text: str) -> list[_CdaLeaf]:
 
     walk(root, root.tag, False, frozenset())
     return leaves
+
+
+def _strip_first_index(path: str) -> str:
+    """Drop explicit `[0]` indices. The scanner omits the index of a first
+    repeat (`_repetition_suffix(0)` is empty) while recorders write it out
+    (`id[0]`, `performer[0]`), so the two spell the same element
+    differently and never match without this."""
+    return path.replace("[0]", "")
+
+
+def _relative_paths(leaf_path: str) -> set[str]:
+    """Every suffix of a leaf's path - the shapes a recorder's own relative
+    location could have been written as, normalised the same way."""
+    parts = _strip_first_index(leaf_path).split("/")
+    return {"/".join(parts[i:]) for i in range(1, len(parts))}
 
 
 def _element_path(leaf_path: str) -> str:
@@ -666,6 +705,7 @@ def _dropped_cda_decisions(
     leaves: list[_CdaLeaf],
     mapped_spans: set[tuple[int, int]],
     mapped_values: set[str],
+    mapped_paths: set[str],
 ) -> list[MappingDecision]:
     """A leaf the recorder never read.
 
@@ -693,7 +733,11 @@ def _dropped_cda_decisions(
             for mapped_start, mapped_end in mapped_spans:
                 if start < mapped_end and mapped_start < end:
                     return True
-        return leaf.value in mapped_values
+        if leaf.value in mapped_values:
+            return True
+        # Last resort: did anything record this relative path at all? See
+        # compute_decisions for why an unattributed repeat lands here.
+        return _relative_paths(leaf.path) & mapped_paths != set()
 
     # An entry nothing was read from produced no resource at all, so every
     # leaf under it is collateral. One row for the entry says what six rows
@@ -728,6 +772,7 @@ def _dropped_cda_decisions(
             for leaf in element_leaves
             if not is_mapped(leaf)
             and leaf.name not in CDA_STRUCTURAL_ATTRS
+            and leaf.name not in _XMLNS_ATTRS
             and not _is_consumed_qualifier(leaf, element_leaves, is_mapped)
         ]
         if not reportable:
