@@ -70,7 +70,10 @@ def _run_crosswalk(
     # The reviewable decision register: everything this conversion
     # inferred or dropped, computed rather than declared (see
     # app/provenance/decisions.py).
-    decisions = compute_decisions(report, raw_text)
+    # The resolved source spans are what lets the C-CDA drop scan tell a
+    # transformed value from an unread one - see decisions.py.
+    source_spans = {tuple(m.source_span) for m in highlighting.matches if m.source_span}
+    decisions = compute_decisions(report, raw_text, source_spans)
 
     bundle_dict = json.loads(bundle.model_dump_json(exclude_none=True))
     outcomes = []

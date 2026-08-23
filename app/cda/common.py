@@ -289,6 +289,17 @@ def build_identifiers(
                 recorder.record(
                     resource_id, f"identifier[{index}].value", xpath_location(f"{location_prefix}[{index}]"), identifier.value
                 )
+                # `@root` drives .system whenever an `@extension` is present
+                # (build_identifier above). Recording only .value left the
+                # root looking unread - the same gap PID-3.4 had on the
+                # HL7v2 side, and one the drop register reports as data loss.
+                if id_element.get("root") and id_element.get("extension"):
+                    recorder.record(
+                        resource_id,
+                        f"identifier[{index}].system",
+                        xpath_location(f"{location_prefix}[{index}]", "@root"),
+                        identifier.system,
+                    )
     return identifiers
 
 

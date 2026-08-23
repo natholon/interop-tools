@@ -13,9 +13,13 @@ the pillar already produces:
   recorded as mapped. Derived by diffing what the raw message populates
   against what the recorder saw. This half is per format, since each
   splits its raw text differently: HL7v2 on `|`/`~`/`^`, X12 on the ISA's
-  own self-declared delimiters. C-CDA has no scan yet - an XML location
-  has no positional inverse the way a HL7v2 field or X12 element does (see
-  `cda_locator.py`), so a CDA document reports inferred decisions only.
+  own self-declared delimiters. C-CDA has no positional coordinate at all -
+  a recorded XML location is a relative path composed while walking, with
+  no inverse (see `cda_locator.py`) - so it enumerates leaf values and
+  matches them against the source *spans* the correlated-highlighting view
+  already resolves. That distinction matters: most values are transformed
+  on the way through (a date reformatted, an OID rewritten as a URI), so
+  comparing values alone called nearly half a CCD lost.
 
 **The join problem, and why it needs an explicit allowance.** Some mappers
 read several components and collapse them into one value (PV1-3's point of
@@ -29,6 +33,7 @@ component *outside* its consumed set as dropped.
 """
 
 import re
+from typing import NamedTuple
 
 from pydantic import BaseModel
 
@@ -36,6 +41,8 @@ from app.edi.parser import read_isa_delimiters, split_segments, strip_bom_and_wh
 from app.hl7.parser import normalize_segment_separators, truncate_to_first_message
 from app.provenance.citations import Citation, DEFAULT_BY_FORMAT, DROP_NOT_YET_CHECKED
 from app.provenance.hl7_field_names import SEGMENT_FIELD_NAMES, component_names_for_field
+from app.provenance.cda_field_names import resolve_cda_field_label
+from app.provenance.cda_locator import _resolve_attribute_span, parse_with_positions
 from app.provenance.edi_field_names import resolve_edi_field_label
 from app.provenance.edi_locator import ParsedEdiLocation, parse_edi_location
 from app.provenance.hl7_locator import parse_hl7_location
@@ -272,7 +279,11 @@ def _dropped_decisions(
     return decisions
 
 
-def compute_decisions(report: CrosswalkReport, raw_text: str | None = None) -> list[MappingDecision]:
+def compute_decisions(
+    report: CrosswalkReport,
+    raw_text: str | None = None,
+    source_spans: set[tuple[int, int]] | None = None,
+) -> list[MappingDecision]:
     """Inferred mappings first, then dropped source data - the order a
     reviewer reads them in (what the app added, then what it discarded).
 
@@ -291,6 +302,16 @@ def compute_decisions(report: CrosswalkReport, raw_text: str | None = None) -> l
         decisions.extend(_dropped_decisions(report, scan_populated_components(raw_text)))
     elif report.source_format == "EDI":
         decisions.extend(_dropped_edi_decisions(report, scan_populated_edi_elements(raw_text)))
+    elif report.source_format == "CDA":
+        # Matched by value rather than coordinate - see
+        # _dropped_cda_decisions for why a C-CDA location has no inverse.
+        mapped_values = {e.value for e in report.entries if e.source_location and e.value}
+        mapped_values |= {e.source_value for e in report.entries if e.source_value}
+        decisions.extend(
+            _dropped_cda_decisions(
+                report, scan_populated_cda_values(raw_text), source_spans or set(), mapped_values
+            )
+        )
     return decisions
 
 
@@ -346,6 +367,195 @@ def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int, int], 
                 if values:
                     populated[(segment_id, occurrence, field_index, repetition)] = values
     return populated
+
+
+# --- C-CDA -------------------------------------------------------------
+
+# XML and CDA plumbing: structure that says how to read the document, not
+# content a mapper could lose. Same discipline as the other two formats -
+# each entry states what it is, and anything unlisted is reported.
+CDA_STRUCTURAL_ATTRS: dict[str, str] = {
+    "classCode": "RIM class code, structural",
+    "moodCode": "RIM mood code, structural",
+    "typeCode": "Relationship type, consumed walking entryRelationship/participant",
+    "contextControlCode": "RIM context propagation, structural",
+    "inversionInd": "Relationship direction, consumed walking entryRelationship",
+    "determinerCode": "RIM determiner, structural",
+    "xmlns": "Namespace declaration",
+    "xsi": "Namespace declaration",
+    "type": "xsi:type, selects which datatype shape to read",
+    "nullFlavor": "Says a value is absent - there is no value to lose",
+    "mediaType": "Encoding of the narrative beside it",
+    "representation": "Encoding of the value beside it",
+}
+
+# Elements whose whole subtree is structure rather than content.
+CDA_STRUCTURAL_ELEMENTS: dict[str, str] = {
+    # Identifies which template an element conforms to; consumed by
+    # has_template_id to dispatch, never mapped to a field.
+    "templateId": "Template identity, consumed dispatching to a section builder",
+    "realmCode": "Conformance realm, structural",
+    # Fixed document-type identifier every CDA carries; not content.
+    "typeId": "CDA document type id, structural",
+}
+
+# Conditional qualifiers, the C-CDA mirror of EDI_QUALIFIER_OF: an
+# attribute that says how to read another attribute on the same element is
+# consumed only when that attribute was actually mapped.
+CDA_QUALIFIER_OF: dict[str, str] = {
+    "codeSystem": "code",
+    "codeSystemName": "code",
+}
+
+# The narrative block a structured section carries alongside its entries.
+# C-CDA requires it to restate the same content for human display, so
+# reporting every paragraph and table cell as lost would bury the real
+# findings under a duplicate of them. Reported once per section instead.
+CDA_NARRATIVE_TAG = "text"
+
+
+class _CdaLeaf(NamedTuple):
+    path: str          # e.g. "section/entry/act/effectiveTime/@value"
+    tag: str           # the element the value sits on
+    name: str          # attribute name, or "" for element text
+    value: str
+    in_narrative: bool
+    span: tuple[int, int] | None
+
+
+def scan_populated_cda_values(raw_text: str) -> list[_CdaLeaf]:
+    """Every leaf value in the document - each attribute, and the text of
+    each childless element - in document order.
+
+    Unlike HL7v2 fields and X12 elements, a C-CDA value has no positional
+    coordinate: `cda_locator.py` composes locations forward while walking,
+    and they cannot be parsed back into one. So this enumerates values
+    rather than coordinates, and `_dropped_cda_decisions` matches them
+    against what the recorder read by *span and value* instead.
+
+    Returns a list, not a dict: the same value legitimately appears many
+    times in one document (a repeated codeSystem OID, two identical dates),
+    and collapsing them would lose the drop count.
+    """
+    root = parse_with_positions(raw_text)
+    if root is None:
+        return []
+    leaves: list[_CdaLeaf] = []
+
+    def walk(node, path: str, in_narrative: bool) -> None:
+        if node.tag in CDA_STRUCTURAL_ELEMENTS:
+            return
+        narrative = in_narrative or node.tag == CDA_NARRATIVE_TAG
+        for name, value in node.attrs.items():
+            if value:
+                span = _resolve_attribute_span(raw_text, node.start_tag_span, name)
+                leaves.append(_CdaLeaf(f"{path}/@{name}", node.tag, name, value, narrative, span))
+        text = node.text.strip()
+        if text and not node.children:
+            leaves.append(_CdaLeaf(f"{path}/text()", node.tag, "", text, narrative, node.text_span))
+        # Repeated siblings need a positional index or they collapse onto
+        # one path, and so one decision id - an Allergy entry nests several
+        # observations under the same tag. Indexed from the second onward,
+        # matching _repetition_suffix's convention for the other formats.
+        seen_tags: dict[str, int] = {}
+        for child in node.children:
+            index = seen_tags.get(child.tag, 0)
+            seen_tags[child.tag] = index + 1
+            walk(child, f"{path}/{child.tag}{_repetition_suffix(index)}", narrative)
+
+    walk(root, root.tag, False)
+    return leaves
+
+
+def _dropped_cda_decisions(
+    report: CrosswalkReport,
+    leaves: list[_CdaLeaf],
+    mapped_spans: set[tuple[int, int]],
+    mapped_values: set[str],
+) -> list[MappingDecision]:
+    """A leaf the recorder never read.
+
+    **Matched by source span, not by coordinate or value.** A recorded
+    C-CDA location is a relative path composed while walking, so it has no
+    inverse the way `PID-5.1` or `NM1-9` does - but `cda_locator.py`
+    already resolves each recorded location to a character span in the raw
+    XML for the correlated-highlighting view, and a span identifies the
+    source text precisely regardless of what the mapper turned it into.
+    That matters: most values *are* transformed (a date reformatted, an
+    OID rewritten as a URI, `use="HP"` mapped to `home`), so comparing
+    values alone reported nearly half the document as lost.
+
+    Value comparison survives only as a fallback for the handful of
+    locations the locator cannot resolve (a bare `<id>`, per its own
+    disclosed simplification). That fallback is imprecise - two leaves
+    carrying the same text are indistinguishable - so it errs toward
+    under-reporting, the direction this register has to fail in.
+    """
+    decisions: list[MappingDecision] = []
+    narrative_sections_seen: set[str] = set()
+
+    def is_mapped(leaf: _CdaLeaf) -> bool:
+        if leaf.span is not None:
+            start, end = leaf.span
+            for mapped_start, mapped_end in mapped_spans:
+                if start < mapped_end and mapped_start < end:
+                    return True
+        return leaf.value in mapped_values
+
+    for leaf in leaves:
+        if is_mapped(leaf):
+            continue
+        if leaf.name in CDA_STRUCTURAL_ATTRS:
+            continue
+        qualified = CDA_QUALIFIER_OF.get(leaf.name)
+        if qualified is not None and leaf.tag:
+            # Consumed only if the attribute it qualifies, on this same
+            # element, was itself read - the same conditional rule the
+            # other two formats use.
+            sibling = next(
+                (o for o in leaves if o.path.rsplit("/@", 1)[0] == leaf.path.rsplit("/@", 1)[0]
+                 and o.name == qualified),
+                None,
+            )
+            if sibling is not None and is_mapped(sibling):
+                continue
+        if leaf.in_narrative:
+            # One decision per narrative block, not one per paragraph.
+            section = leaf.path.split(f"/{CDA_NARRATIVE_TAG}/", 1)[0]
+            if section in narrative_sections_seen:
+                continue
+            narrative_sections_seen.add(section)
+            decisions.append(
+                MappingDecision(
+                    id=_decision_id("dropped", f"{section}/text()"),
+                    kind="dropped",
+                    summary=f"{section}/text() narrative is not mapped to any FHIR field.",
+                    detail=(
+                        "C-CDA requires a section's narrative to restate its entries for human "
+                        "display. Only the entries are mapped; this block's own wording is not."
+                    ),
+                    source_location=f"{section}/text()",
+                    field_label=resolve_cda_field_label(f"{CDA_NARRATIVE_TAG}/text()"),
+                    lost_value=leaf.value,
+                    citation=DROP_NOT_YET_CHECKED,
+                )
+            )
+            continue
+        decisions.append(
+            MappingDecision(
+                id=_decision_id("dropped", leaf.path),
+                kind="dropped",
+                summary=f"{leaf.path} is present in the source but not mapped to any FHIR field.",
+                detail=f"It carried {leaf.value!r}.",
+                source_location=leaf.path,
+                field_label=resolve_cda_field_label(
+                    f"{leaf.tag}/@{leaf.name}" if leaf.name else f"{leaf.tag}/text()"
+                ),
+                lost_value=leaf.value,
+                citation=DROP_NOT_YET_CHECKED,
+            )
+        )
+    return decisions
 
 
 # --- X12 EDI -----------------------------------------------------------

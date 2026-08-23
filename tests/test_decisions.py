@@ -396,14 +396,6 @@ def test_edi_scan_skips_envelope_and_indexes_repeated_segments():
     assert occurrences == set(range(len(occurrences))) and len(occurrences) > 1
 
 
-def test_cda_reports_inferred_only_and_does_not_crash():
-    # C-CDA has no dropped-data scan yet (an XML location has no positional
-    # inverse), so it must degrade to inferred-only rather than raising.
-    decisions = _edi_decisions("ccd_vitals_basic.xml")
-    assert decisions
-    assert all(d.kind == "inferred" for d in decisions)
-
-
 def test_edi_qualifier_is_reported_when_its_target_is_unmapped():
     # A qualifier is only "consumed" if the element it qualifies was
     # actually mapped. 837I never reads CLM05, so its CLM05-2 qualifies
@@ -438,13 +430,64 @@ def test_joined_field_allowance_applies_only_where_something_read_the_field():
     assert not [loc for loc in adt_reported if loc.startswith("PV1-3")]
 
 
-def test_cda_produces_no_dropped_decisions_at_all():
-    # Pins the disclosed state: C-CDA has no dropped-data scan, so it can
-    # never *hide* a drop behind an exclusion the way the other two formats
-    # could - there is nothing to suppress. If a CDA scan is added later,
-    # this test should be replaced rather than deleted.
-    raw = (Path(__file__).parent / "fixtures" / "ccd_vitals_basic.xml").read_text()
-    _, report, _ = convert_with_provenance(raw)
-    decisions = compute_decisions(report, raw)
-    assert decisions
-    assert {d.kind for d in decisions} == {"inferred"}
+# --- C-CDA -----------------------------------------------------------
+
+
+def _cda_decisions(fixture: str):
+    """C-CDA needs the resolved source spans - a recorded XML location has
+    no coordinate inverse, so spans are how a transformed value is told
+    from an unread one."""
+    from app.provenance.highlighting import build_highlighting_payload
+
+    raw = (Path(__file__).parent / "fixtures" / fixture).read_text()
+    bundle, report, _ = convert_with_provenance(raw)
+    payload = build_highlighting_payload(bundle, report, raw, "CDA")
+    spans = {tuple(m.source_span) for m in payload.matches if m.source_span}
+    return compute_decisions(report, raw, spans)
+
+
+def test_cda_reports_dropped_values():
+    decisions = _cda_decisions("ccd_basic.xml")
+    dropped = _by_location([d for d in decisions if d.kind == "dropped"])
+    assert dropped, "a CCD drops real values - languageCode is never mapped"
+    assert any(loc.endswith("languageCode/@code") for loc in dropped)
+
+
+def test_cda_transformed_values_are_not_reported_as_dropped():
+    # The mapper rewrites most values it reads - a date reformatted, an OID
+    # turned into a urn:oid: URI. Comparing values alone called nearly half
+    # the document lost; matching the resolved source span does not.
+    dropped = set(_by_location(_cda_decisions("ccd_basic.xml")))
+    for suffix in (
+        "patient/birthTime/@value",                 # -> Patient.birthDate, reformatted
+        "patientRole/patient/name/family",          # -> HumanName.family
+        "recordTarget/patientRole/id[0]/@root",     # -> Identifier.system, rewritten
+    ):
+        assert not [loc for loc in dropped if loc.endswith(suffix)], suffix
+
+
+def test_cda_structural_xml_is_not_reported_as_dropped():
+    dropped = set(_by_location(_cda_decisions("ccd_basic.xml")))
+    for fragment in ("templateId", "typeId", "@classCode", "@moodCode", "@xmlns"):
+        assert not [loc for loc in dropped if fragment in loc], fragment
+
+
+def test_cda_code_system_is_reported_only_when_its_code_is_unmapped():
+    # codeSystem qualifies the code beside it, so it is consumed only when
+    # that code was actually read - the same conditional rule the other two
+    # formats use.
+    dropped = set(_by_location(_cda_decisions("ccd_basic.xml")))
+    # The Problem Observation's value/@code IS mapped, so its codeSystem is not a drop.
+    assert not [loc for loc in dropped if loc.endswith("observation/value/@codeSystem")]
+    # ClinicalDocument/code is not mapped, so its codeSystem is reported with it.
+    assert any(loc.endswith("ClinicalDocument/code/@codeSystem") for loc in dropped)
+
+
+def test_cda_narrative_block_reports_once_not_per_paragraph():
+    # C-CDA requires a section's narrative to restate its entries, so
+    # reporting every paragraph would bury the real findings under a
+    # duplicate of them.
+    decisions = _cda_decisions("ccd_basic.xml")
+    narrative = [d for d in decisions if (d.source_location or "").endswith("/text()")
+                 and "section" in (d.source_location or "")]
+    assert len({d.source_location for d in narrative}) == len(narrative)
