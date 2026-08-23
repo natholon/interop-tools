@@ -221,3 +221,142 @@ def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int], dict[
                 if values:
                     populated[(segment_id, field_index, repetition)] = values
     return populated
+
+
+DATA_ABSENT_REASON_URL = "http://hl7.org/fhir/StructureDefinition/data-absent-reason"
+# The code used when a reviewer rejects an inferred value. None of the 15
+# DataAbsentReason codes means "a reviewer rejected our inference" - that
+# concept isn't in the value set. "unknown" ("the value is expected to
+# exist but is not known") is the accurate fit: after rejection the value
+# certainly exists in reality, this app just has no approved basis to
+# assert it. Confirmed with the product owner rather than assumed.
+REJECTED_ABSENT_REASON = "unknown"
+
+# How to express a rejected value conformantly, per (resourceType, field).
+# "code" = the field's own value set has a null-flavour code, so emit it
+# and the resource stays a fully valid model. "absent" = the value set has
+# no such code AND the binding is Required, so the only conformant option
+# is to drop the value and carry FHIR's data-absent-reason extension on
+# the primitive instead.
+#
+# Every row was checked against that field's published R4 value set - the
+# fhir.resources library does NOT validate value sets (it accepts
+# intent="null"), so it cannot be used to derive this.
+REJECTION_STRATEGY: dict[tuple[str, str], str] = {
+    ("Encounter", "status"): "code",           # value set includes "unknown"
+    ("Observation", "status"): "code",         # value set includes "unknown"
+    ("DiagnosticReport", "status"): "code",    # value set includes "unknown"
+    ("Appointment", "status"): "absent",       # no null code; Required binding
+    ("DocumentReference", "status"): "absent",  # current|superseded|entered-in-error only
+}
+NULL_FLAVOUR_CODE = "unknown"
+
+
+class RejectionOutcome(BaseModel):
+    """What actually happened to one rejected decision. `applied=False`
+    means the rejection could not be expressed conformantly and the
+    original value was left in place - reported rather than silently
+    dropped, since a reviewer who rejected something needs to know it
+    did not take effect."""
+
+    decision_id: str
+    fhir_path: str
+    applied: bool
+    strategy: str | None = None
+    note: str | None = None
+
+
+def _split_entry_path(fhir_path: str) -> tuple[int, str] | None:
+    """"Bundle.entry[3].resource.status" -> (3, "status"). Returns None
+    for a Bundle-level fact, which has no entry to rewrite."""
+    if not fhir_path.startswith("Bundle.entry["):
+        return None
+    head, _, tail = fhir_path.partition("].resource.")
+    if not tail:
+        return None
+    try:
+        return int(head[len("Bundle.entry[") :]), tail
+    except ValueError:
+        return None
+
+
+def apply_rejections(
+    bundle_dict: dict, decisions: list[MappingDecision], rejected_ids: set[str]
+) -> tuple[dict, list[RejectionOutcome]]:
+    """Apply a reviewer's rejections to an already-serialized Bundle.
+
+    Operates on the serialized dict, not the model, because a rejected
+    required value has to be expressed as value-absent-plus-extension -
+    legal FHIR, but `fhir.resources` enforces required fields even on
+    assignment and cannot represent it. Working at the JSON level keeps
+    the output conformant rather than bending it to the library's stricter
+    model.
+
+    Only nested field paths one level under `.resource` are handled (all
+    of HL7v2's inferred surface is `status`); anything deeper is reported
+    as not applied rather than silently ignored.
+    """
+    entries = bundle_dict.get("entry") or []
+    outcomes: list[RejectionOutcome] = []
+    by_id = {d.id: d for d in decisions}
+
+    for decision_id in sorted(rejected_ids):
+        decision = by_id.get(decision_id)
+        if decision is None:
+            continue
+        # NB: a dropped decision has no fhir_path (it never produced a
+        # FHIR field), so this must not guard on fhir_path before the
+        # kind check below - doing so silently swallowed every rejected
+        # drop instead of reporting it.
+        if decision.kind != "inferred":
+            # Rejecting a *drop* means "this should have been mapped" -
+            # a gap to fix in the mapper, not something conversion can
+            # act on. Recorded so the reviewer sees it was registered.
+            outcomes.append(
+                RejectionOutcome(
+                    decision_id=decision_id,
+                    fhir_path=decision.fhir_path or decision.source_location or "",
+                    applied=False,
+                    note="Rejecting dropped data flags an unmapped field; conversion cannot supply a mapping.",
+                )
+            )
+            continue
+
+        split = _split_entry_path(decision.fhir_path)
+        if split is None:
+            outcomes.append(
+                RejectionOutcome(decision_id=decision_id, fhir_path=decision.fhir_path, applied=False,
+                                 note="Bundle-level values are not rejectable.")
+            )
+            continue
+        index, field = split
+        if index >= len(entries) or "." in field:
+            outcomes.append(
+                RejectionOutcome(decision_id=decision_id, fhir_path=decision.fhir_path, applied=False,
+                                 note="Only top-level fields of a Bundle entry can be rejected.")
+            )
+            continue
+
+        resource = entries[index].get("resource", {})
+        strategy = REJECTION_STRATEGY.get((resource.get("resourceType", ""), field))
+        if strategy == "code":
+            resource[field] = NULL_FLAVOUR_CODE
+        elif strategy == "absent":
+            resource.pop(field, None)
+            resource[f"_{field}"] = {
+                "extension": [{"url": DATA_ABSENT_REASON_URL, "valueCode": REJECTED_ABSENT_REASON}]
+            }
+        else:
+            # Not in the table means nobody has checked this field's own
+            # value set. Removing it could silently produce a
+            # non-conformant resource, so the value stays and the
+            # reviewer is told the rejection did not take effect.
+            outcomes.append(
+                RejectionOutcome(decision_id=decision_id, fhir_path=decision.fhir_path, applied=False,
+                                 note="No verified conformant representation for this field; value left unchanged.")
+            )
+            continue
+        outcomes.append(
+            RejectionOutcome(decision_id=decision_id, fhir_path=decision.fhir_path, applied=True, strategy=strategy)
+        )
+    return bundle_dict, outcomes

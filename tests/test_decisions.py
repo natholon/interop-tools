@@ -128,3 +128,80 @@ def test_scan_ignores_msh_and_non_composite_fields():
     assert not any(segment == "MSH" for segment, _, _ in populated)
     # PV1-3 here has no "^" at all, so there is nothing to drop from it.
     assert ("PV1", 3, 0) not in populated
+
+
+# --- rejection -------------------------------------------------------
+
+import json
+
+from app.provenance.decisions import (
+    DATA_ABSENT_REASON_URL,
+    apply_rejections,
+    compute_decisions as _compute,
+)
+from app.generators.registry import generate
+
+
+def _converted(message: str):
+    bundle, report, _ = convert_with_provenance(message)
+    decisions = _compute(report, scan_populated_components(message))
+    return json.loads(bundle.model_dump_json(exclude_none=True)), decisions
+
+
+def _entry_index(fhir_path: str) -> int:
+    return int(fhir_path[len("Bundle.entry[") :].split("]")[0])
+
+
+def test_rejecting_a_status_with_a_null_code_emits_that_code():
+    # Tier 2: Encounter.status's own value set includes "unknown", so the
+    # rejection is expressible as a normal code and the resource stays a
+    # fully valid FHIR model.
+    bundle, decisions = _converted(generate("ADT", "A01", seed=3))
+    target = next(d for d in decisions if d.kind == "inferred" and d.fhir_path.endswith(".status"))
+    index = _entry_index(target.fhir_path)
+    assert bundle["entry"][index]["resource"]["status"] != "unknown"
+
+    result, outcomes = apply_rejections(bundle, decisions, {target.id})
+    resource = result["entry"][index]["resource"]
+    assert resource["status"] == "unknown"
+    assert "_status" not in resource
+    assert outcomes[0].applied is True and outcomes[0].strategy == "code"
+
+
+def test_rejecting_a_status_with_no_null_code_uses_data_absent_reason():
+    # Tier 3: Appointment.status has no null-flavour code and a Required
+    # binding, so the only conformant option is value-absent plus the
+    # data-absent-reason extension on the primitive.
+    bundle, decisions = _converted(generate("SIU", "S12", seed=3))
+    target = next(d for d in decisions if d.kind == "inferred" and d.fhir_path.endswith(".status"))
+    index = _entry_index(target.fhir_path)
+
+    result, outcomes = apply_rejections(bundle, decisions, {target.id})
+    resource = result["entry"][index]["resource"]
+    assert "status" not in resource
+    assert resource["_status"]["extension"][0]["url"] == DATA_ABSENT_REASON_URL
+    assert resource["_status"]["extension"][0]["valueCode"] == "unknown"
+    assert outcomes[0].applied is True and outcomes[0].strategy == "absent"
+
+
+def test_rejecting_a_dropped_field_is_recorded_but_not_applied():
+    # Rejecting a *drop* means "this should have been mapped" - a gap in
+    # the mapper, not something conversion can act on. It must be
+    # reported, never silently ignored.
+    message = _message(
+        "PID|1||578324^^^MRN||Doe^Jane||19620305|F", "PV1|1|I|C100^^A^GENHOSP|||||||||||||||||V1"
+    )
+    bundle, decisions = _converted(message)
+    drop = next(d for d in decisions if d.source_location == "PV1-3.4")
+
+    _, outcomes = apply_rejections(bundle, decisions, {drop.id})
+    assert outcomes[0].applied is False
+    assert "cannot supply a mapping" in (outcomes[0].note or "")
+
+
+def test_unrejected_decisions_leave_the_bundle_untouched():
+    bundle, decisions = _converted(generate("ADT", "A01", seed=3))
+    before = json.dumps(bundle, sort_keys=True)
+    result, outcomes = apply_rejections(bundle, decisions, set())
+    assert json.dumps(result, sort_keys=True) == before
+    assert outcomes == []
