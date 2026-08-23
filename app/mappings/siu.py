@@ -78,6 +78,35 @@ def _build_identifiers(sch) -> list[Identifier]:
 _AIG_LOCATION_TYPE_CODES = {"LOCATION", "ROOM"}
 
 
+def _aig_identifier_system(aig, fallback: str = "urn:interop-tools:location-id") -> tuple[str, int | None]:
+    """The system for the Identifier AIG-3 becomes, and which component
+    supplied it.
+
+    v2-to-FHIR maps AIG-3 through CWE[Identifier], where CWE.3 (Name of
+    Coding System) is `Identifier.system`. We used to hard-code a local
+    placeholder and ignore CWE.3 entirely, so a sender naming its own
+    coding system had that name silently dropped. The IG's own comment
+    ("some mapping of the CWE.3 value to an actual URI") leaves the
+    resolution open, so the raw name is carried as-is rather than guessed
+    at - the same treatment `build_codeable_concept_from_cwe` already
+    gives a CWE.3 it cannot resolve to a canonical URI.
+    """
+    named = field_str(aig, 3, component=3)
+    return (named, 3) if named else (fallback, None)
+
+
+def _record_identifier_system(recorder, resource_id: str, system: str, component: int | None) -> None:
+    if component is not None:
+        recorder.record(resource_id, "identifier[0].system", hl7_location("AIG", 3, component=component), system)
+    else:
+        recorder.record_inferred(
+            resource_id,
+            "identifier[0].system",
+            f"AIG-3 named no coding system; defaulted to {system!r}.",
+            system,
+        )
+
+
 def _build_aig_resource(aig, recorder=None) -> tuple[Resource, str] | None:
     """AIG ("general resource") has no single fixed FHIR target in the
     official mapping - the real resource type depends on what AIG-4
@@ -106,9 +135,11 @@ def _build_aig_resource(aig, recorder=None) -> tuple[Resource, str] | None:
         if recorder:
             recorder.record(location.id, "name", hl7_location("AIG", 3, component=resource_display_component), resource_display)
         if resource_id:
-            location.identifier = [Identifier(system="urn:interop-tools:location-id", value=resource_id)]
+            system, system_component = _aig_identifier_system(aig)
+            location.identifier = [Identifier(system=system, value=resource_id)]
             if recorder:
                 recorder.record(location.id, "identifier[0].value", hl7_location("AIG", 3, component=1), resource_id)
+                _record_identifier_system(recorder, location.id, system, system_component)
         return location, resource_display
 
     device = Device(
@@ -119,9 +150,11 @@ def _build_aig_resource(aig, recorder=None) -> tuple[Resource, str] | None:
             device.id, "deviceName[0].name", hl7_location("AIG", 3, component=resource_display_component), resource_display
         )
     if resource_id:
-        device.identifier = [Identifier(system="urn:interop-tools:device-id", value=resource_id)]
+        system, system_component = _aig_identifier_system(aig, fallback="urn:interop-tools:device-id")
+        device.identifier = [Identifier(system=system, value=resource_id)]
         if recorder:
             recorder.record(device.id, "identifier[0].value", hl7_location("AIG", 3, component=1), resource_id)
+            _record_identifier_system(recorder, device.id, system, system_component)
     resource_type = build_codeable_concept_from_cwe(aig, 4, resource_id=device.id, relative_path="type", recorder=recorder)
     if resource_type:
         device.type = resource_type

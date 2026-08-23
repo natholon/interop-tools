@@ -128,3 +128,33 @@ def test_other_triggers_produce_same_shape_as_t02(mapper_cls):
     # Same shape as T02, PV1-3 Location chain included.
     assert len(bundle.entry) == 10
     assert by_type["DocumentReference"][0].status == "current"
+
+
+def test_unverified_availability_status_is_carried_as_an_alternate_code():
+    # v2-to-FHIR's TXA-19 row is conditional: "AV" assigns status
+    # "current", while "CA"/"OB"/"UN" are placed on status itself as an
+    # alternate-codes extension. We honoured only the first half, so a
+    # cancelled document was indistinguishable from an available one.
+    # The extension URL is assigned verbatim by the segment map; the value
+    # is ID[CodeableConcept], which maps ID.1 to coding.code and assigns
+    # no system - so none is invented here either.
+    message = parse_message(read_fixture("validation_mdm_availability_unverified.hl7"))
+    bundle = MdmT02Mapper().to_bundle(message)
+    document_reference = _entries_by_type(bundle)["DocumentReference"][0]
+
+    assert document_reference.status == "current"
+    extension = document_reference.status__ext.extension[0]
+    assert extension.url == "http://hl7.org/fhir/StructureDefinition/alternate-codes"
+    assert extension.valueCodeableConcept.coding[0].code == "CA"
+    assert extension.valueCodeableConcept.coding[0].system is None
+
+
+def test_verified_availability_status_carries_no_alternate_code():
+    # The two TXA-19 branches are mutually exclusive - "AV" drives status
+    # directly and has nothing left over to carry as an alternate.
+    message = parse_message(read_fixture("mdm_t02_basic.hl7"))
+    bundle = MdmT02Mapper().to_bundle(message)
+    document_reference = _entries_by_type(bundle)["DocumentReference"][0]
+
+    assert document_reference.status == "current"
+    assert document_reference.status__ext is None

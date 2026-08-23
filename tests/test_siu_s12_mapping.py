@@ -176,3 +176,17 @@ def test_partial_tq1_falls_back_to_sch11_per_field():
 
     assert appointment.start.isoformat() == "2026-09-10T08:30:00+00:00"  # from TQ1-7
     assert appointment.end.isoformat() == "2026-09-10T09:00:00+00:00"  # from SCH-11 fallback
+
+
+def test_aig_identifier_system_comes_from_the_named_coding_system():
+    # v2-to-FHIR maps AIG-3 through CWE[Identifier], where CWE.3 (Name of
+    # Coding System) is Identifier.system. We hard-coded a local
+    # placeholder and ignored CWE.3, so a sender naming its own coding
+    # system had that name silently dropped.
+    message = parse_message(read_fixture("siu_s12_aig_location.hl7"))
+    bundle = SiuS12Mapper().to_bundle(message)
+    location = next(
+        e.resource for e in bundle.entry if e.resource.get_resource_type() == "Location"
+    )
+    assert location.identifier[0].system == "LOCAL"
+    assert location.identifier[0].value == "OR3"

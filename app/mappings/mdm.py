@@ -65,6 +65,8 @@ from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.documentreference import DocumentReference, DocumentReferenceContent, DocumentReferenceContext
+from fhir.resources.R4B.extension import Extension
+from fhir.resources.R4B.fhirprimitiveextension import FHIRPrimitiveExtension
 from fhir.resources.R4B.identifier import Identifier
 from fhir.resources.R4B.practitioner import Practitioner
 from fhir.resources.R4B.reference import Reference
@@ -116,6 +118,14 @@ def _resolve_content_type(txa) -> str:
 # the same status, so only this one is a genuine read.
 _VERIFIED_AVAILABILITY_STATUS = {"AV": "current"}
 
+# The IG's other TXA-19 rule: "CA", "OB" and "UN" carry no status assignment
+# of their own, but the code itself is placed on status as an alternate-codes
+# extension. The URL is assigned verbatim by the segment map; the value is
+# ID[CodeableConcept], which maps ID.1 to coding.code and assigns no system -
+# so none is invented here.
+ALTERNATE_CODES_EXTENSION = "http://hl7.org/fhir/StructureDefinition/alternate-codes"
+_ALTERNATE_AVAILABILITY_STATUS = {"CA", "OB", "UN"}
+
 
 def _resolve_status(txa) -> tuple[str, str | None]:
     """TXA-19 -> (DocumentReference.status, the TXA-19 value it was read
@@ -134,6 +144,18 @@ def _resolve_status(txa) -> tuple[str, str | None]:
     if verified:
         return verified, raw
     return "current", None
+
+
+def _alternate_status_code(txa) -> str | None:
+    """The TXA-19 code the IG puts on `status` as an alternate code.
+
+    "CA"/"OB"/"UN" are not unmapped: the segment map assigns them the
+    alternate-codes extension, keeping the sender's own availability code
+    reachable even though FHIR's status has no equivalent. We dropped it,
+    so a cancelled or obsolete document was indistinguishable from an
+    available one in the output."""
+    raw = field_str(txa, 19).strip().upper()
+    return raw if raw in _ALTERNATE_AVAILABILITY_STATUS else None
 
 
 def _build_binary_from_obx(obx_segments, txa, recorder=None) -> Binary | None:
@@ -198,7 +220,25 @@ def build_document_reference(
         content=[DocumentReferenceContent(attachment=attachment)],
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
     )
+    alternate_status = _alternate_status_code(txa)
+    if alternate_status:
+        document_reference.status__ext = FHIRPrimitiveExtension(
+            extension=[
+                Extension(
+                    url=ALTERNATE_CODES_EXTENSION,
+                    valueCodeableConcept=CodeableConcept(coding=[Coding(code=alternate_status)]),
+                )
+            ]
+        )
+
     if recorder:
+        if alternate_status:
+            recorder.record(
+                document_reference_id,
+                "status__ext.extension[0].valueCodeableConcept.coding[0].code",
+                hl7_location("TXA", 19),
+                alternate_status,
+            )
         if status_source:
             # A verified read: TXA-19 said "AV", and that is what produced
             # "current". Recording it inferred left the field looking both

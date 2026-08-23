@@ -22,6 +22,7 @@ from app.provenance.citations import Citation, DROP_NOT_YET_CHECKED, V2_TO_FHIR
 NO_TARGET = "no_target"
 OUT_OF_SCOPE = "out_of_scope"
 SUPERSEDED = "superseded"
+UNPARSEABLE = "unparseable"
 GAP = "gap"
 
 IG_NAMES_NO_TARGET = Citation(
@@ -61,15 +62,41 @@ IG_TARGET_SUPERSEDED = Citation(
     ),
 )
 
+IG_TARGET_UNPARSEABLE = Citation(
+    title="v2-to-FHIR target implemented, but the source value could not be parsed",
+    url="https://github.com/HL7/v2-to-fhir/tree/master/mappings",
+    authoritative=True,
+    note=(
+        "The IG defines a target and this app implements it, so the field being reported here "
+        "carried a value the parser could not read - a malformed message, not a gap in this app's "
+        "conversion. It is still surfaced, because data that did not reach the output is exactly "
+        "what this register exists to show."
+    ),
+)
+
 _CITATION_BY_VERDICT = {
     NO_TARGET: IG_NAMES_NO_TARGET,
     SUPERSEDED: IG_TARGET_SUPERSEDED,
     OUT_OF_SCOPE: IG_TARGET_OUT_OF_SCOPE,
+    UNPARSEABLE: IG_TARGET_UNPARSEABLE,
     GAP: IG_DEFINES_TARGET,
 }
 
 # (field or component) -> (verdict, what the IG says).
 IG_VERDICTS: dict[str, tuple[str, str]] = {
+    # --- PID ------------------------------------------------------------
+    "PID-7": (
+        UNPARSEABLE,
+        "PID-7 maps to Patient.birthDate, which this app builds whenever the value parses - so a "
+        "PID-7 reported here carried a date the parser could not read.",
+    ),
+    # --- TXA (Segment - TXA[DocumentReference]) -------------------------
+    "TXA-10.7": (
+        SUPERSEDED,
+        "XCN.7 maps to Practitioner.qualification, which this app builds. TXA-10 naming the same "
+        "person as TXA-9 reuses the one Practitioner already built from TXA-9 - which carries this "
+        "same degree - rather than materialising a second copy of them.",
+    ),
     # --- EVN (Segment - EVN[Provenance]) --------------------------------
     "EVN-2": (
         OUT_OF_SCOPE,

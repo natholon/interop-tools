@@ -765,3 +765,31 @@ def test_rejection_strategies_cover_cda_and_edi_resources():
     outcome = next(o for o in outcomes if o.decision_id == coverage_status.id)
     assert outcome.applied is True
     assert outcome.strategy == "absent"
+
+
+def test_free_text_field_is_not_split_into_phantom_components():
+    # "^" in a free-text field is a character somebody typed, not a
+    # component separator - the same raw_field_str/field_str split the
+    # mappers themselves make. Splitting on it invented a component the
+    # mapper could not have read, so the register accused it of losing
+    # data it had in fact carried whole.
+    raw = (_EDI_FIXTURES / "mdm_t02_obx_with_caret.hl7").read_text()
+    bundle, report, _ = convert_with_provenance(raw)
+    dropped = _by_location([d for d in compute_decisions(report, raw) if d.kind == "dropped"])
+
+    assert not [loc for loc in dropped if loc.startswith("OBX-5")]
+    binary = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Binary")
+    assert "^" in binary.data.decode()
+
+
+def test_unparseable_date_is_reported_against_an_implemented_target():
+    # PID-7 maps to Patient.birthDate and this app builds it whenever the
+    # value parses, so a PID-7 reported here is a malformed message rather
+    # than a gap. It is still surfaced: data that did not reach the output
+    # is exactly what the register exists to show.
+    raw = (_EDI_FIXTURES / "validation_generic_pid7_unparseable.hl7").read_text()
+    _, report, _ = convert_with_provenance(raw)
+    dropped = _by_location([d for d in compute_decisions(report, raw) if d.kind == "dropped"])
+
+    assert "PID-7" in dropped
+    assert "could not be parsed" in dropped["PID-7"].citation.title

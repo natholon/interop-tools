@@ -73,6 +73,8 @@ JOINED_FIELDS: dict[tuple[str, int], set[int]] = {
     ("AIL", 3): {1, 2},
     # app.mappings.common.person_display - family + given, id as fallback.
     ("PV1", 7): {1, 2, 3},
+    ("TXA", 9): {1, 2, 3},
+    ("TXA", 10): {1, 2, 3},
 }
 # AIG-3 is deliberately absent: it is CWE-shaped, not PL, and
 # app.mappings.siu._build_aig_resource records the component it actually
@@ -329,6 +331,23 @@ def compute_decisions(
     return decisions
 
 
+# Fields whose content is unstructured free text, where a literal "^" is
+# a character rather than a component separator. Mirrors exactly the set
+# the mappers read via raw_field_str: NTE-3 and TXA-25 are always free
+# text; OBX-5 only when OBX-2 says so.
+_ALWAYS_FREE_TEXT = {("NTE", 3), ("TXA", 25)}
+_FREE_TEXT_VALUE_TYPES = {"ST", "TX", "FT"}
+
+
+def _is_free_text(segment_id: str, field_index: int, fields: list[str]) -> bool:
+    if (segment_id, field_index) in _ALWAYS_FREE_TEXT:
+        return True
+    if segment_id == "OBX" and field_index == 5:
+        value_type = fields[2].strip().upper() if len(fields) > 2 else ""
+        return value_type in _FREE_TEXT_VALUE_TYPES
+    return False
+
+
 def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int, int], dict[int, str]]:
     """(segment, segment_occurrence, field, repetition) -> {component:
     value} for every non-empty component in the message.
@@ -376,7 +395,19 @@ def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int, int], 
                 # Service, say) is real data loss, and skipping it here made
                 # every non-composite field structurally invisible to the
                 # register regardless of what it carried.
-                components = repetition_text.split("^")
+                #
+                # A free-text field is the opposite case: "^" there is a
+                # character somebody typed, not a component separator, and
+                # splitting on it invented a component the mapper could not
+                # have read. "Grade II^ tear noted on exam" was reported as
+                # having dropped a component " tear noted on exam" that no
+                # sender ever sent - the register accusing the mapper of
+                # losing data it had in fact carried whole. This mirrors the
+                # raw_field_str/field_str split the mappers themselves use.
+                if _is_free_text(segment_id, field_index, fields):
+                    components = [repetition_text]
+                else:
+                    components = repetition_text.split("^")
                 values = {i: v for i, v in enumerate(components, start=1) if v}
                 if values:
                     populated[(segment_id, occurrence, field_index, repetition)] = values
