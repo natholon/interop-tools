@@ -42,6 +42,7 @@ from app.hl7.parser import normalize_segment_separators, truncate_to_first_messa
 from app.provenance.citations import Citation, DEFAULT_BY_FORMAT, DROP_NOT_YET_CHECKED
 from app.provenance.hl7_field_names import SEGMENT_FIELD_NAMES, component_names_for_field
 from app.provenance.cda_field_names import resolve_cda_field_label
+from app.provenance.cda_ig_verdicts import GAP, verdict_for
 from app.provenance.cda_locator import _resolve_attribute_span, parse_with_positions
 from app.provenance.edi_field_names import resolve_edi_field_label
 from app.provenance.edi_locator import ParsedEdiLocation, parse_edi_location
@@ -518,6 +519,13 @@ def _collapse_repeated_shapes(rows: list[tuple[str, str, str, str | None]]) -> l
             )
             values = ", ".join(dict.fromkeys(repr(row[2]) for row in group))
             detail = f"{count} occurrences, carrying {values}."
+        verdict, citation, ig_note = verdict_for(shape)
+        if ig_note:
+            detail = f"{detail} {ig_note}" if detail else ig_note
+        if verdict == GAP:
+            # A gap is the one verdict a reviewer has to act on, so it
+            # leads the summary rather than sitting in the citation note.
+            summary = f"GAP: {summary}"
         decisions.append(
             MappingDecision(
                 id=_decision_id("dropped", shape),
@@ -527,7 +535,7 @@ def _collapse_repeated_shapes(rows: list[tuple[str, str, str, str | None]]) -> l
                 source_location=first_location if count == 1 else shape,
                 field_label=resolve_cda_field_label(label_key),
                 lost_value=first_value,
-                citation=DROP_NOT_YET_CHECKED,
+                citation=citation,
             )
         )
     return decisions

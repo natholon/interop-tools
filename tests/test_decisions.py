@@ -548,3 +548,49 @@ def test_cda_a_single_occurrence_keeps_its_exact_location():
     collapse - one occurrence still names the indexed path it came from."""
     dropped = _by_location(_cda_decisions("ccd_vitals_basic.xml"))
     assert any("[" in loc for loc in dropped), dropped.keys()
+
+
+def test_cda_drops_cite_a_real_ig_verdict_not_unchecked():
+    """Every drop used to cite "not yet checked". Where the IG's own
+    mapping table has been read, the register now states what it says."""
+    decisions = _cda_decisions("ccd_basic.xml")
+    titles = {d.citation.title for d in decisions if d.kind == "dropped"}
+    assert any("no map specified" in t for t in titles)
+    assert any("not supported by target" in t for t in titles)
+
+
+def test_cda_ig_defined_target_is_reported_as_a_gap():
+    """The Problem Observation's own id maps to Condition.identifier as a
+    source value in the IG's Problem-Condition table, and this app does not
+    build it - a real gap, distinct from an element the standard itself
+    declines to map."""
+    gaps = [d for d in _cda_decisions("ccd_basic.xml") if d.summary.startswith("GAP:")]
+    assert gaps, "ccd_basic drops the Problem Observation id"
+    gap = gaps[0]
+    assert gap.source_location.endswith("observation/id")
+    assert gap.citation.authoritative is True
+    assert "Condition.identifier" in (gap.detail or "")
+
+
+def test_cda_concern_act_id_is_not_a_gap_though_the_observation_id_is():
+    """The same tag at different depths gets different verdicts: the
+    Concern Act's own id is marked "not supported by target" while the
+    Problem Observation's id inside it maps. Longest-suffix matching is
+    what keeps those apart."""
+    by_loc = _by_location(_cda_decisions("ccd_basic.xml"))
+    act_id = next(d for loc, d in by_loc.items() if loc.endswith("entry/act/id"))
+    obs_id = next(d for loc, d in by_loc.items() if loc.endswith("observation/id"))
+    assert "not supported by target" in act_id.citation.title
+    assert not act_id.summary.startswith("GAP:")
+    assert obs_id.summary.startswith("GAP:")
+
+
+def test_cda_unsourced_shape_still_says_unchecked():
+    """Honesty in the other direction: a shape whose IG table has not been
+    read yet must keep saying so rather than defaulting to a verdict."""
+    from app.provenance.cda_ig_verdicts import verdict_for
+
+    verdict, citation, note = verdict_for("some/element/nobody/checked")
+    assert verdict is None
+    assert citation.authoritative is False
+    assert "not yet checked" in citation.title.lower()

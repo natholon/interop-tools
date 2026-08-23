@@ -94,6 +94,48 @@ DROP_NOT_YET_CHECKED = Citation(
     ),
 )
 
+# --- C-CDA drop verdicts, checked against the IG's own mapping tables ---
+#
+# The IG publishes per-resource CSVs (mappings/CF/*.csv) whose `Approach`
+# column is the authoritative signal: "source value"/"transform" define a
+# FHIR target, "not supported by target" states there is none. An element
+# with no row at all is also a real answer, per the IG's own
+# mappingGuidance: "If you have data in an input artifact that is defined
+# in the source specification and for which no map is specified here, that
+# means that this team did not find a target for which we could build
+# consensus." That is a verified position, not an unchecked one.
+
+CDA_IG_NOT_SUPPORTED = Citation(
+    title="C-CDA on FHIR: not supported by target",
+    url="https://github.com/HL7/ccda-on-fhir/tree/master/mappings/CF",
+    authoritative=True,
+    note=(
+        "The IG's own mapping table marks this element \"not supported by target\" - it "
+        "states there is no FHIR element to carry it, so dropping it matches the standard."
+    ),
+)
+
+CDA_IG_NO_MAP_SPECIFIED = Citation(
+    title="C-CDA on FHIR: no map specified",
+    url="https://build.fhir.org/ig/HL7/ccda-on-fhir/mappingGuidance.html",
+    authoritative=True,
+    note=(
+        "The IG specifies no mapping for this element. Per its own mapping guidance, that "
+        "means \"this team did not find a target for which we could build consensus\" - a "
+        "stated position, not an oversight on this app's part."
+    ),
+)
+
+CDA_IG_DEFINES_TARGET = Citation(
+    title="C-CDA on FHIR defines a target this app does not implement",
+    url="https://github.com/HL7/ccda-on-fhir/tree/master/mappings/CF",
+    authoritative=True,
+    note=(
+        "The IG's own mapping table defines a FHIR target for this element, so this is a "
+        "real gap in this app's conversion rather than a limit of the standard."
+    ),
+)
+
 CITATION_UNVERIFIED = Citation(
     title="Local judgment call - no external source",
     url=None,
