@@ -615,18 +615,11 @@ def _build_allergen_participant(allergy) -> str:
 
 
 def _build_allergy_entry(allergy) -> str:
-    # A negated allergy always reaches this builder with code.coding empty
-    # (only code.text set) - _resolve_allergen_code never returns a coded
-    # CodeableConcept for a negated entry, only a text-only one - so this
-    # is a reliable, disclosed way to detect the negated case on the way
-    # back out without a dedicated FHIR-side marker. A further, disclosed
-    # lossy step follows from this: a negated allergy that still carried a
-    # resolvable allergen ("No known allergy to Penicillin") can't recover
-    # that allergen's own code here, so it degrades to the fully generic
-    # "No known allergies" shape on this and every subsequent round trip -
-    # the same "can't recover more than the forward side actually kept"
-    # limitation every other lossy-by-construction reverse mapping in this
-    # app already discloses.
+    # Empty code.coding is how a negated allergy is detected: the forward
+    # _resolve_allergen_code never returns a coding for one, only text.
+    # Lossy, and disclosed: an allergen that survived as text ("No known
+    # allergy to Penicillin") cannot be recovered as a code, so it degrades
+    # to the generic "No known allergies" shape from here on.
     negated = not (allergy.code and allergy.code.coding)
     negation_attr = ' negationInd="true"' if negated else ""
     participant = "" if negated else _build_allergen_participant(allergy)
@@ -669,19 +662,12 @@ def _build_allergies_section(allergies) -> str:
     )
 
 
-# Reverse of app.cda.immunizations.STATUS_MAP - "completed"/"entered-in-
-# error" are clean bijections ("completed"/"nullified"), but "not-done" is
-# genuinely many-to-one on the forward side (six distinct statusCode
-# values, plus negationInd="true" unconditionally, all collapse to it).
-# Reversed via negationInd="true" specifically, not a non-negated
-# statusCode - the forward side's own comment already treats negation as
-# the primary real-world signal for this status ("negation is checked
-# first, before this table is even consulted"), so it's the more honest
-# disclosed representative than picking one of the six statusCode values
-# arbitrarily. "aborted" is still emitted as statusCode alongside the
-# negation attribute, purely for XML realism - it's inert on the forward
-# side regardless, since negationInd short-circuits status resolution
-# before statusCode is ever consulted.
+# Reverse of app.cda.immunizations.STATUS_MAP. "completed"/"entered-in-
+# error" invert cleanly; "not-done" is many-to-one (six statusCode values
+# plus negationInd all collapse to it), so it reverses via
+# negationInd="true" - the forward side's primary signal, checked before
+# the table is consulted at all. The "aborted" statusCode emitted
+# alongside is inert on the next forward pass, and there for realism.
 _IMMUNIZATION_STATUS_TO_ACT_STATUS = {"completed": "completed", "entered-in-error": "nullified"}
 _DEFAULT_IMMUNIZATION_ACT_STATUS = "aborted"
 
@@ -1124,21 +1110,11 @@ def _build_results_section(reports, observations_by_id: dict, specimens_by_id: d
     )
 
 
-# Reverse of app.cda.procedures.STATUS_MAP - a genuine bijection (each of
-# its four target values is distinct), inverted directly rather than
-# hand-picked, unlike every other many-to-one status map this app has
-# reversed so far. The one real ambiguity - "not-done" also has a second
-# forward source, negationInd="true" (unconditional, regardless of
-# statusCode) - is deliberately resolved by always reversing via the
-# table's own exact-match "cancelled" statusCode instead, since it needs
-# no additional attribute and is an equally valid, equally disclosed
-# representative; a real negationInd="true" origin can't be distinguished
-# from a genuine statusCode="cancelled" one on the FHIR side, so which one
-# this builder regenerates is a deliberate choice, not a guess. "unknown"
-# (the forward side's own fallback for an absent/unrecognized statusCode)
-# reverses by omitting <statusCode> entirely, the same "regenerate the
-# fallback, don't fabricate a fake code" precedent Results' own STATUS_MAP
-# reversal already established.
+# Reverse of app.cda.procedures.STATUS_MAP - a genuine bijection, so it
+# inverts directly. "not-done" has a second forward source, negationInd,
+# indistinguishable from statusCode="cancelled" on the FHIR side; this
+# always regenerates the latter. "unknown" reverses by omitting
+# <statusCode> rather than fabricating a code.
 _PROCEDURE_STATUS_TO_ACT_STATUS = {v: k for k, v in PROCEDURE_STATUS_MAP.items()}
 
 

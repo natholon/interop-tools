@@ -310,21 +310,14 @@ def build_appointment_core(
     if service_types:
         appointment.serviceType = service_types
 
-    # Every NTE in the message is treated as appointment-scoped and
-    # concatenated - not just the first one found. NTEs can trail SCH or a
-    # resource-group segment (AIS/AIG/AIL/AIP), but Appointment.comment is a
-    # single field with no place to preserve which segment each note
-    # actually followed, and no separate field exists for per-participant
-    # notes - so every note's text is folded into one comment rather than
-    # arbitrarily keeping only the first (which used to pick whichever NTE
-    # happened to appear first in the message, not necessarily the most
-    # relevant one). Joined with a newline rather than "; " - NTE-3 is FT
-    # (Formatted Text, unstructured free text - read via raw_field_str, not
-    # field_str, for the same reason OBX-5 free-text values are: a literal
-    # '^' in the comment is just a character, not a component separator),
-    # and a newline is far less likely to collide with a note's own content
-    # than "; " would be, though it doesn't fully eliminate the ambiguity of
-    # folding multiple notes into one field with no boundary markers.
+    # Every NTE is folded into one comment, not just the first. NTEs trail
+    # SCH or a resource-group segment (AIS/AIG/AIL/AIP), but
+    # Appointment.comment is one field with nowhere to record which segment
+    # a note followed, and there is no per-participant note field - so
+    # scoping is lost either way, and keeping only the first would lose
+    # content too. Newline-joined rather than "; ", which is likelier to
+    # occur inside a note's own text. NTE-3 is FT, so raw_field_str: a
+    # literal '^' is a character, not a component separator.
     comments = [text for nte in nte_segments if (text := raw_field_str(nte, 3))]
     if comments:
         appointment.comment = "\n".join(comments)

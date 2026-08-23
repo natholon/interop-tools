@@ -119,23 +119,17 @@ def build_patient(pid, recorder=None) -> Patient:
 
 
 # PL (person location) -> a chain of Location resources, per the
-# v2-to-FHIR IG's own PL[Location] datatype ConceptMap (fetched as
-# machine-readable JSON from build.fhir.org, not paraphrased). Each
-# populated component becomes its OWN Location carrying the component
-# value as .identifier, a fixed .mode, and a .physicalType coding; the
-# referencing resource points at the most granular Location present, and
-# each links upward via .partOf.
+# v2-to-FHIR PL[Location] ConceptMap. Each populated component becomes its
+# own Location carrying the value as .identifier plus a fixed .mode and
+# .physicalType; the referencing resource points at the most granular one
+# present, and each links upward via .partOf. Ordered most granular first,
+# matching the ConceptMap's own [1]..[6] indexing.
 #
-# Ordered most granular -> least. The IG's ConceptMap indexes these
-# [1]..[6] in exactly this order.
-#
-# **Point of Care has no physicalType code**: the ConceptMap's own fixed
-# value for it is the literal placeholder "/extension??-poc/" - an
-# unresolved item in the IG itself, not a code. FHIR R4's
-# location-physical-type value set has no point-of-care concept either
-# (14 codes, none of them one). So physicalType is omitted for that level
-# rather than substituting a plausible-looking code the IG never
-# specified.
+# **Point of Care has no physicalType code.** The ConceptMap's fixed value
+# for it is the literal placeholder "/extension??-poc/" - an unresolved
+# item in the IG, not a code - and R4's location-physical-type value set
+# has no point-of-care concept either. Omitted rather than substituting a
+# plausible-looking code the IG never specified.
 _PL_LEVELS: tuple[tuple[int, str, str | None], ...] = (
     (3, "Bed", "bd"),
     (2, "Room", "ro"),

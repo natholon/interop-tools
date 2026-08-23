@@ -42,35 +42,16 @@ from app.provenance.resolver import resolve_bundle_paths
 # are keyed by resolved variant instead, via the same resolve_837_variant
 # the registry and validator already use.
 _INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835", "837P", "837I", "837D"}
-# Every section registered in app/cda/registry.py::SECTION_BUILDERS is now
-# instrumented: all seven general-purpose sections (Problems, Medications,
-# Allergies, Immunizations, Vital Signs, Results, Procedures), Discharge
-# Summary's own Hospital Discharge Diagnosis/Discharge Medications sections
-# (for free, via shared entry-level builders - problems.py::build_condition,
-# medications.py::build_medication_request), and now all twelve narrative-
-# section templateIds app/cda/narrative_sections.py registers (Discharge
-# Summary's own Hospital Course/Plan of Treatment, History and Physical's
-# own nine required narrative sections) - see each module's own docstring.
+# Every section in SECTION_BUILDERS is instrumented, so `unsupported` is
+# keyed per document type below rather than being unconditionally True.
 #
-# `unsupported` is keyed per document type below rather than staying
-# unconditionally True. Everything that used to hold C-CDA back has been
-# resolved: narrative sections, the structured entries Plan of Treatment/
-# Social History/Family History carry, Procedures' Indication/Comment
-# Activity/recorder, and originalText resolution.
-#
-# The last item, `author` -> a FHIR Provenance resource, is a deliberate
+# `author` -> a FHIR Provenance resource is the one thing left, and it is a
 # permanent scope decision rather than deferred work: Provenance models an
-# audit trail over *stored* records, and this is a stateless converter
-# with no such lifecycle (its required `recorded` timestamp has no honest
-# value here). Where `<author>` has a real home on the resource, the plain
-# attribute already carries it (Procedure.recorder,
-# Annotation.authorReference). The C-CDA on FHIR IG explicitly declines to
-# say which of the two to use.
-#
-# A deliberate decision not to map something has never counted against
-# coverage here - app/mappings/mdm.py leaves TXA-13/TXA-17 unmapped and
-# MDM still reports unsupported=False - so holding C-CDA to a different
-# bar was an inconsistency, not a stricter standard.
+# audit trail over *stored* records, and this is a stateless converter with
+# no such lifecycle - its required `recorded` timestamp has no honest value
+# here. Where `<author>` has a real home on the resource itself, the plain
+# attribute carries it (Procedure.recorder, Annotation.authorReference),
+# and the IG explicitly declines to say which of the two to use.
 _CDA_UNSUPPORTED_REASON = (
     "Field-level provenance for C-CDA is implemented for the CCD, "
     "Discharge Summary, and History and Physical document types; this "

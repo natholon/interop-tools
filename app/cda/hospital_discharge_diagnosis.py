@@ -1,29 +1,25 @@
 """Hospital Discharge Diagnosis Section (templateId
-2.16.840.1.113883.10.20.22.2.24) -> Condition. Previously disclosed as
-deferred (see app/cda/discharge_summary.py's original scope-limit note) on
-the grounds that this section wraps its diagnosis in a genuinely different
-Act template than Problems' own Concern Act - confirmed true, but the
-wrapped *diagnosis itself* turns out to be the byte-for-byte identical
-Problem Observation template (2.16.840.1.113883.10.20.22.4.4) Problems
-already parses, verified by fetching the real official HL7 C-CDA-Examples
-guide example for this Act (Guide Examples/Hospital Discharge Diagnosis
-(V3)_2.16.840.1.113883.10.20.22.4.33) and quoting it verbatim:
-`act[templateId=...4.33]/entryRelationship[typeCode=SUBJ]/
-observation[templateId=...4.4]` - the same entryRelationship[SUBJ] wrapper
-shape Problems' own Concern Act uses, just with a different outer Act
-template. This means the entry-level parsing this app already built for
-Problems (app.cda.problems.build_condition, including its two-vocabulary
-clinicalStatus resolution) is directly reusable, not a case needing new
-entry-shape logic - only the outer Act templateId differs, and only this
-module's own outer walk is new.
+2.16.840.1.113883.10.20.22.2.24) -> Condition.
 
-Condition.category is set to "encounter-diagnosis" (a real code from
-FHIR's own condition-category CodeSystem, terminology.hl7.org/CodeSystem/
-condition-category - a diagnosis made in the context of one encounter, as
-opposed to Problems' own general problem-list entries) - a field Problems
-never populates, since Problems has no comparable signal to distinguish a
-category. This is the one genuine difference between a Condition sourced
-from this section and one sourced from Problems."""
+The outer Act is this section's own (...4.33), but what it wraps is the
+byte-for-byte identical Problem Observation (...4.4) that Problems already
+parses - verified against the official HL7 C-CDA-Examples guide example
+for this Act:
+
+    act[templateId=...4.33]/entryRelationship[typeCode=SUBJ]/
+      observation[templateId=...4.4]
+
+So `app.cda.problems.build_condition` is reused wholesale, its
+two-vocabulary clinicalStatus resolution included; only the outer walk is
+new.
+
+**`Condition.category` is set to `"encounter-diagnosis"`** - a real code
+from FHIR's `condition-category` CodeSystem, meaning a diagnosis made in
+the context of one encounter, as against Problems' general problem-list
+entries. Problems never populates `.category`, having no comparable signal
+to distinguish one, so this is the single genuine difference between a
+Condition from this section and one from Problems - and what lets the
+reverse direction split them apart again."""
 
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding

@@ -1,48 +1,28 @@
 """Discharge Medications Section (templateId
-2.16.840.1.113883.10.20.22.2.11.1) -> MedicationRequest. Previously
-disclosed as deferred (see app/cda/discharge_summary.py's original
-scope-limit note) on the grounds that this section wraps its medication
-entry in a genuinely different Act template than a bare
-substanceAdministration - confirmed true, but the wrapped medication entry
-itself turns out to be the byte-for-byte identical Medication Activity
-template (2.16.840.1.113883.10.20.22.4.16) Medications already parses,
-verified by fetching the real official HL7 C-CDA-Examples guide example for
-this Act (Guide Examples/Discharge Medication
-(V3)_2.16.840.1.113883.10.20.22.4.35) and quoting it verbatim:
-`act[templateId=...4.35]/entryRelationship[typeCode=SUBJ]/
-substanceAdministration[templateId=...4.16]`. This means the entry-level
-parsing this app already built for Medications
-(app.cda.medications.build_medication_request, including its dosing/
-free-text-SIG handling) is directly reusable, not a case needing new
-entry-shape logic - only the outer Act templateId differs, and only this
-module's own outer walk is new. The Discharge Medication Act's own `code`
-(fixed LOINC 10183-2 "Hospital discharge medication") carries no
-information build_medication_request doesn't already get from the nested
-substanceAdministration itself, so it isn't read here.
+2.16.840.1.113883.10.20.22.2.11.1) -> MedicationRequest.
 
-**`MedicationRequest.category` is set to "discharge"** - the one genuine
-difference between a MedicationRequest sourced from this section and one
-sourced from a plain Medications section (which never populates
-`.category` at all), exactly mirroring how
-app/cda/hospital_discharge_diagnosis.py marks its own Conditions with
-`category="encounter-diagnosis"`. `discharge` is a real code from FHIR
-R4's own medicationrequest-category CodeSystem (hl7.org/fhir/R4/
-codesystem-medicationrequest-category.html), defined verbatim as
-"Includes requests for medications created when the patient is being
-released from a facility" - an exact semantic match for this section, not
-a locally-invented marker.
+The outer Act is this section's own (...4.35), but what it wraps is the
+byte-for-byte identical Medication Activity (...4.16) that Medications
+already parses - verified against the official HL7 C-CDA-Examples guide
+example for this Act:
 
-**This closes what was previously disclosed as a permanent limitation,
-and that disclosure was simply wrong**: earlier notes claimed a
-Discharge-Medications-sourced MedicationRequest was structurally
-indistinguishable from a plain-Medications one on the FHIR side, so the
-reverse direction could never split it back out. That described this
-module's own original implementation choice (reusing
-build_medication_request with zero modification) as though it were a
-standards constraint. `MedicationRequest.category` exists, a standard
-code for precisely this case exists, and the sibling Hospital Discharge
-Diagnosis section had already proven the pattern - see
-app/transform/cda_ccd.py for the matching reverse-direction split."""
+    act[templateId=...4.35]/entryRelationship[typeCode=SUBJ]/
+      substanceAdministration[templateId=...4.16]
+
+So `app.cda.medications.build_medication_request` is reused wholesale,
+dosing and free-text-SIG handling included; only the outer walk is new.
+The Act's own fixed code (LOINC 10183-2) carries nothing the nested
+substanceAdministration does not already give, so it is not read.
+
+**`MedicationRequest.category` is set to `"discharge"`** - the one genuine
+difference from a plain-Medications entry, which never populates
+`.category` at all, mirroring how `hospital_discharge_diagnosis.py` marks
+its Conditions. `discharge` is a real code in R4's own
+`medicationrequest-category` CodeSystem, defined as "requests for
+medications created when the patient is being released from a facility" -
+an exact match for this section, not a locally-invented marker. It is also
+what lets the reverse direction split this section back out; see
+`app/transform/cda_ccd.py`."""
 
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
