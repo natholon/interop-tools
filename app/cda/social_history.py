@@ -1,52 +1,46 @@
 """Social History section (templateId 2.16.840.1.113883.10.20.22.2.17) ->
-DocumentReference+Binary (the narrative, see app/cda/narrative_sections.py)
-*plus* one Observation per structured Social History Observation entry
-(e.g. Smoking Status) - the first of narrative_sections.py's own three
-disclosed "can carry real structured entries" sections to actually gain
-one, following that module's own precedent ("a future slice could add real
-structured resources alongside this narrative one without conflict").
+DocumentReference+Binary (the narrative, see `narrative_sections.py`) plus
+one `Observation` per recognized structured entry. Both representations
+coexist; neither replaces the other.
 
-**Per the real, published "C-CDA on FHIR" Social History mapping**
-(github.com/HL7/ccda-on-fhir/blob/master/input/pagecontent/CF-social.md -
-confirmed by fetching it directly, not assumed to not exist just because
-no CF-socialhistory.html/CF-familyhistory.html page exists the way CF-
-vitals.html/CF-results.html do): target resource is Observation,
-`.category` is fixed to `social-history` (the FHIR observation-category
-CodeSystem), `.status` is fixed to `final` (C-CDA's own statusCode is
-always `completed` for this template - confirmed against a real fetched
-example, no ConceptMap needed, the same "no status-mapping ambiguity at
-all" precedent app/cda/vitals.py already established), and `.value[x]`
-dispatches on the entry's own /value xsi:type.
+Per the IG's published CF-social guidance: target is `Observation`,
+`.category` fixed to `social-history`, `.status` fixed to `final` (C-CDA's
+statusCode is always `completed` for this template, so there is no mapping
+ambiguity), and `.value[x]` dispatches on the entry's `xsi:type` - PQ, CD,
+INT and ST are mapped, IVL_PQ is deferred. Both the base Social History
+Observation (...4.38) and the Smoking-Status specialisation (...4.78) are
+recognized against one builder, being field-for-field identical.
 
-**Source shape confirmed against a real fetched HL7 C-CDA-Examples Social
-History Observation** (`code="160573003"` Alcohol intake, SNOMED,
-`value[xsi:type=PQ] value="12" unit="/d"`) and a real fetched Smoking
-Status - Meaningful Use (V2) example (`code="72166-2"` Tobacco smoking
-status NHIS, LOINC, `value[xsi:type=CD] code="8517006"` Ex-smoker, SNOMED)
-- both wrap the identical Social History Observation template
-(2.16.840.1.113883.10.20.22.4.38), Smoking Status being a same-shape
-specialization of it (a distinct templateId, `...4.78`, but a field-for-
-field identical entry otherwise), registered against the same builder here
-rather than duplicated.
+**Some observations map to a Patient extension instead**, and the IG is
+explicit that "a FHIR Observation should not be created; instead, the
+corresponding extension should be used". `apply_patient_extensions` handles
+those, and they are excluded from the Observation walk:
 
-**Disclosed scope limit, matching the mapping guide's own "Observations to
-Extensions" special-case list**: Birth Sex/Gender Identity/Sex/Tribal
-Affiliation Observations are meant to become US Core *extensions* on
-Patient, not their own Observation resources - this app has never built a
-Patient extension anywhere, so those four are deliberately left unparsed
-here (an entry with one of their own templateIds, if ever present, is
-simply not recognized by OBSERVATION_TEMPLATE_ID and silently skipped,
-the same "unrecognized entry shape, don't guess" precedent every other
-section builder in this app already follows). Pregnancy Observation/
-Pregnancy Intention (also covered by the same real IG page) are likewise
-deferred - this app has no Pregnancy-specific FHIR shape built anywhere
-else either.
+    Birth Sex (...22.4.200)          -> us-core-birthsex        valueCode
+    Sex (...22.4.507)                -> us-core-sex             valueCode
+    Gender Identity (...34.3.45)     -> us-core-genderIdentity  valueCodeableConcept
 
-**Of the value xsi:types the mapping guide documents, PQ/CD/INT/ST are
-mapped; IVL_PQ (a value *range*, not a fixed value) is deferred** - the
-same "map the dominant scalar/coded shape now, disclose the range as a
-later slice" judgment app/cda/results.py's own identical IVL_PQ gap
-already established for Results' own /value dispatch."""
+**Gender Identity specialises Social History Observation and so declares
+BOTH templateIds** (its own SD has `templateId min:2` over base
+SocialHistoryObservation), which is why excluding it has to be explicit -
+matching the generic templateId alone converted it into exactly the plain
+Observation the IG forbids.
+
+It takes the Patient resource rather than `patient.id`, which is why it is
+a separate entry point called from `build_sectioned_bundle` rather than
+part of the registered section builder: SECTION_BUILDERS hands builders
+only the id, and these entries have no resource of their own to return.
+
+Scope limits:
+- **Tribal Affiliation (...22.4.506)** is excluded from the Observation
+  walk but not mapped. Its US Core extension is a complex one - a
+  `tribalAffiliation` CodeableConcept plus an `isEnrolled` boolean - and
+  the C-CDA template publishes no element to read the enrolled flag from,
+  so it is left to the drop register rather than guessed at. Excluding it
+  is still right: it also specialises Social History Observation, so
+  without that it becomes the Observation the IG says not to create.
+- Pregnancy Status and Pregnancy Intent have their own US Core profiles
+  and their own moodCode-driven split; not attempted here."""
 
 import uuid
 
@@ -55,7 +49,16 @@ from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.observation import Observation
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, build_quantity_from_pq, effective_time_location, parse_partial_ts
+from fhir.resources.R4B.extension import Extension
+
+from app.cda.common import (
+    build_codeable_concept_from_cd,
+    build_quantity_from_pq,
+    effective_time_location,
+    parse_partial_ts,
+    record_coding,
+)
+
 from app.cda.narrative_sections import SOCIAL_HISTORY_TEMPLATE_ID, build_narrative_document_reference
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, xsi_type
 from app.provenance.location import xpath_location
@@ -65,6 +68,38 @@ from app.provenance.location import xpath_location
 SECTION_TEMPLATE_ID = SOCIAL_HISTORY_TEMPLATE_ID
 OBSERVATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.38"
 SMOKING_STATUS_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.78"
+
+# Observations the IG sends to a Patient extension instead of a FHIR
+# Observation: "in these cases, a FHIR Observation should not be created;
+# instead, the corresponding extension should be used."
+#
+# Gender Identity and Tribal Affiliation specialise Social History
+# Observation and so declare OBSERVATION_TEMPLATE_ID as well as their own
+# (templateId min:2, base SocialHistoryObservation) - which is why they
+# must be excluded from the generic walk explicitly. Birth Sex and Sex
+# derive from plain Observation and were simply never picked up.
+BIRTH_SEX_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.200"
+GENDER_IDENTITY_TEMPLATE_ID = "2.16.840.1.113883.10.20.34.3.45"
+SEX_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.507"
+TRIBAL_AFFILIATION_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.4.506"
+
+US_CORE_BIRTHSEX_EXTENSION = "http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex"
+US_CORE_GENDER_IDENTITY_EXTENSION = "http://hl7.org/fhir/us/core/StructureDefinition/us-core-genderIdentity"
+US_CORE_SEX_EXTENSION = "http://hl7.org/fhir/us/core/StructureDefinition/us-core-sex"
+
+# Excluded from the generic Observation walk. Tribal Affiliation is in
+# this set but has no builder below: its US Core extension is a complex
+# one (a tribalAffiliation CodeableConcept plus an isEnrolled boolean),
+# and the C-CDA template publishes no element this app could read the
+# enrolled flag from - so it is left unmapped and shows up honestly in the
+# drop register, rather than being emitted as the plain social-history
+# Observation the IG says not to create.
+_PATIENT_EXTENSION_TEMPLATE_IDS = (
+    BIRTH_SEX_TEMPLATE_ID,
+    GENDER_IDENTITY_TEMPLATE_ID,
+    SEX_TEMPLATE_ID,
+    TRIBAL_AFFILIATION_TEMPLATE_ID,
+)
 
 CATEGORY_SYSTEM = "http://terminology.hl7.org/CodeSystem/observation-category"
 CATEGORY_CODE = "social-history"
@@ -188,6 +223,66 @@ def _build_social_history_observation(observation_element, patient_id: str, reco
     return observation
 
 
+def apply_patient_extensions(section, patient, recorder=None) -> None:
+    """Attach the US Core Patient extensions this section carries.
+
+    Called with the Patient resource itself rather than its id, which is
+    why this is a separate entry point instead of part of the registered
+    section builder - SECTION_BUILDERS hands builders only `patient.id`,
+    and these observations have no resource of their own to return.
+
+    Mutates `patient` in place and returns nothing; an unrecognised or
+    unresolvable observation is left alone rather than guessed at.
+    """
+    for entry in find_all(section, "entry"):
+        observation_element = find_child(entry, "observation")
+        if observation_element is None:
+            continue
+        value_element = find_child(observation_element, "value")
+        if value_element is None:
+            continue
+
+        if has_template_id(observation_element, BIRTH_SEX_TEMPLATE_ID):
+            _add_code_extension(
+                patient, US_CORE_BIRTHSEX_EXTENSION, value_element, "birthsex", recorder
+            )
+        elif has_template_id(observation_element, SEX_TEMPLATE_ID):
+            _add_code_extension(patient, US_CORE_SEX_EXTENSION, value_element, "sex", recorder)
+        elif has_template_id(observation_element, GENDER_IDENTITY_TEMPLATE_ID):
+            concept = build_codeable_concept_from_cd(value_element)
+            if concept is None:
+                continue
+            index = len(patient.extension or [])
+            patient.extension = (patient.extension or []) + [
+                Extension(url=US_CORE_GENDER_IDENTITY_EXTENSION, valueCodeableConcept=concept)
+            ]
+            if recorder:
+                record_coding(
+                    recorder,
+                    patient.id,
+                    f"extension[{index}].valueCodeableConcept",
+                    xpath_location("entry", "observation", "value"),
+                    concept,
+                )
+
+
+def _add_code_extension(patient, url: str, value_element, label: str, recorder) -> None:
+    """A US Core extension whose value[x] is a bare `code` (birthsex, sex),
+    taken from the source `<value>`'s own @code."""
+    code = (value_element.get("code") or "").strip()
+    if not code:
+        return
+    index = len(patient.extension or [])
+    patient.extension = (patient.extension or []) + [Extension(url=url, valueCode=code)]
+    if recorder:
+        recorder.record(
+            patient.id,
+            f"extension[{index}].valueCode",
+            xpath_location("entry", "observation", "value", "@code"),
+            code,
+        )
+
+
 def build_social_history_resources(section, patient_id: str, recorder=None) -> list:
     """The narrative DocumentReference+Binary (always built, matching every
     other narrative-only section's own unconditional behavior) plus one
@@ -198,6 +293,12 @@ def build_social_history_resources(section, patient_id: str, recorder=None) -> l
     for entry in find_all(section, "entry"):
         observation_element = find_child(entry, "observation")
         if observation_element is None:
+            continue
+        if any(
+            has_template_id(observation_element, template_id)
+            for template_id in _PATIENT_EXTENSION_TEMPLATE_IDS
+        ):
+            # Belongs on Patient as an extension - see apply_patient_extensions.
             continue
         if not (
             has_template_id(observation_element, OBSERVATION_TEMPLATE_ID)

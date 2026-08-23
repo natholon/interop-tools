@@ -1322,3 +1322,36 @@ def test_plan_of_treatment_structured_entry_varies_present_and_absent_and_both_s
     assert present > 0 and absent > 0
     assert "unknown" in statuses_seen  # the deliberately-unrecognized statusCode branch
     assert len(statuses_seen) > 1
+
+
+def test_social_history_patient_extensions_vary_across_seeds():
+    # Birth Sex and Gender Identity map to US Core Patient extensions
+    # rather than Observations. Gender Identity declares the generic
+    # Social History Observation templateId too, so generating it is what
+    # fuzzes the exclusion keeping it out of the Observation walk.
+    from app.cda.social_history import (
+        US_CORE_BIRTHSEX_EXTENSION,
+        US_CORE_GENDER_IDENTITY_EXTENSION,
+    )
+
+    birthsex = gender_identity = neither = 0
+    for seed in range(60):
+        bundle = convert_cda_to_bundle(generate_history_and_physical(random.Random(seed)))
+        patient = next(
+            e.resource for e in bundle.entry if e.resource.get_resource_type() == "Patient"
+        )
+        urls = [e.url for e in (patient.extension or [])]
+        birthsex += US_CORE_BIRTHSEX_EXTENSION in urls
+        gender_identity += US_CORE_GENDER_IDENTITY_EXTENSION in urls
+        if not urls:
+            neither += 1
+
+        # Neither code may ever surface as an Observation.
+        assert not [
+            e for e in bundle.entry
+            if e.resource.get_resource_type() == "Observation"
+            and e.resource.code
+            and e.resource.code.coding
+            and e.resource.code.coding[0].code in ("76689-9", "76691-5")
+        ]
+    assert birthsex > 0 and gender_identity > 0 and neither > 0

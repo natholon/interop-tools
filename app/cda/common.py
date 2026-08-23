@@ -844,6 +844,10 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
     # so importing it back at this module's top level would be circular -
     # same reasoning as ccd.py's own pre-extraction deferred import.
     from app.cda.registry import SECTION_BUILDERS
+    from app.cda.social_history import (
+        SECTION_TEMPLATE_ID as SOCIAL_HISTORY_SECTION_TEMPLATE_ID,
+        apply_patient_extensions,
+    )
 
     patient = build_patient_from_header(document, recorder=recorder)
     encounter = build_encounter_from_header(document, patient.id, recorder=recorder)
@@ -859,6 +863,13 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
                 # why a pre-pass rather than threading a lookup dict.
                 resolve_narrative_references(section)
                 resources.extend(builder(section, patient.id, recorder=recorder))
+                # Social History carries observations the IG maps to
+                # Patient extensions rather than to Observations. Handled
+                # here rather than in the section builder because
+                # SECTION_BUILDERS hands builders only `patient.id`, and
+                # these have no resource of their own to return.
+                if section_template_id == SOCIAL_HISTORY_SECTION_TEMPLATE_ID:
+                    apply_patient_extensions(section, patient, recorder=recorder)
                 break
         # An unrecognized section is silently skipped - disclosed, not a
         # bug (see CLAUDE.md's per-document-type scope-limit notes).

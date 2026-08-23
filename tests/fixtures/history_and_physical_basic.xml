@@ -146,6 +146,30 @@
               <value xsi:type="CD" code="266919005" codeSystem="2.16.840.1.113883.6.96" displayName="Never smoker"/>
             </observation>
           </entry>
+          <!-- Birth Sex derives from plain Observation, so it declares
+               only its own templateId. Maps to the US Core birthsex
+               extension on Patient, not to an Observation. -->
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.200"/>
+              <code code="76689-9" codeSystem="2.16.840.1.113883.6.1" displayName="Sex assigned at birth"/>
+              <statusCode code="completed"/>
+              <value xsi:type="CD" code="F" codeSystem="2.16.840.1.113883.5.1" displayName="Female"/>
+            </observation>
+          </entry>
+          <!-- Gender Identity specialises Social History Observation, so
+               it declares BOTH templateIds - which is why the generic walk
+               has to exclude it explicitly or it becomes a plain
+               social-history Observation the IG says not to create. -->
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.38"/>
+              <templateId root="2.16.840.1.113883.10.20.34.3.45" extension="2023-05-01"/>
+              <code code="76691-5" codeSystem="2.16.840.1.113883.6.1" displayName="Gender identity"/>
+              <statusCode code="completed"/>
+              <value xsi:type="CD" code="446141000124107" codeSystem="2.16.840.1.113883.6.96" displayName="Identifies as female gender"/>
+            </observation>
+          </entry>
         </section>
       </component>
       <component>

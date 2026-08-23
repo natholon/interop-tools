@@ -73,7 +73,7 @@ from app.cda.narrative_sections import (
 )
 from app.cda.parser import CDA_NS, parse_document
 from app.cda.plan_of_treatment import PLANNED_OBSERVATION_TEMPLATE_ID, PLANNED_PROCEDURE_TEMPLATE_ID
-from app.cda.social_history import OBSERVATION_TEMPLATE_ID as SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID
+from app.cda.social_history import BIRTH_SEX_TEMPLATE_ID, GENDER_IDENTITY_TEMPLATE_ID, OBSERVATION_TEMPLATE_ID as SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID
 from app.cda.social_history import SMOKING_STATUS_TEMPLATE_ID
 from app.cda.problems import (
     CONCERN_ACT_TEMPLATE_ID,
@@ -1279,6 +1279,45 @@ def _random_table_narrative_section(
     )
 
 
+_BIRTH_SEX_VALUES = [("F", "Female"), ("M", "Male"), ("UNK", "Unknown")]
+_GENDER_IDENTITY_VALUES = [
+    ("446141000124107", "Identifies as female gender"),
+    ("446151000124109", "Identifies as male gender"),
+    ("407377005", "Female-to-male transsexual"),
+]
+
+
+def _random_patient_extension_entries(rng: random.Random) -> str:
+    """Birth Sex and Gender Identity observations, which the IG maps to US
+    Core Patient extensions rather than to Observations. Gender Identity
+    declares the generic Social History Observation templateId as well as
+    its own, so generating it is what fuzzes the exclusion that keeps it
+    from becoming a plain social-history Observation."""
+    entries = ""
+    if maybe(rng, 0.5):
+        code, display = rng.choice(_BIRTH_SEX_VALUES)
+        entries += (
+            '<entry><observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{BIRTH_SEX_TEMPLATE_ID}"/>'
+            '<code code="76689-9" codeSystem="2.16.840.1.113883.6.1" displayName="Sex assigned at birth"/>'
+            '<statusCode code="completed"/>'
+            f'<value xsi:type="CD" code="{code}" codeSystem="2.16.840.1.113883.5.1" displayName="{display}"/>'
+            "</observation></entry>"
+        )
+    if maybe(rng, 0.4):
+        code, display = rng.choice(_GENDER_IDENTITY_VALUES)
+        entries += (
+            '<entry><observation classCode="OBS" moodCode="EVN">'
+            f'<templateId root="{SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID}"/>'
+            f'<templateId root="{GENDER_IDENTITY_TEMPLATE_ID}" extension="2023-05-01"/>'
+            '<code code="76691-5" codeSystem="2.16.840.1.113883.6.1" displayName="Gender identity"/>'
+            '<statusCode code="completed"/>'
+            f'<value xsi:type="CD" code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
+            "</observation></entry>"
+        )
+    return entries
+
+
 def _random_social_history_entry(rng: random.Random) -> str:
     """A structured Social History Observation entry (see
     app/cda/social_history.py) - direct fuzz coverage of the structured-
@@ -1464,6 +1503,7 @@ def _random_hp_narrative_sections(rng: random.Random) -> str:
         )
     if maybe(rng, 0.7):
         social_history_entries = _random_social_history_entry(rng) if maybe(rng, 0.6) else ""
+        social_history_entries += _random_patient_extension_entries(rng)
         sections += _random_table_narrative_section(
             rng,
             SOCIAL_HISTORY_TEMPLATE_ID,

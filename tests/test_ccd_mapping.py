@@ -686,3 +686,34 @@ def test_bundle_round_trips_through_json():
     round_tripped = Bundle.model_validate_json(bundle.model_dump_json())
     assert round_tripped.type == bundle.type
     assert len(round_tripped.entry) == len(bundle.entry)
+
+
+def test_social_history_patient_extensions_replace_observations():
+    # The IG is explicit that some Social History observations map to a
+    # Patient extension and that "a FHIR Observation should not be created"
+    # for them. Birth Sex derives from plain Observation and was simply
+    # never picked up; Gender Identity specialises Social History
+    # Observation, so it declares that templateId too and used to be
+    # converted into exactly the plain Observation the IG forbids.
+    from app.cda.social_history import (
+        US_CORE_BIRTHSEX_EXTENSION,
+        US_CORE_GENDER_IDENTITY_EXTENSION,
+    )
+
+    bundle = convert_cda_to_bundle(read_fixture("history_and_physical_basic.xml"))
+    entries = _entries_by_type(bundle)
+    patient = entries["Patient"][0].resource
+
+    by_url = {e.url: e for e in patient.extension}
+    assert by_url[US_CORE_BIRTHSEX_EXTENSION].valueCode == "F"
+    gender = by_url[US_CORE_GENDER_IDENTITY_EXTENSION].valueCodeableConcept
+    assert gender.coding[0].code == "446141000124107"
+    assert gender.coding[0].system == "http://snomed.info/sct"
+
+    # Neither produced an Observation: only the Smoking Status entry does.
+    social = [
+        e.resource
+        for e in entries["Observation"]
+        if e.resource.category and e.resource.category[0].coding[0].code == "social-history"
+    ]
+    assert [o.code.coding[0].code for o in social] == ["72166-2"]
