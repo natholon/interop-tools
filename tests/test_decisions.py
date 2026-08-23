@@ -810,21 +810,50 @@ def _cda_bundle_and_decisions(fixture: str):
     return bundle, compute_decisions(report, raw, spans)
 
 
-@pytest.mark.parametrize(
-    "fixture",
-    [f.name for f in sorted((Path(__file__).parent / "fixtures").glob("*.xml"))],
+def _decisions_for_any_fixture(fixture: str):
+    """Decisions the way the route computes them, whichever format it is.
+    Only C-CDA needs resolved source spans - the HL7v2 and X12 scans work
+    from positional coordinates and match without them."""
+    raw = (_EDI_FIXTURES / fixture).read_text(encoding="utf-8")
+    bundle, report, _ = convert_with_provenance(raw)
+    if report.source_format != "CDA":
+        return compute_decisions(report, raw)
+    from app.provenance.highlighting import build_highlighting_payload
+
+    highlighting = build_highlighting_payload(bundle, report, raw, report.source_format)
+    spans = {tuple(m.source_span) for m in highlighting.matches if m.source_span}
+    return compute_decisions(report, raw, spans)
+
+
+_ALL_FIXTURES = sorted(
+    f.name
+    for f in (Path(__file__).parent / "fixtures").iterdir()
+    if f.suffix in {".hl7", ".xml", ".x12"}
 )
-def test_every_cda_drop_carries_a_checked_verdict(fixture):
+
+
+@pytest.mark.parametrize("fixture", _ALL_FIXTURES)
+def test_every_drop_carries_a_checked_verdict(fixture):
     # The register's whole value is that a reader can trust what it says.
     # "Not yet checked against the source IG" is an honest placeholder
     # while verdicts are being written, but it is not a finished state -
-    # every shape this app actually drops has now been read against the
-    # IG's own tables, and this keeps it that way as sections change.
+    # every shape this app actually drops has been read against the
+    # governing IG (or, for X12, against the fact that no crosswalk is
+    # published at all), and this keeps it that way as mappings change.
+    #
+    # Parametrized across all three formats rather than C-CDA alone: the
+    # claim is made about all of them. Note that the EDI fixtures satisfy
+    # this structurally - _dropped_edi_decisions cites the absent X12
+    # crosswalk unconditionally and cannot produce an unchecked drop - so
+    # test_every_edi_drop_cites_the_absent_crosswalk below is what really
+    # holds EDI's half up. They are kept in the parametrization anyway, so
+    # the day an EDI verdict table exists this starts covering it.
     try:
-        _, decisions = _cda_bundle_and_decisions(fixture)
+        decisions = _decisions_for_any_fixture(fixture)
     except Exception:
-        # Fixtures that deliberately do not convert (malformed XML, an
-        # unrecognised document type) have no decisions to check.
+        # Fixtures that deliberately do not convert - malformed input, an
+        # unrecognised document type, an unmapped trigger - have no
+        # decisions to check.
         pytest.skip("fixture does not convert by design")
     unchecked = [
         d.source_location
@@ -832,6 +861,52 @@ def test_every_cda_drop_carries_a_checked_verdict(fixture):
         if d.kind == "dropped" and d.citation.title == "Not yet checked against the source IG"
     ]
     assert unchecked == []
+
+
+@pytest.mark.parametrize(
+    "fixture", [f for f in _ALL_FIXTURES if f.endswith(".x12")]
+)
+def test_every_edi_drop_cites_the_absent_crosswalk(fixture):
+    # X12 publishes no FHIR crosswalk at all, so _dropped_edi_decisions
+    # cites that fact unconditionally and can never produce an unchecked
+    # drop or a gap. That makes EDI's arm of the two tests above
+    # structurally satisfied rather than verified - they would pass even
+    # if EDI's citations were wrong - so this is the assertion actually
+    # holding EDI's half of the claim up.
+    #
+    # It fails if EDI drops ever start citing something else: either a
+    # real verdict table appeared (in which case add EDI to the checked
+    # set properly) or a citation regressed.
+    try:
+        decisions = _decisions_for_any_fixture(fixture)
+    except Exception:
+        pytest.skip("fixture does not convert by design")
+    dropped = [d for d in decisions if d.kind == "dropped"]
+    wrong = sorted({
+        d.citation.title
+        for d in dropped
+        if d.citation.title != "No official X12-to-FHIR crosswalk exists"
+    })
+    assert wrong == []
+
+
+@pytest.mark.parametrize("fixture", _ALL_FIXTURES)
+def test_no_drop_is_an_unclosed_gap(fixture):
+    # The other half of the claim CLAUDE.md makes. A GAP means the IG
+    # defines a target this app does not build - a real defect, not a
+    # disclosure, so it should be loud.
+    #
+    # If this fails on a genuinely newly-found gap, that is the test
+    # working: either close the gap, or change the claim in CLAUDE.md and
+    # this test together. What it exists to prevent is the claim quietly
+    # going stale while nothing notices - which is exactly what happened
+    # to the drop counts this replaced.
+    try:
+        decisions = _decisions_for_any_fixture(fixture)
+    except Exception:
+        pytest.skip("fixture does not convert by design")
+    gaps = [d.source_location for d in decisions if (d.summary or "").startswith("GAP:")]
+    assert gaps == []
 
 
 def test_cda_verdicts_are_scoped_by_template_id():
