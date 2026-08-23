@@ -164,6 +164,104 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentReportEntries = [];
     let currentReportLabel = "crosswalk";
+    // Review state for the conversion at hand only. Kept in the browser -
+    // nothing is stored server-side - and replayed on each request.
+    const rejectedDecisionIds = new Set();
+    let rerunCrosswalk = () => {};
+
+    const decisionRegister = document.getElementById("decision-register");
+    const decisionList = document.getElementById("decision-list");
+    const decisionCount = document.getElementById("decision-count");
+    const resetDecisionsBtn = document.getElementById("reset-decisions");
+
+    function renderDecisions(decisions, outcomes) {
+        if (!decisionRegister || !decisionList) return;
+        const outcomeById = new Map((outcomes || []).map((o) => [o.decision_id, o]));
+        decisionList.innerHTML = "";
+
+        if (!decisions.length) {
+            decisionRegister.hidden = true;
+            return;
+        }
+        decisionRegister.hidden = false;
+        if (decisionCount) {
+            const rejected = decisions.filter((d) => rejectedDecisionIds.has(d.id)).length;
+            decisionCount.textContent = rejected
+                ? `(${decisions.length} — ${rejected} rejected)`
+                : `(${decisions.length})`;
+        }
+        if (resetDecisionsBtn) resetDecisionsBtn.hidden = rejectedDecisionIds.size === 0;
+
+        for (const decision of decisions) {
+            const isRejected = rejectedDecisionIds.has(decision.id);
+            const li = document.createElement("li");
+            li.className = isRejected ? "decision is-rejected" : "decision";
+
+            const main = document.createElement("div");
+            const where = document.createElement("span");
+            where.className = "decision-where";
+            where.textContent = decision.source_location || decision.fhir_path || "";
+            const kind = document.createElement("span");
+            kind.className = "decision-kind";
+            kind.textContent = decision.kind;
+            main.append(where, kind);
+
+            const detail = document.createElement("p");
+            detail.className = "decision-detail";
+            detail.textContent = decision.detail || decision.summary;
+            main.appendChild(detail);
+
+            const cite = document.createElement("p");
+            cite.className = decision.citation.authoritative ? "decision-cite" : "decision-cite is-unverified";
+            if (decision.citation.url) {
+                const link = document.createElement("a");
+                link.href = decision.citation.url;
+                link.target = "_blank";
+                link.rel = "noopener noreferrer";
+                link.textContent = decision.citation.title;
+                cite.appendChild(link);
+            } else {
+                cite.textContent = decision.citation.title;
+            }
+            if (decision.citation.note) {
+                cite.appendChild(document.createTextNode(` — ${decision.citation.note}`));
+            }
+            main.appendChild(cite);
+
+            const actions = document.createElement("div");
+            actions.className = "decision-actions";
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "btn-panel-action";
+            toggle.textContent = isRejected ? "Accept" : "Reject";
+            toggle.addEventListener("click", () => {
+                if (rejectedDecisionIds.has(decision.id)) rejectedDecisionIds.delete(decision.id);
+                else rejectedDecisionIds.add(decision.id);
+                rerunCrosswalk();
+            });
+            actions.appendChild(toggle);
+
+            li.append(main, actions);
+
+            // A rejection that could not be applied must say so - the
+            // reviewer needs to know their decision did not take effect.
+            const outcome = outcomeById.get(decision.id);
+            if (outcome && !outcome.applied) {
+                const note = document.createElement("p");
+                note.className = "decision-outcome";
+                note.textContent = `Not applied: ${outcome.note || "no conformant representation."}`;
+                li.appendChild(note);
+            }
+            decisionList.appendChild(li);
+        }
+    }
+
+    if (resetDecisionsBtn) {
+        resetDecisionsBtn.addEventListener("click", () => {
+            rejectedDecisionIds.clear();
+            rerunCrosswalk();
+        });
+    }
 
     let toastTimer;
     function showToast(message) {
@@ -210,6 +308,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // index.html's own "Use Bundle above" button shipped once.
         currentReportEntries = [];
         if (downloadCsvBtn) downloadCsvBtn.hidden = true;
+        if (decisionRegister) decisionRegister.hidden = true;
     }
 
     function showEditableSource() {
@@ -468,9 +567,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (!form || !textarea) return;
 
-    form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const submitter = event.submitter;
+    async function runCrosswalk(submitter) {
         setBusy(submitter, true);
         try {
             const response = await fetch("/api/data-specification", {
@@ -479,6 +576,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 body: JSON.stringify({
                     hl7_text: textarea.value,
                     deduplicate: dedupCheckbox ? dedupCheckbox.checked : false,
+                    // The review is replayed on every request - the server
+                    // stores nothing, so rejections only ever apply to the
+                    // conversion at hand.
+                    rejected_decision_ids: [...rejectedDecisionIds],
                 }),
             });
             const data = await response.json();
@@ -487,10 +588,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
             showCrosswalk(data.report, data.highlighting, data.deduplication);
+            renderDecisions(data.decisions || [], data.rejection_outcomes || []);
         } catch (err) {
             showError("Network error", String(err));
         } finally {
             setBusy(submitter, false);
         }
+    }
+
+    rerunCrosswalk = () => runCrosswalk(null);
+
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        runCrosswalk(event.submitter);
     });
 });

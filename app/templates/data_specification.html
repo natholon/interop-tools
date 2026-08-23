@@ -82,6 +82,22 @@
         {% endif %}
     </div>
     <div id="crosswalk-unsupported-banner" class="unsupported-banner" hidden></div>
+
+    {# Mapping decisions - every value this conversion inferred, and every
+       source component it dropped. Computed, not declared, so the list is
+       complete by construction. Review state lives in the browser and
+       applies only to the conversion at hand. #}
+    <section id="decision-register" class="decision-register" hidden>
+        <div class="panel-head">
+            <h3>Mapping decisions <span id="decision-count" class="decision-count"></span></h3>
+            <button type="button" class="btn-panel-action" id="reset-decisions" hidden>Reset review</button>
+        </div>
+        <p class="decision-intro">
+            Values this conversion inferred, and source data it did not map. Rejecting an inferred
+            value re-runs the conversion without it.
+        </p>
+        <ul id="decision-list" class="decision-list"></ul>
+    </section>
     <div id="crosswalk-table-wrapper" class="table-wrapper" hidden>
         <table id="crosswalk-table">
             <thead>

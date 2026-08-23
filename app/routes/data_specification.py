@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+from app.provenance.decisions import apply_rejections, compute_decisions, scan_populated_components
 from app.provenance.dispatch import convert_with_provenance
 from app.provenance.highlighting import build_highlighting_payload
 from app.routes.dropdowns import grouped_supported_types
@@ -28,6 +29,8 @@ templates.env.globals["static_url"] = static_url
 class CrosswalkResult(BaseModel):
     bundle_json: str | None = None
     report_json: str | None = None
+    decisions_json: str | None = None
+    rejection_outcomes_json: str | None = None
     highlighting_json: str | None = None
     dedup_summary: dict | None = None
     error_category: str | None = None
@@ -35,7 +38,9 @@ class CrosswalkResult(BaseModel):
     status_code: int = 200
 
 
-def _run_crosswalk(raw_text: str, deduplicate: bool = False) -> CrosswalkResult:
+def _run_crosswalk(
+    raw_text: str, deduplicate: bool = False, rejected_decision_ids: set[str] | None = None
+) -> CrosswalkResult:
     try:
         bundle, report, dedup_result = convert_with_provenance(raw_text, deduplicate=deduplicate)
     except tuple(ERROR_STATUS) as exc:
@@ -61,9 +66,22 @@ def _run_crosswalk(raw_text: str, deduplicate: bool = False) -> CrosswalkResult:
                 for m in dedup_result.merges
             ],
         }
+    # The reviewable decision register: everything this conversion
+    # inferred or dropped, computed rather than declared (see
+    # app/provenance/decisions.py).
+    populated = scan_populated_components(raw_text) if report.source_format == "HL7v2" else None
+    decisions = compute_decisions(report, populated)
+
+    bundle_dict = json.loads(bundle.model_dump_json(exclude_none=True))
+    outcomes = []
+    if rejected_decision_ids:
+        bundle_dict, outcomes = apply_rejections(bundle_dict, decisions, rejected_decision_ids)
+
     return CrosswalkResult(
-        bundle_json=bundle.model_dump_json(indent=2, exclude_none=True),
+        bundle_json=json.dumps(bundle_dict, indent=2),
         report_json=report.model_dump_json(indent=2, exclude_none=True),
+        decisions_json=json.dumps([d.model_dump(exclude_none=True) for d in decisions]),
+        rejection_outcomes_json=json.dumps([o.model_dump(exclude_none=True) for o in outcomes]),
         highlighting_json=highlighting.model_dump_json(exclude_none=True),
         dedup_summary=dedup_summary,
     )
@@ -118,11 +136,19 @@ async def data_specification_form(
 class CrosswalkApiRequest(BaseModel):
     hl7_text: str
     deduplicate: bool = False
+    # Decision ids the reviewer rejected for THIS conversion. Stateless by
+    # design - nothing is stored server-side; the browser holds the review
+    # and replays it on each request.
+    rejected_decision_ids: list[str] = []
 
 
 @router.post("/api/data-specification")
 async def data_specification_api(payload: CrosswalkApiRequest):
-    outcome = _run_crosswalk(payload.hl7_text, deduplicate=payload.deduplicate)
+    outcome = _run_crosswalk(
+        payload.hl7_text,
+        deduplicate=payload.deduplicate,
+        rejected_decision_ids=set(payload.rejected_decision_ids),
+    )
     if outcome.error_category:
         return JSONResponse(
             status_code=outcome.status_code,
@@ -132,6 +158,8 @@ async def data_specification_api(payload: CrosswalkApiRequest):
         "bundle": json.loads(outcome.bundle_json),
         "report": json.loads(outcome.report_json),
         "highlighting": json.loads(outcome.highlighting_json),
+        "decisions": json.loads(outcome.decisions_json),
+        "rejection_outcomes": json.loads(outcome.rejection_outcomes_json),
     }
     if outcome.dedup_summary is not None:
         content["deduplication"] = outcome.dedup_summary
