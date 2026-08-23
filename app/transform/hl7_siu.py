@@ -1,55 +1,36 @@
-"""FHIR Bundle -> HL7v2 SIU - the fifth reverse-direction slice, and the
-first proof this architecture handles a genuinely different FHIR shape
-(`Appointment`, not `Encounter`) - not just another ADT-shaped variant.
-Originally S12 (new booking) alone; **S13/S14/S15/S17/S26 shipped as a
-follow-up breadth pass**, mirroring `app/mappings/siu.py`'s own
-`_BookedSiuMapper`/`_UntimedSiuMapper` split exactly: `_BookedSiuBuilder`
-(S12/S13/S14/S26) overrides `_validate` to require a resolvable
-`Appointment.start`, the same "require the field this builder structurally
-depends on" precedent `hl7_adt.py`'s own `AdtA03Builder` already
-established, since the forward `_BookedSiuMapper` itself raises
-`MappingError` without one; `_BaseSiuBuilder`'s own default `_validate`
-(a no-op) covers S15/S17's genuinely untimed shape directly, with no
-subclass override needed. Every other field this builder emits is
-trigger-agnostic - unlike ORU's/MDM's own breadth passes (a bare
-`trigger_event`-only subclass swap), SIU's is the one HL7v2 breadth pass
-needing a real, disclosed per-trigger behavioral split, because SIU is
-the one message type here whose forward mappers themselves split the
-same way.
+"""FHIR Bundle -> HL7v2 SIU (S12/S13/S14/S15/S17/S26).
 
 Reverses `app/mappings/siu.py::build_appointment_core`/`_build_participants`
 field-for-field: `SCH-1`/`-2` (placer/filler identifiers), `SCH-7`/`-8`
 (reason/appointment type, CWE), `TQ1-6`/`-7`/`-8` (duration/start/end),
-`AIS-3` (service type, CWE), `NTE-3` (comment, split back into one segment
-per original line - the reverse of `build_appointment_core`'s own
-`"\\n".join`), and one `AIP`/`AIL`/`AIG` segment per non-patient
-`Appointment.participant`, dispatched by the referenced resource's own
-FHIR type rather than any stored marker.
+`AIS-3` (service type), `NTE-3` (comment, split back into one segment per
+line - the reverse of the forward newline join), and one `AIP`/`AIL`/`AIG`
+per non-patient participant, dispatched by the referenced resource's own
+FHIR type.
 
-**A cross-cutting resolution this slice needed that ADT's own reverse
-builders didn't**: `Appointment.participant[]` can reference `Location`
-from *two* different forward-side sources - `AIL` (via
-`build_location_from_pl`, which sets only `.name`, no `.identifier` at
-all) and `AIG` when `AIG-4`'s resource-type code is location-like (via
-`_build_aig_resource`, which *does* set a
-`urn:interop-tools:location-id`-systemed `.identifier`). This asymmetry -
-not a stored marker - is exactly how this builder tells an AIL-sourced
-Location apart from an AIG-sourced one on the way back out: a Location
-with that specific identifier system reverses to `AIG`, everything else
-reverses to `AIL`.
+**SIU is the one HL7v2 family whose reverse builders need a real
+per-trigger split**, mirroring `_BookedSiuMapper`/`_UntimedSiuMapper`:
+`_BookedSiuBuilder` (S12/S13/S14/S26) overrides `_validate` to require a
+resolvable `Appointment.start`, since the forward mapper raises without
+one. `_BaseSiuBuilder`'s no-op `_validate` covers S15/S17, which are
+genuinely untimed. Every emitted field is otherwise trigger-agnostic.
 
-**Disclosed round-trip fidelity gaps, the same category as every earlier
-slice's own**: `AIL-3`/`AIG-3`'s own `PL`/id+name shapes only round-trip
-their first component(s) - `Location.name` (a single collapsed display
-string, the same `location_display` collapse ADT's own PV1-3/6 already
-disclose) goes in `AIL-3`'s first component only, and a `Practitioner`
-built from `AIP-3` only recovers `id`/`family`/`given` (XCN components
-1/2/3), not the trailing `^^^^MD` degree/suffix components the forward
-mapper never reads either. `RGS` is not emitted at all - this app's own
-forward parser never requires it (`SIU`'s `to_bundle()` reads `AIS`/`AIG`/
-`AIL`/`AIP` directly via `optional_segments()`, with no `RGS`-grouping
-requirement - see `app/mappings/siu.py`'s own module-level note), so
-there's nothing on the FHIR side this builder would need it for."""
+**Telling an AIL-sourced Location from an AIG-sourced one**, which no ADT
+builder needed: `Appointment.participant[]` can reference a `Location`
+from two forward sources - `AIL` (via `build_location_from_pl`, which sets
+only `.name`) and `AIG` when `AIG-4`'s code is location-like (via
+`_build_aig_resource`, which sets a `urn:interop-tools:location-id`
+identifier). That asymmetry, not a stored marker, is the discriminator: a
+Location carrying that identifier system reverses to `AIG`, anything else
+to `AIL`.
+
+Disclosed round-trip fidelity gaps:
+- `AIL-3`/`AIG-3` recover only their first component(s), the same
+  `location_display` collapse ADT's PV1-3/6 disclose.
+- A `Practitioner` from `AIP-3` recovers `id`/`family`/`given` (XCN 1/2/3)
+  but not a trailing `^^^^MD` degree, which the forward mapper never reads.
+- `RGS` is not emitted: the forward parser reads `AIS`/`AIG`/`AIL`/`AIP`
+  via `optional_segments()` with no RGS grouping, so nothing needs it."""
 
 from fhir.resources.R4B.bundle import Bundle
 

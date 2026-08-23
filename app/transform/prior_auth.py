@@ -1,60 +1,36 @@
-"""FHIR Bundle -> X12 278 (Health Care Services Review - Request for
-Review and Response) - the twelfth reverse-direction slice, and the
-first EDI reverse slice where the request/response direction is decided
-by the caller's own target-trigger choice, not read off any FHIR field -
-mirroring the forward direction's own genuinely unusual shape (a single
-`ST01="278"` shared by both directions, split only by `BHT02`). Two
-builders, `Edi278RequestBuilder`/`Edi278ResponseBuilder`, always emit a
+"""FHIR Bundle -> X12 278 (Health Care Services Review), request or response.
+
+**The direction is chosen by the caller's target trigger, not read off any
+FHIR field** - mirroring the forward direction's unusual shape, where one
+`ST01="278"` covers both and only `BHT02` separates them. So there are two
+builders, `Edi278RequestBuilder`/`Edi278ResponseBuilder`, emitting a
 `Claim`-only or `Claim`+`ClaimResponse` message respectively, registered
-under synthetic trigger strings (`"278REQUEST"`/`"278RESPONSE"`) mirroring
-`app/edi/generator.py`'s own identical synthetic-trigger precedent for
-this family's generator entries, since 278 has no second `ST01` to key a
-second registry entry off of the way every other EDI pair does.
+under synthetic triggers `"278REQUEST"`/`"278RESPONSE"` (the same synthetic
+strings `app/edi/generator.py` uses for this family) since there is no
+second `ST01` to key a second entry off.
 
 Reverses `app/edi/prior_auth.py::_build_claim`/`_build_claim_response`
-field-for-field: `UM03` (service type, reusing `SERVICE_TYPE_CODE_SYSTEM`
-the same way 270/271 already do), `HI` (diagnosis composites, via
-`app.transform.edi_common.build_hi_segment` - promoted there once
-`app/transform/claim_837p.py` became a second real consumer of the
-identical single-HI-segment reversal), and `HCR01`/`HCR02`/`HCR03` for
-the response.
+field-for-field: `UM03` (service type, reusing `SERVICE_TYPE_CODE_SYSTEM`),
+`HI` diagnosis composites via the shared `build_hi_segment`, and
+`HCR01`/`HCR02`/`HCR03` for the response.
 
-**Payer/requester/subscriber/dependent resolution reuses 270/271's own
-shared resolvers directly, unlike claim_status.py's own new ones**: 278
-builds a real `Coverage` (unlike 276/277, which never does), so
-`resolve_subscriber_and_dependent` already has the signal it needs; and
-`Claim.insurer`/`.provider` are direct references to the payer/requester,
-so `resolve_payer_and_provider` applies unchanged too - confirming this
-family's own shape is genuinely closer to 270/271's than to 276/277's,
-consistent with `app/edi/prior_auth.py`'s own module docstring ("2000A-
-2000D's HL03 codes are identical to 270/271's own table"). **A
-structural simplification specific to 278, confirmed - not assumed - from
-the forward mapper's own precedence rule**: whenever a dependent exists
-in the source Bundle at all (recovered via `Coverage.beneficiary` !=
-`.subscriber`), it is unconditionally *also* "the patient" (the one
-carrying the 2000E Patient Event loop) - 278's own forward resolver never
-lets a dependent loop exist without immediately promoting it to "the
-patient," unlike 276/277's genuinely independent per-loop claim-status
-entries - so this builder needs no extra check against `Claim.patient`
-to decide which loop gets the 2000E child; `dependent is not None` alone
-decides it.
+**Resolution reuses 270/271's shared resolvers directly**, unlike
+`claim_status.py`'s: 278 builds a real `Coverage` (276/277 never does), so
+`resolve_subscriber_and_dependent` has its signal, and
+`Claim.insurer`/`.provider` are direct references, so
+`resolve_payer_and_provider` applies unchanged. As with 837P, a dependent
+that exists at all is unconditionally also the patient - the one carrying
+the 2000E loop - so `dependent is not None` alone decides it.
 
-**Disclosed round-trip fidelity gaps**: `HI`'s own qualifier (`"ABK"` vs.
-`"ABF"` for ICD-10-CM, `"BK"` vs. `"BF"` for ICD-9-CM) can't be recovered
-from `Claim.diagnosis[].diagnosisCodeableConcept.coding[0].system` alone,
-since both qualifiers in a pair map to the identical FHIR system - reversed
-via the same positional convention every real 278 sender uses (position 1
-= principal = `"ABK"`/`"BK"`, every other position = other = `"ABF"`/
-`"BF"`), a disclosed representative rather than a guess. `HCR01`/`HCR03`
-are read back directly from `ClaimResponseItemAdjudication`'s own real
-coding when present (the forward mapper always carries the exact original
-code there, not just the coarser `ClaimResponse.outcome` derived from it)
-- falling back to a disclosed representative `HCR01` (`"A1"`, preferred
-over `"A3"` for the many-to-one `outcome="complete"` case) only when no
-adjudication exists at all. `UM01`/`UM02`/`UM04`+ have no FHIR-side home
-(the forward mapper never reads them) and get fixed, disclosed placeholder
-values, the same "no source field" precedent every earlier EDI reverse
-slice already established."""
+Disclosed round-trip fidelity gaps:
+- `HI`'s qualifier cannot be recovered: `"ABK"`/`"ABF"` (ICD-10-CM) and
+  `"BK"`/`"BF"` (ICD-9-CM) each map to one FHIR system per pair. Reversed
+  by the positional convention every real sender uses - position 1 is
+  principal, every other position is other.
+- `HCR01`/`HCR03` are read back from the adjudication's own coding, which
+  carries the exact original code (not the coarser `.outcome` derived from
+  it), falling back to `"A1"` only when no adjudication exists.
+- `UM01`/`UM02`/`UM04`+ have no FHIR home and get fixed placeholders."""
 
 from fhir.resources.R4B.bundle import Bundle
 

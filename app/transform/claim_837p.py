@@ -1,54 +1,33 @@
-"""FHIR Bundle -> X12 837P (Health Care Claim: Professional, 005010X222A2)
-- the fourteenth reverse-direction slice, and the first EDI reverse slice
-for the deepest, most cross-referential loop shape of any EDI phase this
-app has reversed so far: a claim-level `HI` diagnosis list cross-
-referenced by position from each service line's own diagnosis-pointer
-composite, plus a rendering provider (`Claim.careTeam[]`) distinct from
-the billing provider (`Claim.provider`).
+"""FHIR Bundle -> X12 837P (Health Care Claim: Professional, 005010X222A2).
 
-Reverses `app/edi/claim_837p.py::_build_service_line_item`/
-`_build_procedure_concept`/`_build_diagnosis_pointers`/`Edi837pBuilder.
-build_bundle` field-for-field: `CLM01`/`CLM02`/`CLM05` (claim id/total
-charge/place-of-service composite), `HI` (diagnosis composites, reusing
-`app.transform.edi_common.build_hi_segment`, its second real consumer),
-one `LX`+`SV1`(+`DTP`) group per `Claim.item[]` (procedure composite,
-charge, quantity, diagnosis-pointer composite, service date).
+Reverses `app/edi/claim_837p.py` field-for-field: `CLM01`/`CLM02`/`CLM05`
+(claim id, total charge, place-of-service), `HI` diagnosis composites via
+the shared `build_hi_segment`, and one `LX`+`SV1`(+`DTP`) group per
+`Claim.item[]` (procedure composite, charge, quantity, diagnosis pointers,
+service date).
 
-**Payer/billing-provider/rendering-provider resolution is the simplest,
-most direct of any EDI reverse slice so far**: `Claim.provider`/
-`.insurer`/`.careTeam[].provider` are all real, direct references to
-their own resource - no Bundle-order fallback, no exclusion logic, and
-deliberately *not* a reuse of `edi_common.py`'s own `resolve_payer_and_
-provider` (which assumes exactly one payer + one non-payer participant to
-disambiguate - 837P has a *third* non-payer participant, the rendering
-provider, that could just as easily be Practitioner-typed as the billing
-provider, so that function's own Organization-only-then-first-
-Practitioner fallback could silently resolve to the wrong one). A plain
-by-id lookup across every `Organization`/`Practitioner` in the Bundle,
-keyed off each field's own real reference, sidesteps the ambiguity
-entirely rather than risking it.
+**Payer/billing/rendering-provider resolution is a plain by-id lookup**
+over every `Organization`/`Practitioner` in the Bundle, keyed off
+`Claim.provider`/`.insurer`/`.careTeam[].provider` - all real, direct
+references. Deliberately **not** `edi_common.resolve_payer_and_provider`:
+that assumes one payer plus one non-payer participant, but 837P has a
+third (the rendering provider) which may be Practitioner-typed just like
+the billing provider, so its Organization-first fallback could resolve to
+the wrong one.
 
-**Subscriber/dependent resolution reuses 270/271's own shared resolver
-directly**: 837P builds a real `Coverage` the identical way 278 does, so
-`resolve_subscriber_and_dependent` already has the signal it needs. The
-identical structural simplification 278's own reverse slice already
-established applies again here, confirmed - not assumed - from `app/edi/
-common.py::Resolved837Loops`'s own docstring: whenever a dependent exists
-in the source Bundle at all, it is unconditionally also "the patient"
-(`Claim.patient`/`Coverage.beneficiary`), so `dependent is not None` alone
-decides which loop the claim/service-line segments attach to, with no
-extra check against `Claim.patient` needed.
+**Subscriber/dependent resolution reuses 270/271's shared resolver**: 837P
+builds a real `Coverage`, so the signal is there. Whenever a dependent
+exists at all it is unconditionally also the patient (per
+`Resolved837Loops`), so `dependent is not None` alone decides which loop
+the claim and service lines attach to.
 
-**Disclosed round-trip fidelity gaps**: `SV1-01`'s own procedure-code
-qualifier ambiguity (`"HC"` covers both CPT and HCPCS Level II, per the
-forward module's own disclosed gap) is preserved via the same disclosed
-local placeholder system, reversed back to the real original qualifier
-when recoverable. `CLM03`/`CLM04`/`CLM06`-`CLM11`, `SV1-05`'s own per-line
-place-of-service override, and `2010AB`/`2310C`/`2320`/`2330` (Pay-to
-Provider/Service Facility Location/Other Subscriber COB) have no FHIR-side
-home at all - the forward mapper never reads any of them - so each gets a
-fixed, disclosed placeholder or is omitted entirely, the same "no source
-field" precedent every earlier EDI reverse slice already established."""
+Disclosed round-trip fidelity gaps:
+- `SV1-01`'s `"HC"` qualifier ambiguity (CPT vs HCPCS) is preserved on the
+  forward side's disclosed placeholder system and reversed back to the
+  original qualifier when recoverable.
+- `CLM03`/`CLM04`/`CLM06`-`CLM11`, `SV1-05`'s per-line place-of-service
+  override, and `2010AB`/`2310C`/`2320`/`2330` have no FHIR home - the
+  forward mapper never reads them - so each is omitted or fixed."""
 
 from fhir.resources.R4B.bundle import Bundle
 

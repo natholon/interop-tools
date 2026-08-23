@@ -1,58 +1,36 @@
 """Vital Signs section (templateId 2.16.840.1.113883.10.20.22.2.4.1) ->
-Observation, per the official "C-CDA on FHIR" IG's CF-vitals.html guidance
-(github.com/HL7/ccda-on-fhir/blob/master/input/pagecontent/CF-vitals.md) -
-no CSV mapping table is published for this section the way Problems/
-Medications/Allergies/Immunizations/Procedures each have one; this
-module's field mapping is drawn directly from that markdown page's own
-tables and worked examples, fetched and read directly rather than
-paraphrased from a secondary source. The section templateId itself was
-confirmed against a real HL7 C-CDA-Examples CCD document (not assumed from
-the IG page alone, which only gives the section's LOINC code via an
-abbreviated XPath, not its templateId OID).
+Observation, per the C-CDA on FHIR IG's CF-vitals.md. No CSV mapping table
+is published for this section, unlike Problems/Medications/Allergies/
+Immunizations/Procedures - the field mapping comes from that page's own
+tables and worked examples. The section templateId was confirmed against a
+real HL7 C-CDA-Examples CCD, since the IG page gives only the LOINC code.
 
-C-CDA groups vitals into a Vital Signs Organizer (one per reading session)
-wrapping one or more individual Vital Sign Observations. The IG maps this
-to a FHIR Observation "panel" (code=85353-1, the fixed LOINC "Vital Signs
-Panel" code - the organizer's own /code, e.g. 74728-7 "Vital signs" or
-SNOMED 46680005, is narrative-only in the source and not carried into any
-FHIR field) whose .hasMember references one Observation per individual
-vital sign - mirrored here exactly, with every resource returned as its
-own separate, top-level Bundle entry (this app's established convention,
-never FHIR .contained - the same shape app/mappings/oru.py already uses
-for DiagnosticReport + its own Observation results on the HL7v2 side).
+A Vital Signs Organizer (one per reading session) becomes a FHIR
+Observation *panel* - `code` fixed to LOINC `85353-1`, `.hasMember`
+referencing one Observation per vital sign. The organizer's own `/code` is
+narrative-only in the source and is not carried anywhere. Every resource is
+a separate top-level Bundle entry, never `.contained`.
 
-**Blood Pressure Panel and Pulse Oximetry Panel special cases** (per
-CF-vitals.md's own construction guidance, fetched directly): C-CDA has no
-dedicated template for either - a systolic/diastolic pair, or an O2
-saturation reading with optional inhaled-oxygen-concentration/flow-rate
-siblings, are just ordinary Vital Sign Observations sharing one organizer
-with everything else. Detection is purely by LOINC code within that flat
+**Blood Pressure and Pulse Oximetry panels.** C-CDA has no template for
+either - a systolic/diastolic pair, or an O2 saturation with optional
+concentration/flow-rate siblings, are ordinary Vital Sign Observations
+sharing one organizer. Detection is purely by LOINC code within that flat
 component list:
-- **Blood Pressure Panel**: systolic (8480-6) + diastolic (8462-4),
-  grouped into one new Observation with a fixed `85354-9` code and exactly
-  2 `.component` entries (no top-level `.valueQuantity` - the IG's own
-  guidance says not to send one) - both components are required, so an
-  incomplete pair (only one of the two present in a given organizer) is
-  NOT grouped; it falls back to an ordinary flat Vital Sign Observation
-  instead of being silently dropped.
-- **Pulse Oximetry Panel**: the O2 saturation reading itself (LOINC
-  `59408-5` or the older synonymous `2708-6`) becomes the panel - its own
-  `.code` always carries BOTH IG-documented synonymous codings regardless
-  of which single one the source used, and `.valueQuantity` is the O2
-  saturation value itself (unlike the Blood Pressure Panel, which has no
-  top-level value). Inhaled oxygen concentration (`3150-0`) and flow rate
-  (`3151-8`) become `.component` entries only when their own sibling codes
-  are present in the same organizer ("only if values exist," per the IG) -
-  a concentration/flow-rate reading found with no primary O2 saturation
-  reading to attach to has nowhere to go and falls back to plain the same
-  way an incomplete BP pair does.
 
-**Disclosed scope limit that remains**: only these two documented special
-cases are grouped - any other LOINC-coded vital still maps 1:1, matching
-this app's own "map the general case now, disclose only the genuinely
-remaining special case" precedent (see Medications' own IVL_PQ dosing
-ranges and Immunizations' INT-mood entries for the same judgment call made
-elsewhere)."""
+- **Blood Pressure** (`85354-9`): systolic `8480-6` + diastolic `8462-4`
+  as exactly two `.component` entries, and **no** top-level
+  `.valueQuantity` - the IG says not to send one. Both are required, so an
+  incomplete pair is not grouped: it falls back to flat observations rather
+  than being dropped.
+- **Pulse Oximetry**: the O2 saturation reading (`59408-5` or the older
+  synonymous `2708-6`) becomes the panel itself, carrying BOTH codings
+  whichever the source used, and - unlike BP - keeping its own top-level
+  `.valueQuantity`. Inhaled oxygen concentration (`3150-0`) and flow rate
+  (`3151-8`) become components only when present ("only if values exist").
+  One found with no primary reading to attach to falls back to flat.
+
+Scope limit: only these two documented special cases are grouped. Every
+other LOINC-coded vital maps 1:1."""
 
 import uuid
 

@@ -1,53 +1,32 @@
-"""FHIR Bundle -> X12 837I (Health Care Claim: Institutional, 005010X223A2)
-- the sixteenth reverse-direction slice, and the second real proof (after
-837I's own forward direction) that 837P's own 3-level HL chain
-genuinely, not coincidentally, generalizes to a sibling variant.
+"""FHIR Bundle -> X12 837I (Health Care Claim: Institutional, 005010X223A2).
 
-Reverses `app/edi/claim_837i.py::_build_service_line_item`/
-`_build_procedure_concept`/`_build_discharge_status_supporting_info`/
-`Edi837iBuilder.build_bundle` field-for-field: `CLM01`/`CLM02` (claim
-id/total charge - **not** `CLM05`, which 837I's own forward mapper never
-reads at all, a genuine structural fact confirmed by that module's own
-docstring, not an oversight carried over from 837P), `CL103` (discharge
-status, via `Claim.supportingInfo`), `HI` (diagnosis composites, reusing
-`app.transform.edi_common.build_hi_segment`, its third real consumer),
-one `LX`+`SV2`(+`DTP`) group per `Claim.item[]` (revenue code, optional
-procedure composite, charge, quantity, service date - **no** diagnosis-
-pointer composite, since `SV2` genuinely has none, confirmed directly by
-the forward module rather than assumed from 837P's own `SV1-07`).
+Reverses `app/edi/claim_837i.py` field-for-field: `CLM01`/`CLM02` (claim
+id, total charge - **not** `CLM05`, which the forward mapper never reads,
+a real structural fact rather than an oversight carried over from 837P),
+`CL103` (discharge status, via `Claim.supportingInfo`), `HI` diagnosis
+composites via the shared `build_hi_segment`, and one `LX`+`SV2`(+`DTP`)
+group per `Claim.item[]` - revenue code, optional procedure composite,
+charge, quantity, service date, and **no** diagnosis-pointer composite,
+since `SV2` genuinely has none.
 
-**Resolution logic is identical to 837P's own, reused by the same
-disclosed reasoning**: `Claim.provider`/`.insurer`/`.careTeam[].provider`
-(here the *attending* provider, `NM1*71`, not 837P's rendering `NM1*82` -
-institutional claims' primary "who is responsible for this patient" role)
-are all real, direct references, resolved via the identical by-id lookup
-`claim_837p.py`'s own reverse builder already established rather than
-`edi_common.py`'s own `resolve_payer_and_provider` (see that module's own
-docstring for why). Subscriber/dependent resolution reuses 270/271's own
-shared resolver directly, via the identical `Coverage`-based
-disambiguation and "a dependent, when present, is unconditionally also
-the patient" simplification 837P's own reverse slice already established
-- confirmed, not assumed, since both variants share `app.edi.common.
-Resolved837Loops`'s own identical resolver.
+Resolution is identical to 837P's: `Claim.provider`/`.insurer`/
+`.careTeam[].provider` (here the *attending* provider, `NM1*71`, not
+837P's rendering `NM1*82`) resolved by direct by-id lookup rather than
+`resolve_payer_and_provider` - see `claim_837p.py` for why. Subscriber/
+dependent reuses 270/271's shared resolver, with the same
+dependent-is-always-the-patient simplification, since both variants share
+`Resolved837Loops`.
 
-**Disclosed round-trip fidelity gaps, some inherited directly from the
-forward side, one genuinely new to this slice**: `CLM05-1` (UB-04 Type of
-Bill), `CL101`/`CL102` (admission type/source), and `HI`'s own
-occurrence/value/condition-code usages (`BH`/`BE`/`BG` qualifiers) have no
-FHIR-side home at all - the forward mapper never reads any of them - so
-none are regenerated here, the identical "no source field" precedent
-837P's own reverse slice already established. **Genuinely new to this
-slice**: the forward mapper's own multi-`HI`-segment split (Principal
-Diagnosis in its own segment, Other Diagnosis composites in a second) is
-not reproduced - this builder always regenerates a single combined `HI`
-segment instead, since `iter_diagnosis_hi_segments` only checks a
-segment's *first* composite qualifier to decide whether to include it at
-all, so one segment whose first composite is a recognized diagnosis
-qualifier is read identically to several - a disclosed simplification
-that only matters if a single claim ever carries more than 12 diagnoses
-(the per-segment composite cap `build_diagnosis_codeable_concepts` itself
-enforces), genuinely rare in practice and not exercised by either real
-837I fixture."""
+Disclosed round-trip fidelity gaps:
+- `CLM05-1` (UB-04 Type of Bill), `CL101`/`CL102` (admission type/source)
+  and `HI`'s occurrence/value/condition-code usages (`BH`/`BE`/`BG`) have
+  no FHIR home - the forward mapper never reads them.
+- **The forward multi-`HI` split is not reproduced.** Principal and Other
+  diagnoses arrive in separate segments but are regenerated as one
+  combined `HI`. `iter_diagnosis_hi_segments` only inspects a segment's
+  *first* composite qualifier to decide inclusion, so one combined segment
+  parses identically to several. This only matters above 12 diagnoses (the
+  per-segment composite cap), which neither real fixture exercises."""
 
 from fhir.resources.R4B.bundle import Bundle
 

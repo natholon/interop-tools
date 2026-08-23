@@ -1,59 +1,49 @@
 """MDM (Medical Document Management) -> FHIR mapping.
 
-T02/T04/T06/T08/T10/T11 all produce identical output here, matching ORU's
-pattern (BaseOruMapper handling R01/R30/R31/R32/R40 identically): the
-official v2-to-FHIR IG ships exactly one MDM ConceptMap (MDM_T02 -> Bundle)
-and treats the TXA segment map as trigger-agnostic, so "new document" (T02),
-"status update" (T04), "addendum" (T06), "edit notification" (T08),
-"replacement notification" (T10), and "cancel notification" (T11) all
-convert through the same TXA/OBX shape - this stateless converter doesn't
-model the different document-lifecycle semantics those triggers imply
-upstream, only the document data itself.
+T02/T04/T06/T08/T10/T11 all produce identical output, the same degenerate
+case as ORU's R01/R30/R31/R32/R40: the v2-to-FHIR IG ships exactly one MDM
+ConceptMap (MDM_T02 -> Bundle) and treats the TXA segment map as
+trigger-agnostic. This stateless converter models the document data, not
+the lifecycle semantics those triggers imply upstream.
 
-T10/T11 are semantically status-change events (replace/cancel) and were
-initially a candidate for trigger-specific FHIR status handling (e.g. T10 ->
-"superseded", T11 -> "entered-in-error", mirroring ADT A11/A13's deliberate
-cancel-pattern override) - but unlike A11/A13 (where the IG's silence was a
-deliberate reason to *add* fidelity the IG doesn't provide), here the
-decision was to defer to the IG as the authoritative source: the segment-txa-
-to-documentreference ConceptMap (build.fhir.org/ig/HL7/v2-to-fhir) has no
-trigger-event-specific guidance at all, and TXA-13 (Unique Document Number of
-the Original - the field that would carry T10's "replaces" pointer) has no
-mapped FHIR target in that ConceptMap. So status stays 100% TXA-19-driven for
-every trigger, and TXA-13 is left unmapped, same as every other IG-silent
-field in this module - a real difference in disclosed rationale from A11/A13
-even though the *code* ends up looking the same as T02/T04/T06.
+**T10/T11 look like they should override status** (replace/cancel, the way
+ADT's A11/A13 deliberately do) **and deliberately do not.** With A11/A13 the
+IG's silence was a reason to add fidelity it does not provide; here the IG
+is treated as authoritative, because the segment-txa-to-documentreference
+ConceptMap has no trigger-specific guidance and TXA-13 (Unique Document
+Number of the Original - what would carry T10's "replaces" pointer) has no
+mapped target in it. So status stays TXA-19-driven for every trigger and
+TXA-13 stays unmapped.
 
-TXA -> DocumentReference field map (per the v2-to-FHIR IG's
-segment-txa-to-documentreference ConceptMap, verified via build.fhir.org):
-TXA-2 Document Type -> type, TXA-3 Document Content Presentation ->
-content.attachment.contentType, TXA-6 Origination Date/Time -> date, TXA-9
-Originator -> author (Practitioner), TXA-10 Assigned Authenticator ->
-authenticator (Practitioner), TXA-12 Unique Document Number ->
-masterIdentifier, TXA-16 Unique Document File Name -> identifier, TXA-18
-Document Confidentiality Status -> securityLabel, TXA-19 Document
-Availability Status -> status, TXA-25 Document Title -> description.
+TXA -> DocumentReference, per that ConceptMap:
 
-Two things the IG maps but this converter deliberately does NOT attempt,
-both disclosed rather than guessed at:
-- TXA-17 (Document Completion Status) -> docStatus: the IG doesn't publish a
-  verified code crosswalk from TXA-17's local/table values to FHIR's
-  4-code CompositionStatus value set, and passing an unverified raw code
-  through risked emitting a non-compliant value - omitted rather than guess.
-- TXA-19 (Document Availability Status) -> status: only "AV" (Available) is
-  a verified mapping (-> "current"); every other/absent value also defaults
-  to "current" (matching the IG's own default), rather than guessing at a
-  fuller crosswalk this app couldn't verify.
+    TXA-2  Document Type            -> type
+    TXA-3  Content Presentation     -> content.attachment.contentType
+    TXA-6  Origination Date/Time    -> date
+    TXA-9  Originator               -> author (Practitioner)
+    TXA-10 Assigned Authenticator   -> authenticator (Practitioner)
+    TXA-12 Unique Document Number   -> masterIdentifier
+    TXA-16 Unique Document File Name-> identifier
+    TXA-18 Confidentiality Status   -> securityLabel
+    TXA-19 Availability Status      -> status
+    TXA-25 Document Title           -> description
 
-Document *content* itself is carried by OBX segments following TXA, not by
-TXA itself - the IG doesn't show a worked content-transfer example, so this
-app's approach (concatenate every TX/FT-typed OBX-5 value into a single
-plaintext body, base64-encode it into a separate Binary resource referenced
-via DocumentReference.content.attachment.url) is a disclosed extension of
-the IG's intent, not something the IG hands you directly. A message with no
-usable OBX content still converts successfully - it just gets no Binary and
-an attachment with no url, which is valid FHIR (Attachment has no required
-fields).
+Two fields the IG maps that this converter does not attempt:
+- **TXA-17** (Document Completion Status) -> docStatus. No verified
+  crosswalk exists from TXA-17's table values to FHIR's 4-code
+  CompositionStatus, and passing a raw code through risks emitting a
+  non-conformant value.
+- **TXA-19** -> status has only one verified row, `"AV"` -> `"current"`.
+  Anything else defaults to `"current"` (the IG's own default) rather than
+  guessing. The IG's other TXA-19 rule *is* implemented: `"CA"`/`"OB"`/
+  `"UN"` ride along on `status` as an alternate-codes extension.
+
+Document *content* comes from OBX segments following TXA, not TXA itself.
+The IG shows no worked content-transfer example, so concatenating every
+TX/FT-typed OBX-5 into one plaintext body and base64-ing it into a separate
+Binary (referenced by `content.attachment.url`) is a disclosed extension of
+its intent. A message with no usable OBX still converts - it just gets no
+Binary and an attachment with no url, which is valid FHIR.
 """
 
 import base64

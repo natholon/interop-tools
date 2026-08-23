@@ -1,48 +1,27 @@
-"""FHIR Bundle -> X12 276 (Health Care Claim Status Request) / 277 (Health
-Care Claim Status Response) - the eleventh reverse-direction slice, and
-the first proof this app's reverse direction generalizes to a THIRD X12
-family beyond the 270/271 sibling pair, with a genuinely deeper loop
-shape: a five-level HL chain (270/271's own is four levels), and a target
-FHIR resource (`Task`) that can carry claim-status entries for BOTH the
-subscriber and a dependent within one transaction set, mirroring the
-forward direction's own identical structural break from 270/271's single
-"one patient per transaction" rule.
+"""FHIR Bundle -> X12 276 (Claim Status Request) / 277 (Claim Status
+Response).
 
-Reverses `app/edi/claim_status.py::_build_tasks_for_patient_loop`/
-`_build_status_concept`/`_resolve_task_status` field-for-field: one `TRN`
-(+ `STC` for 277 only) group per `Task`, built from `Task.identifier`
-(trace number) and `Task.businessStatus`/`.status`.
+Reverses `app/edi/claim_status.py` field-for-field: one `TRN` (plus `STC`
+for 277) group per `Task`, from `Task.identifier` (trace number) and
+`.businessStatus`/`.status`. Unlike 270/271, one transaction can carry
+entries for both the subscriber and a dependent.
 
-**Two genuinely new cross-cutting resolution problems this slice needed,
-neither of which 270/271's own shared resolvers cover**:
-- Payer/provider are recovered directly from any `Task`'s own `.owner`/
-  `.requester` references - every `Task` this app's forward mapper builds
-  carries both, a more direct resolution than 270/271's own Bundle-order
-  fallback (`resolve_payer_and_provider`), since the reference is always
-  present here.
+**Three resolution problems 270/271's shared resolvers do not cover:**
+- Payer and provider come straight from any `Task`'s `.owner`/`.requester`
+  - every Task the forward mapper builds carries both, so no Bundle-order
+  fallback is needed.
 - The Information Receiver (2000B) has **no FHIR-side reference pointing
-  to it at all** - unlike payer/provider, no `Task` field carries it.
-  Resolved by exclusion instead: the remaining `Organization`/
-  `Practitioner` in the Bundle that's neither the resolved payer nor the
-  resolved provider - the same "the one that's left" spirit as 270/271's
-  own provider fallback in `resolve_payer_and_provider`, applied here to
-  a resource that's never directly referenced from anywhere on the FHIR
-  side at all, not just as a fallback when a reference is absent.
-- Subscriber vs. dependent `Patient` has no `Coverage` resource to
-  disambiguate via - this family never builds one, unlike 270/271/278/
-  837P/837I - so it's resolved via Bundle order instead (the forward
-  mapper's own append order always puts the subscriber `Patient` before
-  an optional dependent `Patient`), the same disclosed fallback
-  `resolve_subscriber_and_dependent` itself already falls back to when no
-  `Coverage` is present at all.
+  at it at all**. Resolved by exclusion: the remaining `Organization`/
+  `Practitioner` that is neither payer nor provider.
+- Subscriber vs dependent has no `Coverage` to disambiguate through - this
+  family never builds one - so it falls back to Bundle order, which is the
+  same fallback `resolve_subscriber_and_dependent` itself uses when no
+  Coverage is present.
 
-**Disclosed round-trip fidelity gaps**: `STC02` (status date) and every
-`REF`/`DTP` in the claim-status group have no FHIR-side home at all - the
-forward mapper's own `group_by_leader` walk captures them as group
-members but never reads any of them into a `Task` field (only `STC01`
-is read) - so none are regenerated here, the same "no source field,
-disclosed omission" precedent every earlier EDI reverse slice already
-established for its own unmapped `REF` segments."""
+Disclosed round-trip fidelity gap: `STC02` (status date) and every
+`REF`/`DTP` in the claim-status group have no FHIR home. The forward
+mapper's `group_by_leader` walk captures them as group members but reads
+only `STC01`, so none are regenerated."""
 
 from fhir.resources.R4B.bundle import Bundle
 

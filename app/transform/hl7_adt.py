@@ -1,55 +1,33 @@
-"""FHIR Bundle -> HL7v2 ADT - the first reverse-direction slice in this app
-(A01 alone, originally in its own hl7_adt_a01.py module, chosen for the
-same reason ADT^A01 was this app's very first forward-direction slice: the
-simplest, best-understood shape). Renamed/expanded to app/transform/
-hl7_adt.py, mirroring app/mappings/adt.py's own single-file-per-message-
-type shape, once A02/A03/A04/A05/A08 became real second/third/... slices
-of the identical Patient+Encounter shape - this project's own established
-"When adding a new trigger event for an already-supported message type,
-add a subclass in that type's module rather than a new file" rule, applied
-to the reverse direction for the first time.
+"""FHIR Bundle -> HL7v2 ADT (A01/A02/A03/A04/A05/A08/A11/A13/A38).
 
-Reverses app/mappings/common.py::build_patient/app/mappings/adt.py::
-build_encounter_core field-for-field, using each one's own exact field
-positions/component shapes - not re-deriving them independently, so a
-future change to the forward mapping's field shape has an obvious reverse
-counterpart to update. Shared PID/MSH construction lives in
-app/transform/hl7_common.py (promoted there once app/transform/hl7_siu.py
-became a second real consumer of the identical PID reversal). **A real,
-disclosed round-trip fidelity gap, not a bug**: several HL7v2 fields the
-forward mapper reads have no FHIR-side home at all (MSH-3/4/5/6 sending/
-receiving application-facility, PV1-2's full patient-class nuance beyond
-the four codes FHIR's ActEncounterCode binding covers), and two forward-
-mapped fields are collapsed into a single *display string* rather than
-kept as separate components (app.mappings.common.location_display for
-PV1-3/PV1-6, person_display for PV1-7) - reversing a display string back
-into structured components is inherently lossy/ambiguous, so this builder
-makes the same one deliberate choice both fields share: place the whole
-display string in the field's first component and leave the rest empty,
-rather than guessing at a split point. Fields with no FHIR-side source at
-all get a fixed, disclosed placeholder value (matching this app's own
-generator's own "always produce valid output" precedent) rather than
-being left empty, since MSH's own structural fields are required by the
-HL7v2 standard itself.
+Reverses `app/mappings/common.py::build_patient` and
+`app/mappings/adt.py::build_encounter_core` field-for-field, using each
+one's exact field positions and component shapes rather than re-deriving
+them - so a change to the forward mapping has an obvious counterpart here.
+Shared PID/MSH construction lives in `hl7_common.py`.
 
-**All five triggers this module now covers (A01/A02/A04/A05/A08) share one
-`_build_pv1`/`_build_evn` implementation, not five separate ones** - a
-deliberate simplification found once A02/A03/A08's own reverse
-requirements were actually worked out: `_build_pv1` reflects whatever the
-source `Encounter` resource actually contains (PV1-6 prior location
-whenever a `status="completed"` location entry is present, PV1-36
-discharge disposition whenever `.hospitalization` is present, PV1-44/45
-whenever `.period.start`/`.end` are present) rather than branching on
-which trigger is being built - since none of A01/A02/A04/A05/A08's own
-forward-direction differences turn out to depend on a FHIR field the
-reverse direction wouldn't already be populating anyway (A08's own status
-inference, for example, is automatically consistent on the way back out:
-re-parsing a message with PV1-45 present will re-infer `status="finished"`
-without this module needing to know that rule exists). **A03 is the one
-genuine exception**: it requires a discharge time to exist at all (the
-forward mapper's own `AdtA03Mapper` raises without one), so
-`AdtA03Builder` overrides `_validate` to raise the same way, rather than
-silently emitting an A03 message with no PV1-45."""
+**All triggers share one `_build_pv1`/`_build_evn`.** `_build_pv1` reflects
+whatever the source `Encounter` actually contains - PV1-6 when a
+`status="completed"` location is present, PV1-36 when `.hospitalization`
+is, PV1-44/45 from `.period` - rather than branching on trigger. None of
+the forward direction's per-trigger differences depend on a FHIR field the
+reverse would not already be populating: A08's status inference, for one,
+comes back out consistently with no A08-specific code, since re-parsing a
+message with PV1-45 re-infers `status="finished"` on its own.
+
+**A03 is the one exception**: it requires a discharge time to exist, so
+`AdtA03Builder` overrides `_validate` to raise the way `AdtA03Mapper` does,
+rather than emitting an A03 with no PV1-45.
+
+Disclosed round-trip fidelity gaps:
+- MSH-3/4/5/6 (sending/receiving application and facility) have no FHIR
+  home at all, so they get fixed placeholder values. Empty is not an
+  option - HL7v2 requires them.
+- `location_display` (PV1-3/PV1-6) and `person_display` (PV1-7) collapse
+  several components into one display string on the way in. Reversing a
+  display string into components is ambiguous, so both take the same
+  deliberate choice: the whole string goes in component 1, the rest stay
+  empty, rather than guessing at a split point."""
 
 from fhir.resources.R4B.bundle import Bundle
 
