@@ -1,69 +1,40 @@
 """Plan of Treatment section (templateId 2.16.840.1.113883.10.20.22.2.10,
-also titled "Plan of Care" on History and Physical - see app/cda/
-narrative_sections.py's own docstring for why this is one shared
-templateId, not two) -> DocumentReference+Binary (the narrative) *plus*
-one CarePlan (with one .activity[] per recognized planned entry) - the
-third of narrative_sections.py's own three disclosed "can carry real
-structured entries" sections to gain one, following app/cda/
-social_history.py's and app/cda/family_history.py's own immediately-
-preceding precedent (narrative and structured representations coexist).
+titled "Plan of Care" on History and Physical - one shared template, not
+two) -> DocumentReference+Binary (the narrative) plus one `CarePlan` with
+one `.activity[]` per recognized planned entry.
 
-**No official "C-CDA on FHIR" mapping page covers Plan of Treatment
-either** (confirmed the same way as Family History - no CF-plan*.md file
-exists in github.com/HL7/ccda-on-fhir/tree/master/input/pagecontent), and
-unlike Family History, the target FHIR resource itself isn't an obvious
-1:1 fit either - C-CDA's own Plan of Treatment section allows a genuinely
-wide variety of entry *classes* (Planned Act/Encounter/Observation/
-Procedure/Medication Activity/Supply, Instruction, Appointment...), most
-of which represent "an activity of some kind that's intended, not yet
-done." **CarePlan.activity[] is the disclosed, deliberate choice**: FHIR's
-own CarePlan resource is explicitly designed to hold a heterogeneous list
-of planned activities without forcing each one into its own separate
-Procedure/ServiceRequest/etc. resource - `CarePlanActivityDetail.kind` (an
-enum of resource types, e.g. ServiceRequest/MedicationRequest/Task) exists
-specifically to hint at what a planned item *would* materialize as without
-this app needing to actually build that separate resource - matching this
-app's own "map the general case now" judgment rather than deferring the
-whole section for want of one clean target type.
+**No C-CDA on FHIR page covers this section**, and unlike Family History
+the target resource is not an obvious fit either: C-CDA allows a wide
+variety of entry classes here (Planned Act/Encounter/Observation/Procedure/
+Medication Activity/Supply, Instruction, Appointment), most meaning "an
+activity intended, not yet done". **`CarePlan.activity[]` is the disclosed
+choice**: it is designed to hold a heterogeneous list of planned activities
+without forcing each into its own resource, and
+`CarePlanActivityDetail.kind` exists to hint at what an item *would*
+materialize as without building it.
 
-**Scoped to exactly the two moodCode-classified entry shapes confirmed
-against real fetched HL7 C-CDA-Examples, not a guess at the rest**:
-Planned Observation (2.16.840.1.113883.10.20.22.4.44, wrapped in
-`<observation moodCode="RQO">`, confirmed directly against the real
-Discharge Summary example's own Plan of Care section - "Colonoscopy",
-LOINC 62959-2, effectiveTime `<center value="20141012"/>` - the fourth
-IVL_TS shape, see app/cda/parser.py::ivl_ts_bounds' own docstring) and
-Planned Procedure (2.16.840.1.113883.10.20.22.4.41, wrapped in
-`<procedure moodCode="RQO">`, confirmed via a second real fetched Guide
-Example - field-for-field identical to Planned Observation's own
-code/statusCode/effectiveTime shape, just a different outer element name).
-Planned Act/Encounter/Medication Activity/Supply, Instruction, and
-Appointment are all deliberately NOT parsed this slice - each has its own
-genuinely different entry shape (Planned Medication Activity, for
-instance, would need its own dosage-reading logic mirroring app/cda/
-medications.py's, not a trivial extension of this module) - disclosed as a
-natural follow-up, the same "map the confirmed/dominant shapes now,
-disclose the rest" precedent app/cda/results.py's own IVL_PQ/ED gap and
-app/cda/procedures.py's own Procedure-Activity-Observation/-Act gap
-already established.
+Scoped to the two moodCode-classified shapes confirmed against real HL7
+C-CDA-Examples:
+- Planned Observation (...4.44) in `<observation moodCode="RQO">`
+- Planned Procedure (...4.41) in `<procedure moodCode="RQO">` - field-for-
+  field identical, just a different outer element.
 
-**`.status`/`.intent`/`CarePlanActivityDetail.kind` are all disclosed,
-self-derived choices with no IG crosswalk to verify against** (the same
-"no official crosswalk exists, disclosed local mapping" precedent several
-EDI families already established): the CarePlan itself gets fixed
-`status="active"`/`intent="plan"` (a real, disclosed judgment call - this
-converter has no signal indicating whether the plan is still active or
-superseded, and "active" is the plausible default for a plan appearing in
-a just-generated document); each activity's own `.kind` is fixed to
-`"ServiceRequest"` regardless of whether it came from a Planned
-Observation or Planned Procedure entry, the closest general-purpose fit
-FHIR's own CarePlanActivityKind value set offers for "a planned clinical
-service" without a dedicated resource to materialize. `.status` per
-activity uses a small, disclosed `_STATUS_MAP` from the entry's own
-`statusCode` (not moodCode, which is uniformly RQO/INT for a "planned"
-entry and carries no per-activity distinction) - unrecognized/absent falls
-back to `"unknown"`, matching this app's other STATUS_MAP fallback
-precedents (e.g. Results')."""
+Note the Planned Observation example uses `effectiveTime` with
+`<center value="..."/>`, the fourth legal IVL_TS shape (see
+`parser.py::ivl_ts_bounds`).
+
+Planned Act/Encounter/Medication Activity/Supply, Instruction and
+Appointment are **not** parsed - each has a genuinely different entry shape
+(a Planned Medication Activity would need its own dosage logic mirroring
+`medications.py`), disclosed as a follow-up rather than guessed at.
+
+`.status`/`.intent`/`.kind` are disclosed, self-derived, with no IG
+crosswalk to check against: the CarePlan is fixed `status="active"`/
+`intent="plan"` (nothing here says whether a plan is still current), and
+every activity's `.kind` is fixed to `"ServiceRequest"` - the closest
+general-purpose fit for "a planned clinical service". Per-activity
+`.status` comes from the entry's own `statusCode` (not moodCode, which is
+uniformly RQO and carries no distinction), falling back to `"unknown"`."""
 
 import uuid
 

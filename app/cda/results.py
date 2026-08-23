@@ -1,83 +1,49 @@
 """Results section (templateId 2.16.840.1.113883.10.20.22.2.3.1) ->
-DiagnosticReport + Observation, per the official "C-CDA on FHIR" IG's
-CF-results.html guidance (github.com/HL7/ccda-on-fhir/blob/master/input/
-pagecontent/CF-results.md) plus its two published ConceptMaps
-(ConceptMap-CF-ResultReportStatus, ConceptMap-CF-ResultStatus, both under
-github.com/HL7/ccda-on-fhir/blob/master/input/maps/) - no CSV mapping
-table is published for Results the way Problems/Medications/Allergies/
-Immunizations/Procedures each have one; this module's field mapping is
-drawn directly from the markdown page's own tables and the two fetched
-ConceptMaps, not paraphrased from a secondary source. Organizer/
-Observation templateIds and the section templateId itself were confirmed
-against a real HL7 C-CDA-Examples CCD document, not assumed from the IG
-page's own abbreviated XPath (which gives only the section's LOINC code,
-not its templateId OID).
+DiagnosticReport + Observation, per the C-CDA on FHIR IG's CF-results.md
+and its two published ConceptMaps (CF-ResultReportStatus,
+CF-ResultStatus). No CSV mapping table is published for Results, unlike
+Problems/Medications/Allergies/Immunizations/Procedures - the field
+mapping comes from that page's own tables. Organizer and Observation
+templateIds were confirmed against a real HL7 C-CDA-Examples CCD, since
+the IG page gives only the section's LOINC code, not its OID.
 
-C-CDA groups results into a Result Organizer (one per panel, e.g. a CBC)
-wrapping one or more Result Observations. The IG maps the organizer to a
-FHIR DiagnosticReport whose .result references one Observation per child
-Result Observation - mirrored here with every resource returned as its
-own separate, top-level Bundle entry (this app's established convention,
-never FHIR .contained - the same shape app/mappings/oru.py already builds
-for OBR->DiagnosticReport/OBX->Observation on the HL7v2 side, and
-app/cda/vitals.py just established for this same document type).
+A Result Organizer (one per panel, e.g. a CBC) becomes a DiagnosticReport
+whose `.result` references one Observation per child Result Observation.
+Every resource is a separate top-level Bundle entry, never `.contained` -
+this app's convention throughout.
 
-**The two ConceptMaps are genuinely value-identical** (both map the same
-six CDA ActStatus codes to registered/final/cancelled), confirmed by
-fetching both directly rather than assumed from the fact they cover the
-same source vocabulary - kept as one shared dict here since they really
-are the same crosswalk, just feeding two different target fields
-(DiagnosticReport.status and Observation.status both happen to accept the
-exact codes this map produces).
+**The two ConceptMaps are value-identical** (the same six ActStatus codes
+to registered/final/cancelled), confirmed by fetching both rather than
+assumed from covering the same vocabulary - so one shared dict feeds both
+`DiagnosticReport.status` and `Observation.status`.
 
-**`category`** (both organizer and observation): the IG's own guidance
-requires a live LOINC CLASSTYPE terminology-server lookup this app has no
-integration for anywhere (confirmed - not assumed - by fetching CF-
-results.md directly: "Query a FHIR server via CodeSystem/$lookup..."), and
-bulk-embedding the full licensed LOINC database to do this per-code is a
-genuinely different category of dependency than anything else in this
-app (every other local judgment-call table here is a small, hand-curated
-set scoped to what's actually used, not a bulk terminology import) -
-confirmed with the user directly as out of scope. `category` is instead
-recorded as an unconditional, disclosed `"laboratory"` default (CLASSTYPE
-1, the dominant real-world case for a C-CDA Results section) via
-`record_inferred`, the same "default to the most common real value when
-no verified per-item signal exists" precedent this app's own
-`DEFAULT_PURPOSE`/`DEFAULT_CLAIM_TYPE` (EDI 270/278) already established.
+`/value` dispatches on `xsi:type`: PQ/CD-family/INT/REAL/ST/ED are mapped
+(ED's plain-text case is structurally identical to ST and shares its
+branch). `IVL_PQ` maps per `mappingGuidance.md`'s "Ranges of Physical
+Quantities": both bounds -> `.valueRange`; one bound -> `.valueQuantity`
+with a `comparator` (`<=`/`<` or `>=`/`>`, from that bound's own
+`@inclusive`, default true).
 
-**`specimen`**: `app/cda/results.py::_build_specimen` (see below) builds a
-real `Specimen` resource from CDA's own `Specimen`/`SpecimenRole`/
-`SpecimenPlayingEntity` classes (confirmed via their own real, directly-
-fetched CDA-core structuredefs, not assumed from field-name similarity to
-anything else in this app) plus the sibling **Specimen Collection
-Procedure** (`component/procedure[code/@code=17636008]`, the fixed
-SNOMED code identifying it) for `.collection.bodySite`. Per the IG's own
-explicit attachment rule: a `<specimen>` found on the **organizer**
-attaches to `DiagnosticReport.specimen` *and* becomes the default
-`Observation.specimen` for every child result Observation; a `<specimen>`
-found on an individual **observation** builds its own separate `Specimen`
-and overrides that default for that one Observation only.
+`specimen` builds a real `Specimen` from CDA's `Specimen`/`SpecimenRole`/
+`SpecimenPlayingEntity` classes, plus the sibling Specimen Collection
+Procedure (`component/procedure[code/@code=17636008]`) for
+`.collection.bodySite`. Per the IG's attachment rule, an organizer-level
+`<specimen>` sets `DiagnosticReport.specimen` and becomes the default for
+every child Observation; an observation-level one builds its own and
+overrides that default for that Observation only.
 
-**`/value` xsi:type coverage**: of the six the IG documents, PQ/CD-family/
-INT/REAL/ST/ED are now all mapped - ED's own plain-text (narrative-
-reference) case is structurally identical to ST once considered on its
-own terms, so it shares that branch; a genuine binary/attachment ED value
-(the IG's own literal target for that case is a formal FHIR R5-backport
-extension this app could not independently verify resolves to a real,
-live StructureDefinition on any path tried - confirmed with the user
-directly as out of scope for that reason) still has no `.value[x]`
-mapped. **`IVL_PQ`** (a value *range*, not a fixed value) is now mapped
-too, per `mappingGuidance.md`'s own "Ranges of Physical Quantities"
-section (fetched directly, with its own worked examples): both bounds
-present -> `.valueRange`; only one bound present -> `.valueQuantity` with
-a `comparator` (`<=`/`<` for a high-only bound, `>=`/`>` for a low-only
-bound, based on that bound's own `@inclusive` attribute, default `true`).
-
-**Disclosed scope limits that remain**: `author`->Provenance is still
-deferred - this app has never built a CDA-side Provenance resource
-anywhere. `referenceRange.text` (narrative-referenced, not resolvable
-without this app's disclosed narrative-`<text>` gap) is deferred;
-`referenceRange`'s own `IVL_PQ` low/high is mapped."""
+Scope limits:
+- `category` needs a live LOINC CLASSTYPE lookup ("Query a FHIR server via
+  CodeSystem/$lookup"), which this app has no integration for; embedding
+  the licensed LOINC database is a different class of dependency than any
+  other table here. Recorded as an unconditional disclosed `"laboratory"`
+  default instead.
+- A genuine binary/attachment `ED` value has no `.value[x]` mapped: the
+  IG's literal target is an R5-backport extension that could not be
+  verified to resolve to a live StructureDefinition on any path tried.
+- `author` -> Provenance is deferred; this app builds no CDA-side
+  Provenance anywhere. `referenceRange.text` is narrative-referenced and
+  deferred, though `referenceRange`'s own IVL_PQ low/high is mapped."""
 
 import uuid
 

@@ -1,60 +1,33 @@
-"""Bundle-level resource deduplication - the third pillar README's own
-long-term goal names alongside transformation and validation, and (unlike
-those two) the first one that operates on the *output* FHIR Bundle rather
-than the source message: every existing pipeline in this app converts
-exactly one input message/document to exactly one Bundle, so there is no
-batch of separate messages to merge across - what this module targets
-instead is a real, narrower gap that already exists *within* a single
-converted Bundle: the same real-world entity independently materialized
-more than once by different fields of the same source message.
+"""Bundle-level resource deduplication - README's third named pillar, and the
+first that operates on the *output* Bundle rather than a source message.
+Every pipeline here converts one input to one Bundle, so there is no batch
+to merge across; what this targets is duplication *within* a single Bundle,
+where different fields of one message independently materialize the same
+real-world entity.
 
-**A genuinely real case, not a hypothetical one**: X12 837P/837I commonly
-carry a Billing Provider (2010AA) and a Rendering/Attending Provider
-(2310B) that are the exact same NPI - the common real-world shape for a
-solo practitioner who bills under their own name. `app/edi/claim_837p.py`/
-`claim_837i.py` materialize each independently (they're read from different
-loops, with no cross-loop awareness), so today's output carries two
-`Practitioner`/`Organization` resources for one real person/entity. This
-module is a deliberate, **opt-in** (never automatic) post-processing pass a
-caller runs against an already-built Bundle to collapse exactly this kind
-of duplication - opt-in because a Bundle with "duplicate" resources isn't
-wrong, and forcing a merge by default on every conversion would be a
-correctness-affecting behavior change to output this app's own test suite
-already depends on staying byte-for-byte stable.
+**A real case, not a hypothetical**: 837P/837I commonly carry a Billing
+Provider (2010AA) and a Rendering/Attending Provider (2310B) under the same
+NPI - the ordinary shape for a solo practitioner billing under their own
+name. The two loops are read independently with no cross-loop awareness, so
+the output carries two `Practitioner` resources for one person.
 
-**Scope, deliberately narrow and disclosed**: only four "identity"
-resource types are deduplicated this slice - `Patient`, `Practitioner`,
-`Organization`, `Location` - the resource types this app's mappers use to
-represent a stable real-world entity that other resources *reference*,
-never a resource that represents an *event* (`Encounter`, `Observation`,
-`Condition`, `Procedure`, `MedicationRequest`, `AllergyIntolerance`,
-`Immunization`, `DiagnosticReport`, `Appointment`, `DocumentReference`,
-`Claim`, `ClaimResponse`, `Coverage`, `CoverageEligibilityRequest`/
-`Response`, `PaymentReconciliation`, `Task`, `Binary`). Two clinically
-identical-looking events (same code, same-ish timing) are not necessarily
-the same real occurrence - merging them would be a lossy, potentially
-incorrect assumption this module deliberately never makes. `Device` is
-also excluded: this app's own `Device` resources represent scheduling/
-resource-booking context (see `app/mappings/siu.py`'s AIG handling), not a
-stable entity identity worth merging. A future slice could extend the
-identity-type list if a real, evidenced case surfaces (the same "extend
-once a real gap is found" discipline `app/cda/procedures.py`'s own
-"entries optional" fix already established), but four is the real,
-evidenced set today.
+**Opt-in, never automatic.** A Bundle with duplicates is not wrong, and
+merging by default would change output the test suite depends on.
 
-**Identity key, per resource**: if the resource carries a non-empty
-`identifier` list, the key is the frozenset of its (system, value) pairs -
-the strongest, most reliable signal, since two resources sharing even one
-real identifier are the same entity by construction. Otherwise, a
-resource-type-specific name-only fallback: `Patient`/`Practitioner` (whose
-`.name` is `list[HumanName]`) key off the first name's
-`(family, tuple(given))`; `Organization`/`Location` (whose `.name` is a
-bare `str`) key off that string, case-folded and whitespace-trimmed. A
-resource with neither a resolvable identifier nor a resolvable name gets no
-identity key at all and is never merged with anything - not enough signal
-to safely guess, the same "don't guess, disclose the gap" discipline this
-app applies everywhere else (e.g. Results' unmapped `IVL_PQ`/`ED` value
-shapes)."""
+**Scope**: only the four identity types other resources *reference* -
+`Patient`, `Practitioner`, `Organization`, `Location`. Never an event type
+(`Encounter`, `Observation`, `Condition`, `Claim`, ...): two clinically
+identical-looking events are not necessarily the same occurrence, and
+merging them would be a lossy guess. `Device` is excluded too - this app's
+Devices represent scheduling/booking context (see `siu.py`'s AIG handling),
+not a stable identity.
+
+**Identity key**: the frozenset of `(system, value)` identifier pairs when
+any exist - two resources sharing one real identifier are the same entity
+by construction. Otherwise a name-only fallback: `Patient`/`Practitioner`
+key off the first `HumanName`'s `(family, tuple(given))`,
+`Organization`/`Location` off their bare `.name` string, case-folded. A
+resource with neither is never merged - not enough signal to guess."""
 
 from dataclasses import dataclass
 

@@ -1,73 +1,48 @@
 """Family History section (templateId 2.16.840.1.113883.10.20.22.2.15) ->
-DocumentReference+Binary (the narrative, see app/cda/narrative_sections.py)
-*plus* one FamilyMemberHistory per Family History Organizer entry - the
-second of narrative_sections.py's own three disclosed "can carry real
-structured entries" sections to gain one, following
-app/cda/social_history.py's own immediately-preceding precedent exactly
-(narrative and structured representations coexist, neither replacing the
-other).
+DocumentReference+Binary (the narrative, see `narrative_sections.py`) plus
+one `FamilyMemberHistory` per Family History Organizer. Both
+representations coexist; neither replaces the other.
 
-**No official "C-CDA on FHIR" mapping page covers Family History**
-(confirmed by listing github.com/HL7/ccda-on-fhir/tree/master/input/
-pagecontent directly - no CF-familyhistory.md exists, unlike Social
-History's own real CF-social.md), so the FHIR-side field mapping below is
-this app's own disclosed, self-derived choice - the same "no official
-crosswalk exists, disclosed local mapping" precedent already established
-for several EDI families (e.g. 276/277 -> Task, 835 -> PaymentReconciliation).
-`FamilyMemberHistory` is the obvious, purpose-built FHIR target for this
-C-CDA shape (a per-relative record of that relative's own known
-conditions) - not a guess between several plausible resources the way
-Plan of Treatment's own target needed weighing (see plan_of_treatment.py).
+**No C-CDA on FHIR page covers Family History** (no `CF-familyhistory.md`
+exists, unlike Social History's `CF-social.md`), so the field mapping below
+is this app's own disclosed choice - the same situation as several EDI
+families. `FamilyMemberHistory` is the purpose-built target for this shape,
+not a judgement call between candidates the way Plan of Treatment's was.
 
-**Source shape confirmed against three real fetched HL7 C-CDA-Examples
-Guide Examples**, not paraphrased from a secondary source: Family History
-Organizer (2.16.840.1.113883.10.20.22.4.45, classCode=CLUSTER) wraps a
-`subject/relatedSubject/code` (the relationship - e.g. code="FTH"
-displayName="father", codeSystem 2.16.840.1.113883.5.111 "HL7
-FamilyMember", confirmed to be HL7's own v3 RoleCode OID) and a nested
-`subject/relatedSubject/subject/administrativeGenderCode` (the relative's
-own sex), plus one or more `component/observation` Family History
-Observations (2.16.840.1.113883.10.20.22.4.46). **A genuine gotcha found
-during that research**: the Family History Observation's own `/code`
-element is a FIXED code (`75323-6` "Condition", LOINC) describing the
-*template's own kind*, not the diagnosis itself - the real diagnosis lives
-in `/value[xsi:type=CD]` instead (confirmed directly against the real
-fetched example, "Myocardial infarction" appears only in `/value`, not
-`/code`) - a genuinely different shape from every other CD-valued section
-in this app, where `/code` itself carries the real coded concept.
+Source shape, confirmed against three real HL7 C-CDA-Examples:
 
-**Two optional nested entryRelationships, both confirmed against the same
-real fetched example**: `entryRelationship[typeCode=SUBJ][@inversionInd=
-"true"]` wraps an Age Observation (2.16.840.1.113883.10.20.22.4.31,
-`/value[xsi:type=PQ]`, e.g. value="57" unit="a") -> `.condition[].onsetAge`;
-`entryRelationship[typeCode=CAUS]` wraps a Family History Death
-Observation (2.16.840.1.113883.10.20.22.4.47) - confirmed via a third
-fetch that this nested observation's own `/value` is *always* the fixed
-SNOMED code "419099009" (Dead), so - the same "presence alone is the real
-signal, not the nested value" precedent app/cda/immunizations.py's own
-negationInd handling and app/cda/allergies.py's own negation detection
-already established - this builder reads only whether the CAUS
-relationship is *present*, mapping straight to
-`FamilyMemberHistoryCondition.contributedToDeath = True`, a real field
-`fhir.resources.R4B.familymemberhistory.FamilyMemberHistoryCondition`
-happens to expose for exactly this purpose (confirmed via model_fields,
-not assumed).
+    organizer (...4.45, classCode=CLUSTER)
+      subject/relatedSubject/code            -> .relationship (v3 RoleCode,
+                                                OID 2.16.840.1.113883.5.111)
+      subject/relatedSubject/subject/
+        administrativeGenderCode             -> .sex
+        birthTime                            -> .bornDate
+        sdtc:deceasedInd / sdtc:deceasedTime -> .deceased[x]
+      component/observation (...4.46)        -> .condition[]
 
-**The relative's own deceased status** (`subject/relatedSubject/subject/
-sdtc:deceasedInd`/`sdtc:deceasedTime`, an sdtc-namespace CDA extension
-element, confirmed present - if commented-out - in the same real fetched
-organizer example) maps to `.deceasedBoolean`/`.deceasedDate`. This is the
-first module in this app to read an sdtc-namespaced element directly
-(`{urn:hl7-org:sdtc}...`, Clark notation) rather than through `find_child`/
-`find_all` (both CDA-namespace-only by design, see app/cda/parser.py's own
-docstring) - a deliberate, narrow exception, not a precedent to reuse
-elsewhere without the same real justification.
+**Gotcha**: the Family History Observation's `/code` is the fixed LOINC
+`75323-6` "Condition" naming the *template*, not the diagnosis - the real
+diagnosis is in `/value[xsi:type=CD]`. That is the opposite of every other
+CD-valued section here, where `/code` carries the concept.
 
-**`.status` is fixed to "completed"** - the organizer's own statusCode is
-fixed per the C-CDA spec itself (confirmed against the real example), the
-same "no status-mapping ambiguity at all" case app/cda/vitals.py's own
-organizer/observation statusCode already established, now a second real
-consumer of that exact precedent."""
+Two optional nested entryRelationships:
+- `SUBJ` + `inversionInd="true"` wraps an Age Observation (...4.31,
+  `/value[xsi:type=PQ]`) -> `.condition[].onsetAge`.
+- `CAUS` wraps a Family History Death Observation (...4.47) whose `/value`
+  is always the fixed SNOMED "Dead" - so only its *presence* is the signal,
+  mapping to `.condition[].contributedToDeath`.
+
+`deceased[x]` is a choice type: `.deceasedDate` wins when a real date
+resolves (strictly more informative), `.deceasedBoolean` otherwise.
+Setting both raises.
+
+This is the only module that reads an sdtc-namespaced element directly
+(`{urn:hl7-org:sdtc}...`, Clark notation) rather than via `find_child`/
+`find_all`, which are CDA-namespace-only by design. A narrow exception, not
+a pattern to copy without the same justification.
+
+`.status` is fixed to `"completed"` - the organizer's statusCode is fixed
+by the spec, so there is no mapping ambiguity."""
 
 import uuid
 from xml.etree.ElementTree import Element

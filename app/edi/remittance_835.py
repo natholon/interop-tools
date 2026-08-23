@@ -1,74 +1,50 @@
 """X12 835 (Health Care Claim Payment/Advice - Electronic Remittance
 Advice) -> FHIR PaymentReconciliation.
 
-**A genuine structural break from every other EDI family in this app: 835
-has no HL segments at all.** Verified directly (not assumed) - the
-005010X221 TR3's own segment sequence is `ST/BPR/TRN/[REF/DTM]/N1(payer)/
-N1(payee)/[LX]/CLP.../SE`, an N1-led header pair (1000A payer, 1000B
-payee) followed by a flat, repeating `CLP`-leader/`CAS`-member structure
-for claim payments - no `HL` segment anywhere. `group_by_leader` (not
-`group_by_hl_hierarchy`) is therefore the only grouping primitive this
-module needs.
+**835 has no HL segments at all** - a genuine structural break from every
+other EDI family here. The 005010X221 TR3's sequence is
+`ST/BPR/TRN/[REF/DTM]/N1(payer)/N1(payee)/[LX]/CLP.../SE`: an N1-led
+header pair followed by a flat, repeating `CLP`-leader/`CAS`-member
+structure. `group_by_leader` is the only grouping primitive needed.
 
-**835 also has no `BHT` segment** - a second structural break from every
-other EDI family, all of which use `BHT` for `Bundle.identifier`/
-`.timestamp` via the shared `app.edi.common.assemble_bundle` helper. This
-module can't reuse that helper: `Bundle.identifier` instead comes from
-`TRN02` (the trace number - "used to uniquely identify this transaction
-set and to aid in reassociating payments and remittances", a natural fit
-for this exact purpose), and `Bundle.timestamp` is left unset entirely -
-no field in this transaction set carries a full date+time value the way
-`BHT04`+`BHT05` do elsewhere, and `BPR16` (Payment Effective Date) is
-date-only. Feeding a date-only value into `Bundle.timestamp` (a FHIR
-`instant`, which has no date-only form) would reproduce the exact bug
-class already disclosed for CDA's and this app's own `assemble_bundle`
-functions - disclosed and skipped here rather than guessed at.
+**835 also has no `BHT`**, which every other family uses for
+`Bundle.identifier`/`.timestamp` via the shared `assemble_bundle`. So
+`Bundle.identifier` comes from `TRN02` (the trace number, whose stated
+purpose is reassociating payments with remittances) and `Bundle.timestamp`
+is left unset: nothing here carries a full date+time, and `BPR16` is
+date-only. Feeding a date-only value to `Bundle.timestamp` (a FHIR
+`instant`, which has no date-only form) would reproduce a bug class this
+app has already hit twice.
 
-Loop shape (verified against a real, internally-consistent raw 835
-example plus direct verification of `BPR`/`N1`/`CLP`/`CAS` field
-positions against X12 segment references, not assumed):
-  BPR (header)          BPR02 payment amount, BPR04 payment method,
-                         BPR16 payment effective date
-  TRN (trace number)    TRN02 -> Bundle.identifier
-  N1*PR (1000A, Payer)   N102 name, N103/N104 id qualifier/value -> Organization
-  N1*PE (1000B, Payee)   same shape -> Organization (the provider/billing
-                         entity receiving payment)
-  CLP (2100, one per claim, repeating)  CLP01 claim id, CLP02 status code,
-                         CLP03 charge, CLP04 paid amount, CLP05 patient
-                         responsibility, CLP06 filing indicator, CLP07
-                         payer control number
-    CAS (claim-level adjustments, repeating) - captured by the leader/
-    member walk but not individually mapped, see below
-    SVC (2110, service-line detail, repeating) - deferred entirely, see below
+Segment shape (verified against a real 835 example and X12 segment
+references, not assumed):
 
-`N1`'s own shape is genuinely simpler than `NM1`'s (no first/last name
-split, just `N102` free-form name + `N103`/`N104` id qualifier/value) -
-this module has its own `_build_organization_from_n1`, not a reuse of
-`common.py`'s `NM1`-scoped `build_organization_from_nm1`. It does reuse
-`common.py`'s public `NM1_ID_QUALIFIER_SYSTEM` table directly for the
-`N103`/`N104` id-qualifier lookup, since X12's own Identification Code
-Qualifier list (element 66) is the identical code list NM108 already
-uses - only the segment *position* differs, not the code list.
+    BPR     BPR02 payment amount, BPR04 method, BPR16 effective date
+    TRN     TRN02 -> Bundle.identifier
+    N1*PR   1000A payer  -> Organization
+    N1*PE   1000B payee  -> Organization (who receives payment)
+    CLP     2100, one per claim: CLP01 id, CLP02 status, CLP03 charge,
+            CLP04 paid, CLP05 patient responsibility, CLP06 filing
+            indicator, CLP07 payer control number
+      CAS   claim-level adjustments - walked but not mapped
+      SVC   2110 service-line detail - deferred
 
-Target FHIR resource - `PaymentReconciliation`, base-spec, verified by
-direct fetch of `hl7.org/fhir/R4/paymentreconciliation.html`: its own
-field description confirms `.detail[]` operates at the claim/payable
-level ("correlates a payment amount to the adjudicated claim amounts"),
-not service-line level - so this module's own disclosed scope limit
-(`2110`/`SVC` service-line detail and itemized `CAS` adjustment-reason
-codes are not modeled, only `CLP04`'s aggregate paid amount per claim)
-matches the resource's own documented granularity, not an arbitrary cut.
-One `PaymentReconciliationDetail` per `CLP` group: `.type` carries `CLP02`
-(claim status code) as a disclosed local-system coding (no single free,
-authoritative `CLP02` code table was found the way STC's Claim Status
-Category Codes are published on x12.org), `.identifier` carries `CLP01`
-(the claim submitter's own identifier), `.amount` carries `CLP04`.
-`.request`/`.response` (References to `Claim`/`ClaimResponse`) are left
-unset - a standalone 835 has no real `Claim`/`ClaimResponse` resource in
-its own Bundle to point at, the same gap 271 had for its own `.request`
-field, but without an identifier-based fallback this time since
-`PaymentReconciliationDetail.identifier` is already spoken for by
-`CLP01`."""
+`N1` is genuinely simpler than `NM1` (no name split - just `N102` name and
+`N103`/`N104` id qualifier/value), so this has its own
+`_build_organization_from_n1`. It does reuse `NM1_ID_QUALIFIER_SYSTEM`,
+since X12 element 66 is the same code list NM108 uses - only the position
+differs.
+
+`PaymentReconciliation.detail[]` operates at the claim level, not
+service-line ("correlates a payment amount to the adjudicated claim
+amounts", per the R4 spec) - so deferring `SVC` and itemized `CAS` matches
+the resource's own granularity rather than being an arbitrary cut. Per
+`CLP` group: `.type` = CLP02 on a disclosed local system (no free
+authoritative CLP02 table exists the way x12.org publishes STC's),
+`.identifier` = CLP01, `.amount` = CLP04. `.request`/`.response` stay
+unset - a standalone 835 has no `Claim`/`ClaimResponse` in its Bundle to
+reference, and unlike 271's `.request` there is no identifier fallback,
+since `.identifier` is already spoken for by CLP01."""
 
 import uuid
 

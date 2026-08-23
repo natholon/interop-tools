@@ -1,92 +1,51 @@
-"""X12 278 (Health Care Services Review - Request for Review and Response)
--> FHIR `Claim` (`use="preauthorization"`) for the request, plus a
-`ClaimResponse` referencing that same `Claim` when the message is a
-response and carries a certification decision.
+"""X12 278 (Health Care Services Review) -> FHIR `Claim`
+(`use="preauthorization"`), plus a `ClaimResponse` referencing that same
+`Claim` when the message carries a certification decision.
 
-**A genuinely different transaction-pairing shape from every other EDI
-family in this app**: 270/271, 276/277 each have distinct `ST01` values
-for request vs. response. **278 does not** - both directions share the
-literal `ST01="278"` (verified directly against real X12.org-published
-examples: `x12.org/examples/005010x217/example-04-request-home-health-care`
-for the request, `x12.org/examples/005010x217/example-1b-response-request-review`
-for the response), distinguished instead by `BHT02` (`"13"`=request,
-`"11"`=response). This is why `Edi278Builder` is a single class registered
-once under `"278"` - unlike `Edi270Builder`/`Edi271Builder` or
-`Edi276Builder`/`Edi277Builder`, there is no second `ST01` to register a
-second builder under; the request/response branch happens *inside*
-`build_bundle()` by reading `BHT02` itself.
+**278 is the one family here whose request and response share an `ST01`.**
+270/271 and 276/277 each get two; 278 uses `"278"` for both, distinguished
+by `BHT02` (`"13"`=request, `"11"`=response). So `Edi278Builder` is a
+single class registered once, branching inside `build_bundle()`. Verified
+against real X12.org examples (`005010x217` example-04 and example-1b).
 
-Loop shape (HL-hierarchy, HL03 level codes) - verified against the same
-real X12.org examples, not assumed to carry over from another family:
-  2000A (HL03="20", UMO/Payer)              NM1*X3      -> payer Organization
-  2000B (HL03="21", Requester)              NM1*1P      -> requester Org/Practitioner
-  2000C (HL03="22", Subscriber)             NM1*IL, DMG -> subscriber Patient
-  2000D (HL03="23", Dependent, optional)    NM1*QC, DMG -> dependent Patient
-  2000E (HL03="EV", Patient Event - a CHILD of whichever loop is "the
-         patient", subscriber or dependent, not a sibling)
-                                             UM, HI, DTP, and - response
-                                             only - HCR
+Loop shape (HL03 level codes, verified against those same examples):
 
-2000A-2000D's HL03 codes (`"20"`/`"21"`/`"22"`/`"23"`) are identical to
-270/271's own table - genuinely, not coincidentally, confirmed by the same
-real examples above - so this module reuses `app.edi.common`'s public
-`HL_INFORMATION_SOURCE`/`HL_INFORMATION_RECEIVER`/`HL_SUBSCRIBER`/
-`HL_DEPENDENT` constants directly rather than re-declaring them (unlike
-276/277, which needed its own table since its chain genuinely diverges).
-Past 2000D, 278 continues one level deeper than `resolve_eligibility_parties`
-returns (into 2000E, a child of "the patient" loop specifically) - so this
-module has its own `resolve_prior_auth_loops()` rather than reusing that
-function's return shape unchanged, the same "extract on second use, but
-only as far as the second use actually needs" discipline `resolve_claim_status_loops`
-already established relative to it.
+    2000A  "20"  UMO/Payer            NM1*X3      -> payer Organization
+    2000B  "21"  Requester            NM1*1P      -> Org/Practitioner
+    2000C  "22"  Subscriber           NM1*IL+DMG  -> subscriber Patient
+    2000D  "23"  Dependent (optional) NM1*QC+DMG  -> dependent Patient
+    2000E  "EV"  Patient Event - a CHILD of whichever loop is the patient,
+                 not a sibling. Carries UM, HI, DTP, and (response) HCR.
 
-`UM03` (Service Type Code) is the same X12 external code list as 270's
-`EQ01`/271's `EB03` - reuses `app.edi.common.build_service_type_category`
-directly for `Claim.item[].productOrService`, rather than a third disclosed
-local-system table for the identical list.
+2000A-2000D's codes are genuinely identical to 270/271's, so this reuses
+`common.py`'s `HL_*` constants. It continues one level deeper than
+`resolve_eligibility_parties` goes, hence its own
+`resolve_prior_auth_loops()`.
 
-`HI` (diagnosis codes) is the first `IVL`-style *repeating* composite
-element this app has parsed - up to 12 diagnosis-code composites can occur
-positionally within one `HI` segment (`HI*ABK:1831*ABF:2630~` = two
-diagnoses, not two `HI` segments) - each read via `component()` the same
-way `STC01` already established, iterated across `element(hi, N)` for
-N=1..12 (the 5010 IG's own repetition cap for this field), stopping at the
-first empty position. This parsing loop (and its qualifier table) was
-promoted to `app.edi.common.build_diagnosis_codeable_concepts`/
-`HI_QUALIFIER_SYSTEM` once `claim_837p.py` became a second real consumer
-of the identical HI composite shape - see that module's own bullet for a
-real qualifier-table bug this promotion caught along the way.
+Field notes:
+- `UM03` is the same X12 code list as 270's `EQ01`/271's `EB03` - reuses
+  `build_service_type_category` rather than a third local table.
+- `HI` holds up to 12 diagnosis composites positionally within *one*
+  segment (`HI*ABK:1831*ABF:2630~` is two diagnoses, not two segments).
+  Parsed by the shared `build_diagnosis_codeable_concepts`.
+- `HCR01` (Action Code: A1 certified, A2 partial, A3 not certified, A4
+  pended) drives `ClaimResponse.outcome` and rides along as the
+  adjudication category. No authoritative free table exists for it the way
+  x12.org publishes STC's, so the crosswalk is disclosed-local, verified
+  against an RFI answer plus companion-guide text.
+- `HCR02` -> `ClaimResponse.preAuthRef` (a plain string, per `model_fields`).
 
-`HCR01` (Action Code, e.g. `"A1"`=Certified in Total, `"A2"`=Certified -
-Partial, `"A3"`=Not Certified, `"A4"`=Pended - verified against a real RFI
-answer plus companion-guide text, no single authoritative published table
-found the way STC's Claim Status Category Codes are on x12.org) drives
-`ClaimResponse.outcome` via a small disclosed crosswalk, and is also
-carried as the `ClaimResponseItemAdjudication.category` coding (a
-disclosed local system, same category as `_STC_CATEGORY_SYSTEM`).
-`HCR02` (Reference Identification - the actual authorization/certification
-number, e.g. `"AUTH0001"`) -> `ClaimResponse.preAuthRef`, a plain string
-field confirmed by inspecting `model_fields` directly.
-
-Disclosed Phase-3 scope limits, decided up front: the `2000F` Service-level
-sub-loop (per-service-line `UM`/`HCR`/`HI`, used when a review covers
-multiple distinct services independently) is not modeled - only one
-patient-event-level `UM`/`HI`/`HCR` set is read, the same "claim-level
-only, not the further-nested sub-loop" scope limit `claim_status.py`
-already applies to `SVC`-nested `STC`. `UM01` (Request Category Code, e.g.
-`"HS"`/`"SC"`/`"AR"`) has no clean target in base FHIR `Claim` (its
-`.type` is bound to a fixed institutional|oral|pharmacy|professional|vision
-set that UM01 doesn't map to at all) and is left unmapped rather than
-forcing a wrong code into a field with different semantics; `Claim.type`
-defaults to `"professional"`, the dominant real-world prior-authorization
-case, the same "default to the most common real value when no fitting
-code exists" precedent as 270's `DEFAULT_PURPOSE`. `Claim.priority` has no
-source field in 278 at all and defaults to `"normal"` for the same reason.
-`HCR03` (Reason Code, external code source 886) is carried as a second
-disclosed-local-system adjudication entry rather than dropped, since -
-unlike `AAA03`/TXA-17's genuinely unverifiable crosswalks - X12 publishes
-code source 886 by name even though this app doesn't have a verified free
-copy of its contents to build a real crosswalk from."""
+Scope limits:
+- The `2000F` Service-level sub-loop is not modelled - only one
+  patient-event-level UM/HI/HCR set is read, matching the claim-level-only
+  limit `claim_status.py` applies to `SVC`-nested `STC`.
+- `UM01` (Request Category) has no target: `Claim.type` is bound to
+  institutional|oral|pharmacy|professional|vision, which it does not map
+  to. `Claim.type` defaults to `"professional"` and `.priority` to
+  `"normal"` - neither has a source field here.
+- `HCR03` (external code source 886) is carried as a disclosed-local
+  adjudication entry: X12 names the code source but publishes no free
+  copy to build a real crosswalk from."""
 
 import uuid
 from dataclasses import dataclass

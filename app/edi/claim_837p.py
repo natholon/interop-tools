@@ -1,98 +1,53 @@
 """X12 837P (Health Care Claim: Professional, 005010X222A2) -> FHIR
 `Claim` (`use="claim"`, `type="professional"`).
 
-**The deepest, most cross-referential loop shape of any EDI phase in this
-app** - verified directly against a real X12.org-published example
-(`x12.org/examples/005010x222/example-3a-claim-billing-provider-payer`,
-quoted verbatim rather than trusted from an AI-summarized secondary source,
-the same discipline that already caught a wrong secondary-source claim once
-for 278's own HL03 table - here it was Stedi's page claiming 2010BB (payer)
-uses `NM1*41`, which the real example disproves: `NM1*41` is the 1000A
-Submitter loop, an interchange-level loop this app doesn't materialize at
-all; the real payer loop is `NM1*PR`, confirmed directly).
+Verified against a real X12.org example
+(`x12.org/examples/005010x222/example-3a-claim-billing-provider-payer`).
+Worth quoting the raw example rather than a summarised reference: a
+secondary source had 2010BB (payer) using `NM1*41`, which is actually the
+1000A Submitter loop this app never materialises - the payer is `NM1*PR`.
 
-Loop shape (HL-hierarchy, HL03 level codes - **a three-level chain, not
-270/271/278's four**, and the numeric codes' *meaning* is different again
-despite two of them numerically coinciding with 270/271/278's own table -
-confirmed genuinely, not assumed, the same "don't assume a numeric HL03
-code carries the same meaning across TR3s" discipline `claim_status.py`
-already established):
-  2000A (HL03="20", Billing Provider - NOT "Information Source" the way
-         270/271/278 use "20") NM1*85 -> billing provider Org/Practitioner
-  2000B (HL03="22", Subscriber)        NM1*IL, DMG -> subscriber Patient
-                                        NM1*PR (payer) is ALSO a member of
-                                        THIS loop, not its own HL level -
-                                        a genuine structural difference
-                                        from every other EDI family here,
-                                        where the payer gets its own root
-                                        HL loop.
-  2000C (HL03="23", Patient, optional) NM1*QC, DMG -> patient Patient, only
-                                        emitted when the patient is not the
-                                        subscriber themselves.
+Loop shape - **a three-level HL chain, not 270/271/278's four**, and the
+HL03 codes mean different things here despite numerically coinciding
+(HL03 meaning is per-TR3, never assume it carries across):
 
-Unlike every other EDI family in this app, **the 2300 Claim Information
-loop and everything nested under it (HI, the 2310B rendering-provider NM1,
-and the repeating 2400 service lines) are NOT their own HL level** - X12's
-HL segments stop at the patient level, so CLM/HI/NM1*82/LX/SV1/DTP are all
-flat members of whichever loop is "the patient" (the 2000C loop when
-present, else 2000B itself) - the same `group_by_leader`-over-a-flat-
-member-list shape `claim_status.py`'s TRN groups and `remittance_835.py`'s
-CLP groups already use, just one level further nested. This is genuinely
-convenient: no new loop-hierarchy primitive is needed, `group_by_hl_hierarchy`
-already gives the right member list to group `LX`-leader service lines
-from directly.
+    2000A  HL03="20"  Billing Provider (NOT "Information Source")
+           NM1*85 -> billing provider Organization/Practitioner
+    2000B  HL03="22"  Subscriber
+           NM1*IL + DMG -> subscriber Patient
+           NM1*PR (payer) is a member of THIS loop, not its own HL level -
+           a real structural difference from every other EDI family here
+    2000C  HL03="23"  Patient (optional, only when not the subscriber)
+           NM1*QC + DMG -> patient Patient
 
-Disclosed Phase-5 scope limits, decided up front (837 files are commonly
-batched with many billing providers, each with many subscribers, each with
-many claims - the same "only the first ST/SE transaction set" batching
-limit every EDI phase in this app already discloses, extended one level
-further here): only the **first** 2300 claim within the transaction set is
-mapped; 2010AB Pay-to Provider, 2310C Service Facility Location, and the
-2320/2330 Other Subscriber Information (COB - coordination of benefits)
-loops are captured by neither `find_segment` nor any loop walk here and are
-simply never read; `SV1-05` (Place of Service override, situational -
-absent in the real example above) is not read, so every service line's
-`Claim.item[].locationCodeableConcept` is instead a single claim-wide
-default from `CLM05-1` (the dominant real-world case, since a POS override
-per line is comparatively rare); `CLM03`/`CLM04`/`CLM06`-`CLM11` beyond
-`CLM05` have no clean target in base FHIR `Claim` and are left unmapped,
-the same "no fitting field, disclosed and skipped" treatment 278's `UM01`
-already gets.
+**The 2300 Claim Information loop is not its own HL level**: X12's HL
+segments stop at the patient, so CLM/HI/NM1*82/LX/SV1/DTP are flat members
+of whichever loop is the patient (2000C when present, else 2000B), grouped
+by `group_by_leader` on the `LX` leader.
 
-`CLM05-1` (Facility Code Value, i.e. Place of Service) maps to the real,
-verified CMS canonical CodeSystem (`common.py::POS_CODE_SYSTEM` -
-confirmed by direct fetch, not guessed at, unlike most of this app's
-disclosed local-system fallbacks; promoted there once `claim_837d.py`
-became a second real consumer of the identical CLM05-1 vocabulary).
-`SV1-01` (Composite Medical Procedure Identifier)'s qualifier
-"HC" is a **genuinely unresolvable ambiguity, confirmed directly rather
-than assumed**: X12's own "HC" qualifier covers both CPT (AMA-owned) and
-HCPCS Level II (CMS-owned) codes with no way to tell which from the X12
-element alone (a real, open FHIR/X12 interop gap - even the Da Vinci PAS
-IG's own JIRA tracker has an open issue about this exact ambiguity for the
-sibling 278 transaction) - `_PROCEDURE_QUALIFIER_SYSTEM` therefore keeps
-"HC" on a disclosed local placeholder rather than forcing it into either
-canonical CPT or HCPCS system and being wrong roughly half the time.
+Field notes:
+- `CLM05-1` (Place of Service) -> the real CMS CodeSystem
+  (`common.py::POS_CODE_SYSTEM`), one claim-wide default applied to every
+  `Claim.item[].locationCodeableConcept`.
+- `SV1-01`'s "HC" qualifier is **genuinely ambiguous** - it covers both
+  CPT and HCPCS Level II with nothing in the element to say which, an open
+  FHIR/X12 gap. It stays on a disclosed local placeholder rather than
+  being forced into one canonical system and being wrong half the time.
+- `SV1-07` (diagnosis pointers, 1-based into `HI`'s order) resolves against
+  `Claim.diagnosis[]` sequence numbers. A pointer that resolves to nothing
+  is skipped, not raised - one malformed pointer should not block the line.
+- `NM1*82` (Rendering Provider) -> `Claim.careTeam[]` with `role="primary"`,
+  distinct from `Claim.provider`, which FHIR defines as the provider
+  responsible for the claim (the biller, not necessarily the renderer).
+  Every `Claim.item[]` carries `careTeamSequence=[1]` back to it.
 
-`SV1-07` (Composite Diagnosis Code Pointer, up to 4 1-based positions
-referencing `HI`'s own diagnosis order, e.g. `"1:2:3:4"`) resolves against
-`Claim.diagnosis[]`'s own sequence numbers, which this module assigns in
-the same left-to-right `HI` composite order `common.py::
-build_diagnosis_codeable_concepts` already returns them in - a pointer
-whose value doesn't resolve to any diagnosis actually built (out of range,
-non-numeric) is skipped rather than raising, since a single malformed
-pointer shouldn't block the rest of a service line.
-
-`NM1*82` (2310B Rendering Provider, optional) materializes as a real
-`Practitioner`/`Organization` (branching on `is_person_entity` the same way
-every other provider-shaped NM1 loop in this app does) and is referenced
-via `Claim.careTeam[]` with `role="primary"` (confirmed against
-`hl7.org/fhir/R4/valueset-claim-careteamrole.html`'s own 4-code value set -
-`primary` is the closest fit for "the provider who actually rendered this
-service", distinct from `Claim.provider`, which FHIR defines as "the
-provider... responsible for the claim" - the billing provider, not
-necessarily whoever rendered it) - every `Claim.item[]` this module builds
-carries `careTeamSequence=[1]` back to it when present."""
+Scope limits:
+- Only the **first** 2300 claim in the transaction set is mapped (837 files
+  are commonly batched), matching the first-transaction-set limit every EDI
+  family here already discloses.
+- Never read: 2010AB Pay-to Provider, 2310C Service Facility Location, the
+  2320/2330 COB loops, and `SV1-05`'s per-line place-of-service override.
+- `CLM03`/`CLM04`/`CLM06`-`CLM11` have no clean target in base FHIR `Claim`."""
 
 import uuid
 

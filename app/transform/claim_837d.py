@@ -1,91 +1,39 @@
-"""FHIR Bundle -> X12 837D (Health Care Claim: Dental, 005010X224A2) - the
-seventeenth reverse-direction slice, completing the reverse direction for
-every EDI transaction-set family this app's forward direction supports (the
-full "big five" HIPAA suite: 270/271, 276/277, 278, 835, 837P/837I/837D).
+"""FHIR Bundle -> X12 837D (Health Care Claim: Dental, 005010X224A2).
 
-Reverses `app/edi/claim_837d.py::_build_service_line_item`/
-`_build_procedure_concept`/`_build_tooth_body_site`/`_build_tooth_sub_sites`/
-`resolve_line_dtp_raw_date`/`Edi837dBuilder.build_bundle` field-for-field:
-`CLM01`/`CLM02`/`CLM05` (claim id/total charge/place-of-service composite -
-the SAME vocabulary as 837P's, confirmed by the forward module's own
-docstring, unlike 837I's genuinely different UB-04 one), `HI` (diagnosis
-composites, reusing `app.transform.edi_common.build_hi_segment`, its fourth
-real consumer), one `LX`+`SV3`(+`TOO`)(+`DTP`) group per `Claim.item[]`
-(CDT procedure composite, charge, quantity, diagnosis-pointer composite,
-tooth number/surfaces, service date).
+Reverses `app/edi/claim_837d.py` field-for-field: `CLM01`/`CLM02`/`CLM05`
+(claim id, total charge, place-of-service - the SAME vocabulary as 837P's,
+unlike 837I's UB-04 one), `HI` diagnosis composites via the shared
+`build_hi_segment`, and one `LX`+`SV3`(+`TOO`)(+`DTP`) group per
+`Claim.item[]`.
 
-**Resolution logic is identical to 837P's/837I's own, now via the shared
-`app.transform.edi_common.resolve_by_reference`/`org_or_person_nm1`
-promoted alongside this slice**: `Claim.provider`/`.insurer`/
-`.careTeam[].provider` (rendering provider, `NM1*82` - the same code as
-837P's, NOT 837I's `NM1*71` attending provider) are all real, direct
-references. This module is the THIRD real consumer of what had been two
-independently-duplicated private copies (`_resolve_by_reference`/
-`_org_or_person_nm1`) in `claim_837p.py`/`claim_837i.py` - promoted here to
-`edi_common.py` as `resolve_by_reference`/`org_or_person_nm1`, mirroring
-the identical "extract on third real consumer" discipline the *forward*
-side's own `resolve_837_loops` was promoted under once 837D itself became
-its third consumer (see `app/edi/common.py::Resolved837Loops`'s own
-docstring) - both `claim_837p.py` and `claim_837i.py` were updated to call
-the shared functions instead of keeping their own copies. Subscriber/
-dependent resolution reuses 270/271's own shared resolver directly, the
-identical way 837P's/837I's own reverse slices already do.
+Resolution is identical to 837P's/837I's, via the shared
+`edi_common.resolve_by_reference`/`org_or_person_nm1`:
+`Claim.provider`/`.insurer`/`.careTeam[].provider` are direct references.
+Note the rendering provider is `NM1*82` (as 837P), not 837I's `NM1*71`
+attending provider. Subscriber/dependent resolution reuses 270/271's
+shared resolver.
 
-**Two genuinely new pieces of reversal logic neither 837P nor 837I needed**:
-  - **The procedure-code qualifier defaults to `"AD"` (CDT), not `"HC"`**
-    (837P's/837I's own default) - `_reverse_procedure_composite` reuses the
-    identical disclosed-fallback-marker pattern (a coding whose `system`
-    starts with `app.edi.claim_837p.PROCEDURE_QUALIFIER_FALLBACK_SYSTEM`
-    recovers its original qualifier; `app.edi.claim_837d.CDT_CODE_SYSTEM`
-    recovers `"AD"`; anything else defaults to `"AD"`, the dominant
-    real-world dental case per the forward module's own docstring) - reused
-    directly from `app.edi.claim_837p`'s now-public constant rather than
-    duplicated, since both 837P's and 837D's own forward modules use the
-    identical fallback-marker string (confirmed by direct comparison, not
-    assumed).
-  - **`TOO` (Tooth Information) has no 837P/837I equivalent at all** -
-    `_build_too_segment` reverses `Claim.item.bodySite` (tooth number, via
-    the same disclosed-fallback-marker pattern using the newly-public
-    `app.edi.claim_837d.TOO_UNIVERSAL_QUALIFIER`/`TOOTH_NUMBER_SYSTEM`/
-    `TOOTH_NUMBER_FALLBACK_SYSTEM`) and `Claim.item.subSite` (up to 5
-    surface-letter codings, joined `:`-separated back into TOO03's own
-    composite) into one `TOO` segment - emitted whenever either field is
-    present, with the other field left empty when only one of the two
-    resolves, so a `bodySite`-only or `subSite`-only item still round-trips
-    its one populated field rather than losing it to an all-or-nothing emit
-    decision. Each `subSite` entry's own coding `system` isn't re-checked
-    against `app.edi.claim_837d.TOOTH_SURFACE_SYSTEM` before reversal -
-    unlike `bodySite`'s own disclosed-fallback-marker check, nothing else
-    in this app ever populates `Claim.item.subSite`, so there's no
-    ambiguous source to disambiguate.
+Two pieces of reversal logic neither 837P nor 837I needs:
+- **The procedure-code qualifier defaults to `"AD"` (CDT)**, not `"HC"`.
+  A coding whose system starts with `PROCEDURE_QUALIFIER_FALLBACK_SYSTEM`
+  recovers its original qualifier; `CDT_CODE_SYSTEM` recovers `"AD"`.
+- **`TOO` (Tooth Information) has no 837P/837I equivalent.** Reverses
+  `Claim.item.bodySite` (tooth number) and `.subSite` (up to 5 surface
+  letters, `:`-joined into TOO03) into one segment, emitted whenever
+  *either* resolves so a one-sided item still round-trips. `subSite`'s
+  system is not re-checked, since nothing else in this app populates it.
 
-**A genuinely different DTP*472 reversal than 837P's/837I's own, disclosed
-rather than guessed at**: the forward module's own `resolve_line_dtp_raw_date`
-prefers a per-line `DTP*472` over the one claim-level default, but nothing
-on the resulting `Claim.item.servicedDate` distinguishes which source it
-actually came from - both collapse to the identical FHIR field. This
-builder always regenerates a per-line `DTP*472` for every item that has a
-`servicedDate` (never a claim-level one), the same "always the more
-specific, always-correct-on-the-next-forward-pass shape" simplification
-`hl7_oru.py`'s own OBX-11 status gap and `cda_ccd.py`'s own Procedures-
-section identifier gap already established elsewhere in this app - a
-per-line DTP is read first by `resolve_line_dtp_raw_date` regardless, so
-this is round-trip-safe even though it doesn't reproduce the original
-claim-level-vs-per-line split.
-
-**Disclosed round-trip fidelity gaps inherited directly from the forward
-side, the same "no source field" precedent every earlier EDI reverse slice
-already established**: `SV3-04`/`SV3-05`/`SV3-07`-`SV3-10` (oral cavity
-designation, prosthesis code, free-text reason, copay/agreement/
-predetermination indicators) and `2010AB`/`2310C`/`2320`/`2330` (Pay-to
-Provider/Service Facility Location/Other Subscriber COB) have no FHIR-side
-home at all - the forward mapper never reads any of them - so none are
-regenerated here. Unlike 837P's/837I's own diagnosis-pointer reversal
-(which defaults to pointer `[1]` when `Claim.item.diagnosisSequence` is
-unset), this builder leaves SV3-11 genuinely empty when no pointers are
-present, since dental claims commonly carry no diagnosis at all - forcing
-a fabricated pointer `"1"` when `Claim.diagnosis` might not even have a
-position 1 would regenerate an unresolvable pointer, not a safe default."""
+Disclosed round-trip gaps:
+- `DTP*472` is always regenerated **per line**, never claim-level.
+  `Claim.item.servicedDate` keeps no record of which source it came from,
+  and a per-line DTP is read first regardless, so this is round-trip-safe
+  without reproducing the original split.
+- `SV3-04`/`SV3-05`/`SV3-07`-`SV3-10` and `2010AB`/`2310C`/`2320`/`2330`
+  have no FHIR-side home - the forward mapper never reads them.
+- SV3-11 is left **empty** when `diagnosisSequence` is unset, unlike
+  837P/837I which default to pointer `[1]`: dental claims commonly carry
+  no diagnosis, so a fabricated `"1"` could point at a position
+  `Claim.diagnosis` does not have."""
 
 from fhir.resources.R4B.bundle import Bundle
 
