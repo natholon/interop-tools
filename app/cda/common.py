@@ -240,6 +240,18 @@ def record_coding(recorder, resource_id: str, relative_path: str, base_location:
         recorder.record(
             resource_id, f"{relative_path}.coding[0].display", f"{base_location}/@displayName", coding.display
         )
+    if coding.system:
+        # @codeSystem is carried into Coding.system (translated through
+        # OID_TO_FHIR_SYSTEM when the OID is one FHIR names, kept as
+        # urn:oid: otherwise), so it is mapped rather than lost. Recorded
+        # rather than merely excluded, so the crosswalk shows which code
+        # system the conversion actually used.
+        recorder.record(
+            resource_id,
+            f"{relative_path}.coding[0].system",
+            f"{base_location}/@codeSystem",
+            coding.system,
+        )
 
 
 def record_quantity(recorder, resource_id: str, relative_path: str, base_location: str, quantity) -> None:
