@@ -714,8 +714,6 @@ def test_hl7v2_drops_cite_the_v2_to_fhir_ig():
     assert evn.citation.authoritative is True
     assert "Provenance.recorded" in (evn.detail or "")
 
-    # XCN.7 has a real target, but ADT materialises no Practitioner for
-    # PV1-7 to carry it - a genuine gap, flagged as one.
-    degree = by_location["PV1-7.7"]
-    assert degree.summary.startswith("GAP:")
-    assert "qualification.code" in (degree.detail or "")
+    # PV1-7.7 was a GAP until ADT started materialising a real Practitioner
+    # for PV1-7; XCN.7 now has somewhere to go, so it is not a drop at all.
+    assert "PV1-7.7" not in by_location

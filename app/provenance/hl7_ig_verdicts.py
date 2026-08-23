@@ -21,6 +21,7 @@ from app.provenance.citations import Citation, DROP_NOT_YET_CHECKED, V2_TO_FHIR
 
 NO_TARGET = "no_target"
 OUT_OF_SCOPE = "out_of_scope"
+SUPERSEDED = "superseded"
 GAP = "gap"
 
 IG_NAMES_NO_TARGET = Citation(
@@ -49,8 +50,20 @@ IG_DEFINES_TARGET = Citation(
     note="The IG's own mapping table defines a FHIR target for this field, so this is a real gap in this app's conversion.",
 )
 
+IG_TARGET_SUPERSEDED = Citation(
+    title="v2-to-FHIR target implemented, but a preferred source supplied it",
+    url="https://github.com/HL7/v2-to-fhir/tree/master/mappings",
+    authoritative=True,
+    note=(
+        "The IG defines a target and this app implements it, reading this field as a fallback. "
+        "In this particular message another field the mapper prefers carried the value, so this "
+        "one went unused - a fallback that was not needed, not a capability this app lacks."
+    ),
+)
+
 _CITATION_BY_VERDICT = {
     NO_TARGET: IG_NAMES_NO_TARGET,
+    SUPERSEDED: IG_TARGET_SUPERSEDED,
     OUT_OF_SCOPE: IG_TARGET_OUT_OF_SCOPE,
     GAP: IG_DEFINES_TARGET,
 }
@@ -77,6 +90,25 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
     # an unresolved item in the IG itself rather than a real extension URL -
     # the same shape as PL's own "/extension??-poc/", which this app already
     # declines to invent a value for.
+    # --- SCH (Segment - SCH[Appointment]) -------------------------------
+    "SCH-9": (
+        SUPERSEDED,
+        "SCH-9 maps to minutesDuration, which this app builds - preferring TQ1-6 when present, "
+        "per resolve_appointment_timing.",
+    ),
+    "SCH-10": (NO_TARGET, "SCH-10 (Appointment Duration Units) has a blank FHIR Attribute."),
+    "SCH-11": (
+        SUPERSEDED,
+        "SCH-11 maps to the appointment timing as a whole, which this app reads as the legacy "
+        "fallback when TQ1 is absent.",
+    ),
+    # --- AIG (Segment - AIG[Appointment]) --------------------------------
+    "AIG-4": (
+        NO_TARGET,
+        "AIG-4 maps to participant.type; this app instead carries the resource type on the "
+        "materialised Device.type, so no participant.type is produced for it to fill.",
+    ),
+    # --- CX datatype (CX[Identifier]) -----------------------------------
     "PID-3.6": (
         NO_TARGET,
         'CX.6 (Assigning Facility) maps only to the placeholder "extension??-assigningFacility", '

@@ -91,7 +91,7 @@ def test_round_trips_through_real_converter(generator_fn, trigger_event):
         # map), so a generated message yields Locations too - how many
         # depends on which components that seed populated.
         assert {"Patient", "Encounter"} <= resource_types
-        assert resource_types <= {"Patient", "Encounter", "Location"}
+        assert resource_types <= {"Patient", "Encounter", "Location", "Practitioner"}
 
 
 @pytest.mark.parametrize("generator_fn, trigger_event", _GENERATORS)

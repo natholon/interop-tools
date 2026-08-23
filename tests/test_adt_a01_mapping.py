@@ -22,8 +22,10 @@ def test_basic_fixture_maps_every_field():
 
     assert bundle.type == "collection"
     # Patient + Encounter + one Location per populated PV1-3 component
-    # (the PL chain the v2-to-FHIR PL[Location] map specifies).
-    assert len(bundle.entry) == 6
+    # (the PL chain the v2-to-FHIR PL[Location] map specifies) + the PV1-7
+    # attending Practitioner, which the IG maps to
+    # participant.individual(Practitioner).
+    assert len(bundle.entry) == 7
 
     entries = _entries_by_type(bundle)
     patient = entries["Patient"].resource

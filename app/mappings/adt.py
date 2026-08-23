@@ -22,6 +22,7 @@ from app.mappings.common import (
     assemble_bundle,
     build_location_chain_from_pl,
     build_patient,
+    build_practitioner_from_xcn,
     build_reference_with_optional_display,
     build_visit_identifier,
     location_display,
@@ -121,15 +122,24 @@ def build_encounter_core(
             )
         ]
 
+    # PV1-7 -> participant.individual(Practitioner), per the v2-to-FHIR
+    # PV1[Encounter] map. This used to build a display string only, so
+    # everything XCN carries beyond family/given - the id, and the degree
+    # XCN.7 maps to qualification.code - had nowhere to go and was dropped.
+    # A real Practitioner is also more useful to a consumer, which is the
+    # same reasoning SIU's AIP and ORU's OBX-16 already follow.
+    attending = build_practitioner_from_xcn(pv1, 7, recorder=recorder)
     attending_display = person_display(pv1, 7)
-    if attending_display:
+    if attending is not None:
+        if extra_resources is not None:
+            extra_resources.append(attending)
         encounter.participant = [
             EncounterParticipant(
                 type=[CodeableConcept(coding=[Coding(system=_PARTICIPATION_TYPE_SYSTEM, code="ATND")])],
-                individual=Reference(display=attending_display),
+                individual=build_reference_with_optional_display(attending.id, attending_display),
             )
         ]
-        if recorder:
+        if recorder and attending_display:
             recorder.record(
                 encounter_id, "participant[0].individual.display", hl7_location("PV1", 7), attending_display
             )

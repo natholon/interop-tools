@@ -39,8 +39,10 @@ def test_api_convert_success():
     assert response.status_code == 200
     body = response.json()
     assert body["bundle"]["resourceType"] == "Bundle"
-    # Patient + Encounter + the PV1-3 Location chain.
-    assert len(body["bundle"]["entry"]) == 6
+    # Patient + Encounter + the PV1-3 Location chain + the PV1-7 attending
+    # Practitioner (PV1-7 maps to participant.individual(Practitioner) in
+    # the v2-to-FHIR IG; it used to be a display string only).
+    assert len(body["bundle"]["entry"]) == 7
 
 
 def test_api_convert_without_deduplicate_omits_deduplication_key():

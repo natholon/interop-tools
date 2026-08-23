@@ -13,6 +13,7 @@ import uuid
 from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
+from fhir.resources.R4B.identifier import Identifier
 from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 from fhir.resources.R4B.observation import Observation, ObservationReferenceRange
 from fhir.resources.R4B.period import Period
@@ -34,6 +35,9 @@ from app.mappings.common import (
 from app.provenance.location import hl7_location
 
 _INTERPRETATION_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0078"
+# HL7 table 0203 - the v2-to-FHIR OBR[DiagnosticReport] map fixes PLAC/FILL
+# as the identifier type for the placer and filler order numbers.
+ORDER_IDENTIFIER_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0203"
 _DEFAULT_STATUS = "unknown"
 
 # HL7 table 0085 (OBX-11) / table 0123 (OBR-25) result status -> FHIR status.
@@ -209,6 +213,37 @@ def build_diagnostic_report(
     )
     if recorder:
         recorder.record(report_id, "status", hl7_location("OBR", 25), status, source_value=field_str(obr, 25))
+    # OBR-2/OBR-3 -> identifier[1]/identifier[2] with a fixed type coding,
+    # per the v2-to-FHIR IG's own OBR[DiagnosticReport] segment map. Both
+    # were dropped entirely before, which is what the drop register found.
+    identifiers = []
+    for field_num, type_code in ((2, "PLAC"), (3, "FILL")):
+        raw_value = field_str(obr, field_num, component=1)
+        if not raw_value:
+            continue
+        identifiers.append(
+            Identifier(
+                value=raw_value,
+                type=CodeableConcept(coding=[Coding(system=ORDER_IDENTIFIER_TYPE_SYSTEM, code=type_code)]),
+            )
+        )
+        if recorder:
+            index = len(identifiers) - 1
+            recorder.record(
+                report_id,
+                f"identifier[{index}].value",
+                hl7_location("OBR", field_num, component=1),
+                raw_value,
+            )
+            recorder.record_inferred(
+                report_id,
+                f"identifier[{index}].type.coding[0].code",
+                f"Fixed to {type_code!r} by the v2-to-FHIR OBR[DiagnosticReport] map - "
+                f"OBR-{field_num} is the placer/filler number by position, not by a code in the field.",
+                type_code,
+            )
+    if identifiers:
+        report.identifier = identifiers
     if encounter_id:
         report.encounter = Reference(reference=f"urn:uuid:{encounter_id}")
     if observation_ids:
