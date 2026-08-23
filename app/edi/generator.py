@@ -1,52 +1,35 @@
-"""Shared X12 generator primitives - the app/edi/ mirror of
-app/generators/base.py, used by every family's own generator module
-(eligibility_generator.py for 270/271, claim_status_generator.py for
-276/277, prior_auth_generator.py for 278, remittance_generator.py for 835,
-claim_837p_generator.py for 837P). Built via positional string-joins per
-segment (X12 is delimited text like HL7v2, not tree-built like CDA's XML).
+"""Shared X12 generator primitives - the `app/edi/` mirror of
+`app/generators/base.py`, used by every family's own generator module
+(`eligibility_generator.py`, `claim_status_generator.py`,
+`prior_auth_generator.py`, `remittance_generator.py`, and one per 837
+variant). Built by positional string-joins per segment, X12 being
+delimited text rather than a tree.
 
-Deliberately holds no `generate_*` functions itself and does not re-export
-them - each family module imports these primitives one-directionally, and
-`app/generators/registry.py`/every `test_generate_*.py` file import each
-`generate_*` function directly from its own family module (e.g.
-`from app.edi.eligibility_generator import generate_270`), not from here.
-A re-export shim here would work (Python resolves it via definition order)
-but relies on this file's own primitives staying textually before any
-cross-import, a fragile ordering constraint not worth taking on for a
-convenience import path.
+**Holds no `generate_*` functions and re-exports none.** Each family
+module imports these primitives one-directionally, and
+`app/generators/registry.py` and the tests import each `generate_*`
+straight from its own family module. A re-export shim would work, but only
+while this file's primitives stay textually before any cross-import - a
+fragile ordering constraint for a convenience path.
 
-Reuses app.generators.base's format-agnostic primitives directly (maybe(),
-random_person_name(), random_sex(), random_identifier(),
-random_datetime_near_now()) rather than re-deriving name pools; net-new
-here is only format_x12_date()/format_x12_time() (X12 splits date and time
-into separate elements, unlike HL7's single concatenated TS field) and a
-small set of shared name/code pools reused across two or more families
-(`PAYER_NAMES`/`PROVIDER_ORG_NAMES` by nearly every family;
-`ICD10_DIAGNOSIS_CODES` by both prior_auth_generator.py and
-claim_837p_generator.py, both of which read the identical HI composite
-shape). Family-specific pools (Service Type Codes, Claim Status categories,
-HCR action codes, ...) stay in their own family's generator module instead.
+Reuses `app.generators.base`'s format-agnostic primitives directly rather
+than re-deriving name pools. Net-new here is `format_x12_date()`/
+`format_x12_time()` (X12 splits date and time into separate elements,
+unlike HL7's single concatenated TS) plus the pools shared by two or more
+families - `PAYER_NAMES`/`PROVIDER_ORG_NAMES` by nearly all of them,
+`ICD10_DIAGNOSIS_CODES` by 278 and 837P, which read the identical HI
+composite. Family-specific pools stay in their own module.
 
-`build_837_envelope()` is the one function-shaped (not a bare pool/
-primitive) exception to "no generate_* functions" - it isn't one itself
-(it returns a partial EdiDraft, not finished X12 text), and it's shared by
-exactly the 837 family (Professional/Institutional/Dental), not every
-family the way PAYER_NAMES is - but a genuinely-not-quite-universal shared
-primitive already has precedent here (ICD10_DIAGNOSIS_CODES is shared by
-2 of N families, not all), so it lives here rather than a fourth new
-module for one function. Promoted once claim_837p_generator.py,
-claim_837i_generator.py, and claim_837d_generator.py were each found
-independently rebuilding the identical ISA/GS/ST/BHT/HL*1 envelope +
-2000A billing provider + 2000B subscriber + optional 2000C patient loop
-construction, unlike every other EDI pair's own generator module (which
-already shares this portion via one `_generate_<family>()` helper) -
-each family's own `generate_837{p,i,d}()` still builds its own claim-level
-segments (CLM, HI, service lines, ...) after this returns, exactly where
-the three genuinely diverge.
+`build_837_envelope()` is the one function-shaped exception. It is not a
+generator (it returns a partial `EdiDraft`, not finished X12) and is
+shared by the 837 trio rather than universally - but a
+shared-by-some-families primitive already has precedent here, so it lives
+in this file rather than a fourth module for one function. Each
+`generate_837{p,i,d}()` still builds its own claim-level segments after it
+returns, which is exactly where the three diverge.
 
-Self-checked via parse_interchange() before returning, mirroring every
-other generator's parse-back self-check - a generator bug should raise
-EdiParseError, not return broken X12 text."""
+Self-checked via `parse_interchange()` before returning: a generator bug
+should raise `EdiParseError`, not hand back broken X12."""
 
 import random
 

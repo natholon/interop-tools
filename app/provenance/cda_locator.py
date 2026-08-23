@@ -1,57 +1,49 @@
 """Resolves a C-CDA `source_location` string - produced by
-`app/provenance/location.py::xpath_location()`, e.g. `"act/
-entryRelationship[SUBJ]/observation/value/@code"` - to its exact character
-span in the raw XML text, for the Data Specification page's correlated
-highlighting.
+`location.py::xpath_location()`, e.g.
+`"act/entryRelationship[SUBJ]/observation/value/@code"` - to its exact
+character span in the raw XML, for the correlated-highlighting view.
 
-**Deliberately independent of `app/cda/parser.py::parse_document`** (which
-returns a plain `xml.etree.ElementTree.Element` with no position
-information at all, and is the well-tested real conversion path this
-module must not risk regressing). Re-parses the raw text a second time
-using `xml.parsers.expat` directly, the only stdlib layer that exposes
-character positions during parsing (`parser.CurrentByteIndex` - confirmed
-by direct construction to be a Python *string* character offset, not a
-UTF-8 *byte* offset, despite the attribute's name; verified against a
-non-ASCII fixture where the two diverge).
+**Deliberately independent of `app/cda/parser.py::parse_document`**, which
+returns a plain `ElementTree.Element` carrying no position information and
+is the real conversion path this must not risk regressing. This re-parses
+the raw text with `xml.parsers.expat`, the only stdlib layer exposing
+character positions during parsing.
 
-**The location-string grammar**, confirmed by enumerating every real
-`xpath_location(...)` call site across `app/cda/*.py`:
-```
-segment := TAG                # first (or only) child with this tag
-         | TAG[N]              # N-th (0-based) child sharing this tag,
-                                #   no filtering by attribute
-         | TAG[LABEL]           # child with this tag whose own @typeCode
-                                #   (or @classCode) == LABEL (non-numeric)
-         | TAG[LABEL][N]        # LABEL-filtered, then the N-th such match
-         | "@" ATTR              # an attribute of the *current* element
-                                 #   (must be the last segment)
-         | "text()"              # the current element's own direct text
-                                 #   content (must be the last segment)
-location := segment ("/" segment)*
-```
-A bare `TAG` and `TAG[0]` are equivalent (both mean "the first matching
-child") - most call sites write the bare form when a section only ever
-has one such child in practice.
+**`parser.CurrentByteIndex` is a character offset, not a byte offset**,
+despite the name - confirmed by direct construction against non-ASCII
+input, where the two diverge.
 
-**The cross-section root-tag collision, and how it's resolved**: several
-different C-CDA sections reuse the identical entry-container tag name for
-their own, entirely distinct entries - both Problems and Allergies use
-`<entry><act>...`, both Vital Signs and Results use `<entry><organizer>
-...`, and Discharge Summary's own Hospital Discharge Diagnosis section
-reuses Problems' own `<act>` shape byte-for-byte (see `app/cda/
-hospital_discharge_diagnosis.py`). Naively counting "the N-th `<act>` (or
-`<organizer>`) anywhere in the document" would interleave two unrelated
-sections' own entries and resolve to the wrong physical element whenever
-a document carries more than one of these sections at once - a real
-correctness bug, not a hypothetical one, since a typical CCD carries both
-Vital Signs and Results together. Fixed via an optional `scope_hint`
-parameter on `occurrence_count()`/`locate()`, resolved by `app/provenance/
-highlighting.py` from the Bundle's own resource graph (never guessed at
-here) and mapped, in this module only, to the real section-entry template
-ID via `_SCOPE_TEMPLATE_IDS` - reusing each C-CDA section module's own
-already-public `*_TEMPLATE_ID` constant, not a duplicated/guessed value.
-Candidate root elements are then filtered to those carrying a matching
-`<templateId root="...">` child before counting/selecting an occurrence."""
+The location-string grammar, confirmed by enumerating every real
+`xpath_location(...)` call site:
+
+    segment  := TAG              # first (or only) child with this tag
+              | TAG[N]           # N-th (0-based) child sharing this tag
+              | TAG[LABEL]       # child whose @typeCode (or @classCode)
+                                 #   == LABEL (non-numeric)
+              | TAG[LABEL][N]    # LABEL-filtered, then the N-th match
+              | "@" ATTR         # attribute of the current element
+                                 #   (must be last)
+              | "text()"         # the element's own direct text
+                                 #   (must be last)
+    location := segment ("/" segment)*
+
+A bare `TAG` and `TAG[0]` are equivalent; call sites write the bare form
+where a section only ever has one such child.
+
+**Cross-section root-tag collisions.** Different sections reuse the same
+entry-container tag: Problems and Allergies both use `<entry><act>`, Vital
+Signs and Results both use `<entry><organizer>`, and Hospital Discharge
+Diagnosis reuses Problems' `<act>` shape exactly. Counting "the N-th
+`<act>` in the document" therefore interleaves unrelated sections and
+resolves to the wrong element - which a typical CCD triggers, carrying
+both Vital Signs and Results.
+
+`scope_hint` on `occurrence_count()`/`locate()` fixes it: `highlighting.py`
+resolves it from the Bundle's resource graph, and `_SCOPE_TEMPLATE_IDS`
+maps it to the real section-entry template ID, reusing each section
+module's own public `*_TEMPLATE_ID`. Candidates are then filtered to those
+carrying a matching `<templateId root="...">` child before an occurrence
+is counted or selected."""
 
 import re
 import xml.parsers.expat

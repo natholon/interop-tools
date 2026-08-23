@@ -1,51 +1,45 @@
-"""What the C-CDA on FHIR IG actually says about each element this app
-drops, so the register can cite a verdict instead of "not yet checked".
+"""What the C-CDA on FHIR IG actually says about each element this app drops,
+so the register can cite a verdict instead of "not yet checked".
 
-Every entry here was read off the IG's own published mapping tables
-(`mappings/CF/*.csv` in HL7/ccda-on-fhir), whose `Approach` column is the
-authoritative signal:
+Every entry was read off the IG's published mapping tables
+(`mappings/CF/*.csv`), whose `Approach` column is the authoritative signal:
 
 - `source value` / `transform` / `fixed value` - the IG defines a FHIR
   target. If this app does not implement it, that is a **real gap**.
-- `not supported by target` - the IG states there is no FHIR element to
-  carry it. Dropping it matches the standard.
+- `not supported by target` - the IG states there is no element to carry
+  it. Dropping it matches the standard.
 
-An element with **no row at all** is also a real answer rather than an
-unchecked one, per the IG's own mappingGuidance:
+An element with **no row at all** is also a real answer, per the IG's own
+mappingGuidance:
 
     "If you have data in an input artifact that is defined in the source
     specification and for which no map is specified here, that means that
     this team did not find a target for which we could build consensus."
 
-That covers the CDA document header wholesale: the IG publishes no
-header mapping (confirmed by reading `CF-notes.md` and `mappingGuidance.md`
-directly - the CSVs are per clinical resource, and there is no header or
-Encounter CSV at all), so `ClinicalDocument/code`, `/title`,
-`/languageCode`, `/confidentialityCode` and a section's own `code`/`title`
-resolve to "no map specified" rather than to a gap.
+That settles the document header wholesale: the IG publishes no header or
+Encounter table at all (confirmed by reading `CF-notes.md` and
+`mappingGuidance.md`, and by listing the CSV directory), so
+`ClinicalDocument/code`, `/title`, `/languageCode`,
+`/confidentialityCode` and a section's own `code`/`title` are "no map
+specified" rather than gaps.
 
-**Keys are element shapes, matched most-specific-first**, because the same
-tag means different things at different depths - a Problem Concern Act's
-own `id` is "not supported by target" while the Problem Observation's `id`
-inside it maps to `Condition.identifier`.
+**Keys match most-specific-first**, because the same tag means different
+things at different depths - a Problem Concern Act's own `id` is "not
+supported by target" while the Problem Observation's `id` inside it maps
+to `Condition.identifier`.
 
-**A shape is not always enough, and a key that over-reaches is worse than
-no key at all.** Two GAP verdicts were withdrawn after they turned out to
-be matching a *different section's* element at the same depth: an Allergy
-Reaction Observation's `id` was being given the Problem Observation's
-verdict, and a Comment Activity's `code` was being given the Instruction
-act's. Telling those apart needs the templateId, which the drop register
-does not carry - so where a shape cannot distinguish them, no verdict is
-asserted and the honest "not yet checked" stands.
+**A shape alone is often not enough to identify what it is.**
+`entryRelationship/observation/id` matches both an Allergy Reaction
+Observation and a Problem Observation, and the IG answers them
+differently; two GAP verdicts were withdrawn for exactly that
+misattribution. A key may therefore name the templateId it read
+(`"<root>|<shape>"`); scoped keys are tried first and beat any unscoped
+one, and within each pass the longest matching suffix wins.
 
-**Scope, stated rather than implied.** The verdicts below come from the
-Patient and Problem-Condition tables plus the header guidance above.
-Allergy, Immunization, MedicationRequest and Procedure each publish their
-own CSV that has not been read into this table yet, and Vitals/Results/
-Encounters have narrative pages rather than CSVs. A shape with no entry
-here keeps the honest `DROP_NOT_YET_CHECKED` citation - the register says
-"unchecked" only where it genuinely is.
-"""
+A shape with no entry keeps the honest `DROP_NOT_YET_CHECKED` citation.
+No shape this app currently drops is in that state - see
+`test_every_drop_carries_a_checked_verdict`, which is what keeps it true
+as sections change."""
 
 from app.provenance.citations import (
     CDA_IG_DEFINES_TARGET,
