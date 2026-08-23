@@ -9,10 +9,13 @@ the pillar already produces:
 - **Inferred mappings** - every `ProvenanceEntry` with
   `derivation="inferred"` is, by definition, a value this app produced
   without a source field to point at. Those already carry a `reason`.
-- **Dropped source data** - components that were present in the source
-  message but never recorded as mapped. Derived by diffing the components
-  the raw message actually populates against the components the recorder
-  saw, using the datatype tables in `hl7_field_names.py`.
+- **Dropped source data** - source values that were present but never
+  recorded as mapped. Derived by diffing what the raw message populates
+  against what the recorder saw. This half is per format, since each
+  splits its raw text differently: HL7v2 on `|`/`~`/`^`, X12 on the ISA's
+  own self-declared delimiters. C-CDA has no scan yet - an XML location
+  has no positional inverse the way a HL7v2 field or X12 element does (see
+  `cda_locator.py`), so a CDA document reports inferred decisions only.
 
 **The join problem, and why it needs an explicit allowance.** Some mappers
 read several components and collapse them into one value (PV1-3's point of
@@ -29,9 +32,12 @@ import re
 
 from pydantic import BaseModel
 
+from app.edi.parser import read_isa_delimiters, split_segments, strip_bom_and_whitespace
 from app.hl7.parser import normalize_segment_separators, truncate_to_first_message
 from app.provenance.citations import Citation, DEFAULT_BY_FORMAT, DROP_NOT_YET_CHECKED
 from app.provenance.hl7_field_names import SEGMENT_FIELD_NAMES, component_names_for_field
+from app.provenance.edi_field_names import resolve_edi_field_label
+from app.provenance.edi_locator import ParsedEdiLocation, parse_edi_location
 from app.provenance.hl7_locator import parse_hl7_location
 from app.provenance.models import CrosswalkReport
 
@@ -241,14 +247,25 @@ def _dropped_decisions(
     return decisions
 
 
-def compute_decisions(
-    report: CrosswalkReport, populated_components: dict[tuple[str, int, int], dict[int, str]] | None = None
-) -> list[MappingDecision]:
+def compute_decisions(report: CrosswalkReport, raw_text: str | None = None) -> list[MappingDecision]:
     """Inferred mappings first, then dropped source data - the order a
-    reviewer reads them in (what the app added, then what it discarded)."""
+    reviewer reads them in (what the app added, then what it discarded).
+
+    The dropped half needs the raw source to diff against, and each format
+    splits it differently, so the branch lives here rather than in every
+    caller. C-CDA has no scan yet: an XML location cannot be parsed
+    backward into a fixed grammar the way a positional HL7v2 field or X12
+    element can (see `app/provenance/cda_locator.py`), so it reports
+    inferred decisions only - stated rather than silently returning a
+    shorter list.
+    """
     decisions = _inferred_decisions(report)
-    if populated_components:
-        decisions.extend(_dropped_decisions(report, populated_components))
+    if not raw_text:
+        return decisions
+    if report.source_format == "HL7v2":
+        decisions.extend(_dropped_decisions(report, scan_populated_components(raw_text)))
+    elif report.source_format == "EDI":
+        decisions.extend(_dropped_edi_decisions(report, scan_populated_edi_elements(raw_text)))
     return decisions
 
 
@@ -293,6 +310,192 @@ def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int], dict[
                 if values:
                     populated[(segment_id, field_index, repetition)] = values
     return populated
+
+
+# --- X12 EDI -----------------------------------------------------------
+
+# Envelope segments: pure interchange structure, carrying no clinical or
+# administrative content a mapper could lose.
+_EDI_ENVELOPE_SEGMENTS = frozenset({"ISA", "GS", "ST", "SE", "GE", "IEA"})
+
+# Elements consumed rather than lost: they select where another element's
+# value goes, or wire the HL loop tree the resolvers walk. Same discipline
+# as UNMAPPABLE_FIELDS above - each entry states what consumes it, and
+# anything unlisted is reported.
+UNMAPPABLE_EDI_ELEMENTS: dict[tuple[str, int], str] = {
+    # HL hierarchy: parsed into the loop tree by group_by_hl_hierarchy and
+    # resolved by each family's own resolve_*_loops.
+    ("HL", 1): "Loop id, consumed building the HL tree",
+    ("HL", 2): "Parent loop pointer, consumed building the HL tree",
+    ("HL", 3): "Level code, selects which loop this is",
+    ("HL", 4): "Has-child flag, consumed building the HL tree",
+    # BHT: transaction structure/purpose, not payload. BHT03/04/05 are
+    # mapped (Bundle.identifier/timestamp) and so are not listed.
+    ("BHT", 1): "Hierarchical structure code",
+    ("BHT", 2): "Purpose code, selects request vs response for 278",
+    ("BHT", 6): "Transaction type code",
+    # NM1 qualifiers: which entity this loop is, and which system its id is
+    # on - both consumed by resolve_id_qualifier_system and the loop
+    # resolvers rather than mapped to a field of their own.
+    ("NM1", 1): "Entity identifier code, selects which loop this NM1 is",
+    ("NM1", 2): "Entity type qualifier, selects Organization vs Practitioner",
+    ("NM1", 8): "Identification code qualifier, selects Identifier.system",
+    # N1 (835 only) mirrors NM1's qualifiers at its own positions.
+    ("N1", 1): "Entity identifier code, selects which party this N1 is",
+    ("N1", 3): "Identification code qualifier, selects Identifier.system",
+    # Line/loop counters.
+    ("LX", 1): "Service line counter",
+    ("TRN", 1): "Trace type code, selects what the trace number identifies",
+    # Selects the tooth numbering system for TOO02 ("JP" -> ADA Universal).
+    ("TOO", 1): "Tooth numbering system qualifier",
+    # Qualifier elements that select how the element beside them is read.
+    ("DTP", 1): "Date/time qualifier, selects which date this is",
+    ("DTP", 2): "Date/time format qualifier",
+    ("DMG", 1): "Date/time format qualifier for DMG02",
+}
+
+# The same idea one level down, for a qualifier that sits inside a
+# composite. An element number of `None` means "component N of any element
+# of this segment" - HI repeats one composite shape across HI01, HI02, ...,
+# one per diagnosis, so its qualifier cannot be pinned to a position.
+UNMAPPABLE_EDI_COMPONENTS: dict[tuple[str, int | None, int], str] = {
+    # app.edi.common.HI_QUALIFIER_SYSTEM reads this to choose ICD-10-CM vs
+    # ICD-9-CM for the code beside it.
+    ("HI", None, 1): "Diagnosis code qualifier, selects the code system",
+    # Says how to read CLM05-1, which is itself mapped to Claim.item
+    # locationCodeableConcept.
+    ("CLM", 5, 2): "Facility code qualifier for CLM05-1",
+    # Selects the procedure code system beside it (CPT/HCPCS for 837P/I,
+    # CDT for 837D) - see app.edi.claim_837p.PROCEDURE_QUALIFIER_FALLBACK_SYSTEM.
+    ("SV1", 1, 1): "Procedure code qualifier, selects the code system",
+    ("SV2", 2, 1): "Procedure code qualifier, selects the code system",
+    ("SV3", 1, 1): "Procedure code qualifier, selects the code system",
+}
+
+
+def _is_unmappable_edi(segment_id: str, element_num: int, component: int | None) -> bool:
+    if (segment_id, element_num) in UNMAPPABLE_EDI_ELEMENTS:
+        return True
+    if component is None:
+        return False
+    return (
+        (segment_id, element_num, component) in UNMAPPABLE_EDI_COMPONENTS
+        or (segment_id, None, component) in UNMAPPABLE_EDI_COMPONENTS
+    )
+
+def scan_populated_edi_elements(raw_text: str) -> dict[tuple[str, int, int, int | None], str]:
+    """(segment_id, occurrence, element, component) -> value, for every
+    non-empty element in the interchange.
+
+    `occurrence` is the index among segments sharing that id, so each
+    physical segment reports its own drops with its own value - X12 repeats
+    whole *segments* where HL7v2 repeats fields, and an 837P carries six
+    NM1 loops.
+
+    Envelope segments are skipped: ISA/GS/ST/SE/GE/IEA are interchange
+    structure, and reporting them would bury real findings under control
+    numbers.
+    """
+    delimiters = read_isa_delimiters(raw_text)
+    populated: dict[tuple[str, int, int, int | None], str] = {}
+    seen_count: dict[str, int] = {}
+    for segment in split_segments(strip_bom_and_whitespace(raw_text), delimiters):
+        segment_id = segment[0]
+        if segment_id in _EDI_ENVELOPE_SEGMENTS:
+            continue
+        occurrence = seen_count.get(segment_id, 0)
+        seen_count[segment_id] = occurrence + 1
+        for element_num, element_text in enumerate(segment[1:], start=1):
+            if not element_text:
+                continue
+            parts = element_text.split(delimiters.component)
+            if len(parts) == 1:
+                populated[(segment_id, occurrence, element_num, None)] = element_text
+                continue
+            for component_num, value in enumerate(parts, start=1):
+                if value:
+                    populated[(segment_id, occurrence, element_num, component_num)] = value
+    return populated
+
+
+def _mapped_edi_elements(report: CrosswalkReport) -> set[tuple[str, int, int | None]]:
+    """(segment_id, element, component) the recorder saw - deliberately
+    **not** keyed by which physical segment it came from.
+
+    **Disclosed limitation.** No `edi_location()` string carries a segment
+    occurrence (only `HI` and 837D's claim-level DTP use
+    `segment_repetition` at all), so "NM1-3" cannot be attributed to one of
+    an 837P's six NM1 loops. Consumption is therefore aggregated by
+    element: an element some mapper reads on *any* occurrence counts as
+    read on *every* occurrence of that segment id.
+
+    The trade is deliberate. Attributing per occurrence would need the
+    occurrence-claiming resolver in `highlighting.py`, and getting it wrong
+    reports five of six NM1 loops as wholly dropped - a register that cries
+    wolf gets ignored, so this errs toward under-reporting. What it can
+    miss: element E read on one loop and populated-but-unmapped on another.
+    """
+    seen: set[tuple[str, int, int | None]] = set()
+    for entry in report.entries:
+        if not entry.source_location:
+            continue
+        # A value built from more than one element is recorded against a
+        # compound location ("BHT-4+BHT-5" for a date and time combined into
+        # Bundle.timestamp). Each side is a real element that was read, so
+        # both must count as consumed - parsing only the whole string sees
+        # neither, and the register then reports the timestamp's own source
+        # elements as dropped.
+        for part in entry.source_location.split("+"):
+            parsed = parse_edi_location(part.strip())
+            if parsed is not None:
+                seen.add((parsed.segment_id, parsed.element_num, parsed.component))
+    return seen
+
+
+def _dropped_edi_decisions(
+    report: CrosswalkReport, populated: dict[tuple[str, int, int, int | None], str]
+) -> list[MappingDecision]:
+    mapped = _mapped_edi_elements(report)
+    decisions = []
+    for key, value in sorted(populated.items()):
+        segment_id, occurrence, element_num, component = key
+        if _is_unmappable_edi(segment_id, element_num, component):
+            continue
+        # A whole-element record covers every component of it; a
+        # component-level record covers only its own.
+        if (segment_id, element_num, None) in mapped:
+            continue
+        if component is not None and (segment_id, element_num, component) in mapped:
+            continue
+        if component is None and any(
+            sid == segment_id and num == element_num for sid, num, _ in mapped
+        ):
+            continue
+        rep = _repetition_suffix(occurrence)
+        location = f"{segment_id}{rep}-{element_num}"
+        if component is not None:
+            location = f"{location}.{component}"
+        label = resolve_edi_field_label(
+            ParsedEdiLocation(
+                segment_id=segment_id,
+                segment_repetition=None,
+                element_num=element_num,
+                component=component,
+            )
+        )
+        decisions.append(
+            MappingDecision(
+                id=_decision_id("dropped", location),
+                kind="dropped",
+                summary=f"{location} is present in the source but not mapped to any FHIR field.",
+                detail=f"{label} carried {value!r}." if label else f"The element carried {value!r}.",
+                source_location=location,
+                field_label=label,
+                lost_value=value,
+                citation=DROP_NOT_YET_CHECKED,
+            )
+        )
+    return decisions
 
 
 DATA_ABSENT_REASON_URL = "http://hl7.org/fhir/StructureDefinition/data-absent-reason"

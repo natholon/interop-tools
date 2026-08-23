@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from app.provenance.decisions import apply_rejections, compute_decisions, scan_populated_components
+from app.provenance.decisions import apply_rejections, compute_decisions
 from app.provenance.dispatch import convert_with_provenance
 from app.provenance.highlighting import build_highlighting_payload
 from app.routes.errors import ERROR_STATUS, resolve_raw_text
@@ -70,8 +70,7 @@ def _run_crosswalk(
     # The reviewable decision register: everything this conversion
     # inferred or dropped, computed rather than declared (see
     # app/provenance/decisions.py).
-    populated = scan_populated_components(raw_text) if report.source_format == "HL7v2" else None
-    decisions = compute_decisions(report, populated)
+    decisions = compute_decisions(report, raw_text)
 
     bundle_dict = json.loads(bundle.model_dump_json(exclude_none=True))
     outcomes = []

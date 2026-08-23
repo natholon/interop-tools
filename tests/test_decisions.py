@@ -29,7 +29,7 @@ def _segment(segment_id: str, fields: dict[int, str]) -> str:
 
 def _decisions(message: str):
     _, report, _ = convert_with_provenance(message)
-    return compute_decisions(report, scan_populated_components(message))
+    return compute_decisions(report, message)
 
 
 def _by_location(decisions):
@@ -193,7 +193,7 @@ def test_multi_segment_marker_location_counts_the_field_as_mapped():
     # reported the document text itself as dropped data.
     raw = open("tests/fixtures/mdm_t02_basic.hl7").read()
     _, report, _ = convert_with_provenance(raw)
-    decisions = compute_decisions(report, scan_populated_components(raw))
+    decisions = compute_decisions(report, raw)
     assert any(e.source_location and e.source_location.startswith("OBX-5 (") for e in report.entries)
     assert not [d for d in decisions if (d.source_location or "").startswith("OBX-5")]
 
@@ -223,7 +223,7 @@ from app.generators.registry import generate
 
 def _converted(message: str):
     bundle, report, _ = convert_with_provenance(message)
-    decisions = _compute(report, scan_populated_components(message))
+    decisions = _compute(report, message)
     return json.loads(bundle.model_dump_json(exclude_none=True)), decisions
 
 
@@ -284,3 +284,94 @@ def test_unrejected_decisions_leave_the_bundle_untouched():
     result, outcomes = apply_rejections(bundle, decisions, set())
     assert json.dumps(result, sort_keys=True) == before
     assert outcomes == []
+
+
+# --- X12 EDI ---------------------------------------------------------
+
+from pathlib import Path
+
+from app.provenance.decisions import scan_populated_edi_elements
+
+_EDI_FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _edi_decisions(fixture: str):
+    raw = (_EDI_FIXTURES / fixture).read_text()
+    _, report, _ = convert_with_provenance(raw)
+    return compute_decisions(report, raw)
+
+
+def test_edi_reports_dropped_elements():
+    # 837P leaves CLM06-CLM09 and the REF segments unmapped by design; the
+    # register must say so rather than reporting nothing at all, which is
+    # what every EDI message did before the dropped half covered X12.
+    decisions = _edi_decisions("edi_837p_basic.x12")
+    dropped = _by_location([d for d in decisions if d.kind == "dropped"])
+    assert dropped, "an 837P drops real elements"
+    assert "CLM-7" in dropped
+    assert dropped["CLM-7"].lost_value == "A"
+
+
+def test_edi_mapped_elements_are_not_reported_as_dropped():
+    decisions = _edi_decisions("edi_837p_basic.x12")
+    reported = set(_by_location(decisions))
+    # Each of these is genuinely read by app/edi/claim_837p.py.
+    for location in ("CLM-1", "CLM-2", "CLM-5.1", "SV1-2", "SV1-7", "NM1-3", "NM1-9"):
+        assert location not in reported, location
+
+
+def test_edi_compound_marker_location_counts_both_elements_as_mapped():
+    # Bundle.timestamp is recorded against "BHT-4+BHT-5", which
+    # parse_edi_location cannot read - so neither element looked mapped and
+    # both were reported as dropped.
+    raw = (_EDI_FIXTURES / "edi_270_basic.x12").read_text()
+    _, report, _ = convert_with_provenance(raw)
+    assert any(e.source_location == "BHT-4+BHT-5" for e in report.entries)
+    decisions = compute_decisions(report, raw)
+    reported = set(_by_location(decisions))
+    assert "BHT-4" not in reported
+    assert "BHT-5" not in reported
+
+
+def test_edi_qualifier_elements_are_not_reported_as_drops():
+    # Qualifiers select how the value beside them is read - consumed, not
+    # lost. HI's sits inside a composite repeated across HI01, HI02, ...
+    decisions = _edi_decisions("edi_837p_basic.x12")
+    reported = set(_by_location(decisions))
+    assert "HI-1.1" not in reported
+    assert "HI-2.1" not in reported
+    assert "CLM-5.2" not in reported
+    assert "SV1-1.1" not in reported
+
+
+def test_edi_repeated_segments_get_distinct_locations_and_ids():
+    # X12 repeats whole segments where HL7v2 repeats fields - an 837P
+    # carries several REF/N3/N4 segments, and each must report its own drop
+    # rather than colliding onto one id.
+    decisions = _edi_decisions("edi_837p_basic.x12")
+    n4 = [d for d in decisions if (d.source_location or "").startswith("N4")]
+    assert len(n4) > 3
+    assert len({d.id for d in n4}) == len(n4)
+    assert any("[1]" in (d.source_location or "") for d in n4)
+
+
+def test_edi_envelope_segments_are_never_reported():
+    decisions = _edi_decisions("edi_835_basic.x12")
+    reported = set(_by_location(decisions))
+    assert not [loc for loc in reported if loc.split("[")[0].split("-")[0] in {"ISA", "GS", "ST", "SE", "GE", "IEA"}]
+
+
+def test_edi_scan_skips_envelope_and_indexes_repeated_segments():
+    raw = (_EDI_FIXTURES / "edi_837p_basic.x12").read_text()
+    populated = scan_populated_edi_elements(raw)
+    assert not [k for k in populated if k[0] in {"ISA", "GS", "ST", "SE", "GE", "IEA"}]
+    occurrences = {occ for sid, occ, _, _ in populated if sid == "NM1"}
+    assert occurrences == set(range(len(occurrences))) and len(occurrences) > 1
+
+
+def test_cda_reports_inferred_only_and_does_not_crash():
+    # C-CDA has no dropped-data scan yet (an XML location has no positional
+    # inverse), so it must degrade to inferred-only rather than raising.
+    decisions = _edi_decisions("ccd_vitals_basic.xml")
+    assert decisions
+    assert all(d.kind == "inferred" for d in decisions)
