@@ -92,12 +92,15 @@ UNMAPPABLE_FIELDS: dict[tuple[str, int], str] = {
     # The trigger event is read from MSH-9, which selects the mapper - EVN-1
     # restates it and is not a second, unmapped value.
     ("EVN", 1): "Read from MSH-9",
-    # Control fields: fully consumed to decide where another field's value
-    # goes, so they are mapped rather than lost, but there is no FHIR path
-    # of their own to record them against.
+}
+
+# Qualifier fields, which are **conditional** the same way X12's are (see
+# EDI_QUALIFIER_OF): consumed only when the field they qualify was itself
+# mapped. Maps (segment, field) -> the field it qualifies.
+HL7_QUALIFIER_OF: dict[tuple[str, int], int] = {
     # app.mappings.oru._build_observation_value branches on OBX-2 to pick
     # which Observation.value[x] OBX-5 populates.
-    ("OBX", 2): "Selects which Observation.value[x] OBX-5 populates",
+    ("OBX", 2): 5,
 }
 
 
@@ -196,14 +199,28 @@ def _dropped_decisions(
         segment_id, occurrence, field, repetition = key
         if (segment_id, field) in UNMAPPABLE_FIELDS:
             continue
+        # A qualifier is consumed only when the field it qualifies was
+        # itself mapped - see EDI_QUALIFIER_OF for the same rule and the
+        # bug that motivated it.
+        qualified = HL7_QUALIFIER_OF.get((segment_id, field))
+        if qualified is not None and any(
+            sid == segment_id and num == qualified for sid, num, _ in mapped
+        ):
+            continue
+
         # Consumption is looked up without the segment occurrence, because
         # no hl7_location() string carries one - "OBX-5" cannot say which
         # of an ORU's OBX segments it came from. Same aggregation, and same
         # disclosed trade, as the X12 half: rows are per occurrence, but an
         # element read on any occurrence counts as read on all of them.
-        consumed = set(mapped.get((segment_id, field, repetition), set())) | JOINED_FIELDS.get(
-            (segment_id, field), set()
-        )
+        recorded = mapped.get((segment_id, field, repetition), set())
+        # The joined-components allowance is conditional too: it exists so a
+        # mapper that collapses several components into one value does not
+        # look like it dropped the rest. Where *nothing* read the field, it
+        # collapsed nothing - MDM never reads PV1-3, so suppressing its
+        # point-of-care and room hid real drops.
+        joined = JOINED_FIELDS.get((segment_id, field), set()) if recorded else set()
+        consumed = set(recorded) | joined
         if _WHOLE_FIELD_MAPPED in consumed:
             continue
 
@@ -337,10 +354,9 @@ def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int, int], 
 # administrative content a mapper could lose.
 _EDI_ENVELOPE_SEGMENTS = frozenset({"ISA", "GS", "ST", "SE", "GE", "IEA"})
 
-# Elements consumed rather than lost: they select where another element's
-# value goes, or wire the HL loop tree the resolvers walk. Same discipline
-# as UNMAPPABLE_FIELDS above - each entry states what consumes it, and
-# anything unlisted is reported.
+# Elements that are pure transaction structure - never payload, whatever
+# the transaction set. Same discipline as UNMAPPABLE_FIELDS above: each
+# entry states what consumes it, and anything unlisted is reported.
 UNMAPPABLE_EDI_ELEMENTS: dict[tuple[str, int], str] = {
     # HL hierarchy: parsed into the loop tree by group_by_hl_hierarchy and
     # resolved by each family's own resolve_*_loops.
@@ -353,54 +369,53 @@ UNMAPPABLE_EDI_ELEMENTS: dict[tuple[str, int], str] = {
     ("BHT", 1): "Hierarchical structure code",
     ("BHT", 2): "Purpose code, selects request vs response for 278",
     ("BHT", 6): "Transaction type code",
-    # NM1 qualifiers: which entity this loop is, and which system its id is
-    # on - both consumed by resolve_id_qualifier_system and the loop
-    # resolvers rather than mapped to a field of their own.
+    # Which loop/role this segment is - consumed by the loop resolvers to
+    # decide what to build, not a value of its own.
     ("NM1", 1): "Entity identifier code, selects which loop this NM1 is",
     ("NM1", 2): "Entity type qualifier, selects Organization vs Practitioner",
-    ("NM1", 8): "Identification code qualifier, selects Identifier.system",
-    # N1 (835 only) mirrors NM1's qualifiers at its own positions.
     ("N1", 1): "Entity identifier code, selects which party this N1 is",
-    ("N1", 3): "Identification code qualifier, selects Identifier.system",
-    # Line/loop counters.
+    # Line counter.
     ("LX", 1): "Service line counter",
-    ("TRN", 1): "Trace type code, selects what the trace number identifies",
-    # Selects the tooth numbering system for TOO02 ("JP" -> ADA Universal).
-    ("TOO", 1): "Tooth numbering system qualifier",
-    # Qualifier elements that select how the element beside them is read.
-    ("DTP", 1): "Date/time qualifier, selects which date this is",
-    ("DTP", 2): "Date/time format qualifier",
-    ("DMG", 1): "Date/time format qualifier for DMG02",
 }
 
-# The same idea one level down, for a qualifier that sits inside a
-# composite. An element number of `None` means "component N of any element
-# of this segment" - HI repeats one composite shape across HI01, HI02, ...,
-# one per diagnosis, so its qualifier cannot be pinned to a position.
-UNMAPPABLE_EDI_COMPONENTS: dict[tuple[str, int | None, int], str] = {
-    # app.edi.common.HI_QUALIFIER_SYSTEM reads this to choose ICD-10-CM vs
-    # ICD-9-CM for the code beside it.
-    ("HI", None, 1): "Diagnosis code qualifier, selects the code system",
-    # Says how to read CLM05-1, which is itself mapped to Claim.item
-    # locationCodeableConcept.
-    ("CLM", 5, 2): "Facility code qualifier for CLM05-1",
-    # Selects the procedure code system beside it (CPT/HCPCS for 837P/I,
-    # CDT for 837D) - see app.edi.claim_837p.PROCEDURE_QUALIFIER_FALLBACK_SYSTEM.
-    ("SV1", 1, 1): "Procedure code qualifier, selects the code system",
-    ("SV2", 2, 1): "Procedure code qualifier, selects the code system",
-    ("SV3", 1, 1): "Procedure code qualifier, selects the code system",
+# Qualifiers, which are **conditional**: an element that says how to read
+# the element beside it is consumed only if that element was actually
+# mapped. Listing them as unconditionally-unmappable hid real data - 837I
+# never reads CLM05 at all, so its CLM05-2 qualifies nothing, yet it was
+# suppressed while the CLM05-1 it supposedly qualified was reported as
+# dropped. Maps (segment, element, component) -> the (element, component)
+# it qualifies; `None` on either side of the key means "any", and a target
+# element of `None` means "the same element this qualifier sits in".
+EDI_QUALIFIER_OF: dict[tuple[str, int | None, int | None], tuple[int | None, int | None]] = {
+    ("NM1", 8, None): (9, None),      # id qualifier -> the id it types
+    ("N1", 3, None): (4, None),
+    ("TRN", 1, None): (2, None),      # trace type -> the trace number
+    ("DTP", 1, None): (3, None),      # which date / how formatted -> the date
+    ("DTP", 2, None): (3, None),
+    ("DMG", 1, None): (2, None),
+    ("TOO", 1, None): (2, None),      # tooth numbering system -> tooth number
+    ("CLM", 5, 2): (5, 1),            # facility code qualifier -> place of service
+    ("SV1", 1, 1): (1, 2),            # procedure code qualifier -> the code
+    ("SV2", 2, 1): (2, 2),
+    ("SV3", 1, 1): (1, 2),
+    # HI repeats one composite across HI01, HI02, ... - one per diagnosis -
+    # so its qualifier cannot be pinned to an element position.
+    ("HI", None, 1): (None, 2),
 }
 
 
-def _is_unmappable_edi(segment_id: str, element_num: int, component: int | None) -> bool:
-    if (segment_id, element_num) in UNMAPPABLE_EDI_ELEMENTS:
-        return True
-    if component is None:
-        return False
-    return (
-        (segment_id, element_num, component) in UNMAPPABLE_EDI_COMPONENTS
-        or (segment_id, None, component) in UNMAPPABLE_EDI_COMPONENTS
-    )
+def _edi_qualifier_target(
+    segment_id: str, element_num: int, component: int | None
+) -> tuple[int, int | None] | None:
+    """The (element, component) this one qualifies, or None if it is not a
+    qualifier at all."""
+    for key in ((segment_id, element_num, component), (segment_id, None, component)):
+        target = EDI_QUALIFIER_OF.get(key)
+        if target is None:
+            continue
+        target_element, target_component = target
+        return (element_num if target_element is None else target_element, target_component)
+    return None
 
 def scan_populated_edi_elements(raw_text: str) -> dict[tuple[str, int, int, int | None], str]:
     """(segment_id, occurrence, element, component) -> value, for every
@@ -475,20 +490,29 @@ def _dropped_edi_decisions(
     report: CrosswalkReport, populated: dict[tuple[str, int, int, int | None], str]
 ) -> list[MappingDecision]:
     mapped = _mapped_edi_elements(report)
-    decisions = []
-    for key, value in sorted(populated.items()):
-        segment_id, occurrence, element_num, component = key
-        if _is_unmappable_edi(segment_id, element_num, component):
-            continue
+
+    def is_mapped(element_num: int, component: int | None) -> bool:
         # A whole-element record covers every component of it; a
         # component-level record covers only its own.
         if (segment_id, element_num, None) in mapped:
+            return True
+        if component is not None:
+            return (segment_id, element_num, component) in mapped
+        return any(sid == segment_id and num == element_num for sid, num, _ in mapped)
+
+    decisions = []
+    for key, value in sorted(populated.items()):
+        segment_id, occurrence, element_num, component = key
+        if (segment_id, element_num) in UNMAPPABLE_EDI_ELEMENTS:
             continue
-        if component is not None and (segment_id, element_num, component) in mapped:
+        if is_mapped(element_num, component):
             continue
-        if component is None and any(
-            sid == segment_id and num == element_num for sid, num, _ in mapped
-        ):
+        # A qualifier is consumed only when the element it qualifies was
+        # actually mapped. Suppressing it unconditionally hid real drops
+        # for any transaction set that never reads the target - 837I never
+        # reads CLM05, so its CLM05-2 qualifies nothing.
+        target = _edi_qualifier_target(segment_id, element_num, component)
+        if target is not None and is_mapped(*target):
             continue
         rep = _repetition_suffix(occurrence)
         location = f"{segment_id}{rep}-{element_num}"

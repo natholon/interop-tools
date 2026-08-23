@@ -402,3 +402,49 @@ def test_cda_reports_inferred_only_and_does_not_crash():
     decisions = _edi_decisions("ccd_vitals_basic.xml")
     assert decisions
     assert all(d.kind == "inferred" for d in decisions)
+
+
+def test_edi_qualifier_is_reported_when_its_target_is_unmapped():
+    # A qualifier is only "consumed" if the element it qualifies was
+    # actually mapped. 837I never reads CLM05, so its CLM05-2 qualifies
+    # nothing - suppressing it unconditionally hid real data while the
+    # CLM05-1 it supposedly qualified was itself reported as dropped.
+    reported = set(_by_location(_edi_decisions("edi_837i_basic.x12")))
+    assert "CLM-5.1" in reported
+    assert "CLM-5.2" in reported
+
+    # 837P does read CLM05-1, so there the qualifier really is consumed.
+    reported_837p = set(_by_location(_edi_decisions("edi_837p_basic.x12")))
+    assert "CLM-5.1" not in reported_837p
+    assert "CLM-5.2" not in reported_837p
+
+
+def test_joined_field_allowance_applies_only_where_something_read_the_field():
+    # JOINED_FIELDS exists so a mapper that collapses several components
+    # into one value does not look like it dropped the rest. Where nothing
+    # read the field it collapsed nothing: MDM never reads PV1-3, so
+    # suppressing its point-of-care and room hid real drops.
+    raw = (Path(__file__).parent / "fixtures" / "mdm_t02_basic.hl7").read_text()
+    _, report, _ = convert_with_provenance(raw)
+    assert not any((e.source_location or "").startswith("PV1-3") for e in report.entries)
+    reported = _by_location(compute_decisions(report, raw))
+    assert "PV1-3" in reported
+    assert reported["PV1-3"].lost_value.startswith("W789^105")
+
+    # ADT does read every PL component, so nothing is reported there.
+    adt = (Path(__file__).parent / "fixtures" / "adt_a01_basic.hl7").read_text()
+    _, adt_report, _ = convert_with_provenance(adt)
+    adt_reported = _by_location(compute_decisions(adt_report, adt))
+    assert not [loc for loc in adt_reported if loc.startswith("PV1-3")]
+
+
+def test_cda_produces_no_dropped_decisions_at_all():
+    # Pins the disclosed state: C-CDA has no dropped-data scan, so it can
+    # never *hide* a drop behind an exclusion the way the other two formats
+    # could - there is nothing to suppress. If a CDA scan is added later,
+    # this test should be replaced rather than deleted.
+    raw = (Path(__file__).parent / "fixtures" / "ccd_vitals_basic.xml").read_text()
+    _, report, _ = convert_with_provenance(raw)
+    decisions = compute_decisions(report, raw)
+    assert decisions
+    assert {d.kind for d in decisions} == {"inferred"}
