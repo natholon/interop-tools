@@ -559,30 +559,48 @@ def test_cda_drops_cite_a_real_ig_verdict_not_unchecked():
     assert any("not supported by target" in t for t in titles)
 
 
-def test_cda_ig_defined_target_is_reported_as_a_gap():
-    """The Problem Observation's own id maps to Condition.identifier as a
-    source value in the IG's Problem-Condition table, and this app does not
-    build it - a real gap, distinct from an element the standard itself
-    declines to map."""
+def test_cda_entry_identifiers_are_built_closing_the_ig_gap():
+    """The IG maps each entry's own <id> as a source value to that
+    resource's .identifier. Procedure built it; Condition, MedicationRequest,
+    Immunization and AllergyIntolerance did not, which the register reported
+    as gaps against the standard. Implementing them is what closed those."""
+    import json
+
+    for fixture, resource_type in [
+        ("ccd_basic.xml", "Condition"),
+        ("ccd_medications_basic.xml", "MedicationRequest"),
+        ("ccd_immunizations_basic.xml", "Immunization"),
+        ("ccd_allergies_basic.xml", "AllergyIntolerance"),
+        ("ccd_procedures_basic.xml", "Procedure"),
+    ]:
+        raw = (Path(__file__).parent / "fixtures" / fixture).read_text()
+        bundle, _, _ = convert_with_provenance(raw)
+        built = json.loads(bundle.model_dump_json(exclude_none=True))
+        identifiers = [
+            e["resource"].get("identifier")
+            for e in built["entry"]
+            if e["resource"]["resourceType"] == resource_type
+        ]
+        assert identifiers and all(identifiers), f"{resource_type} must carry the entry id"
+
+    # And the register no longer reports them as gaps.
     gaps = [d for d in _cda_decisions("ccd_basic.xml") if d.summary.startswith("GAP:")]
-    assert gaps, "ccd_basic drops the Problem Observation id"
-    gap = gaps[0]
-    assert gap.source_location.endswith("observation/id")
-    assert gap.citation.authoritative is True
-    assert "Condition.identifier" in (gap.detail or "")
+    assert not [g for g in gaps if g.source_location.endswith("observation/id")]
 
 
-def test_cda_concern_act_id_is_not_a_gap_though_the_observation_id_is():
+def test_cda_concern_act_id_and_observation_id_get_different_verdicts():
     """The same tag at different depths gets different verdicts: the
     Concern Act's own id is marked "not supported by target" while the
     Problem Observation's id inside it maps. Longest-suffix matching is
     what keeps those apart."""
     by_loc = _by_location(_cda_decisions("ccd_basic.xml"))
     act_id = next(d for loc, d in by_loc.items() if loc.endswith("entry/act/id"))
-    obs_id = next(d for loc, d in by_loc.items() if loc.endswith("observation/id"))
     assert "not supported by target" in act_id.citation.title
     assert not act_id.summary.startswith("GAP:")
-    assert obs_id.summary.startswith("GAP:")
+    # The Problem Observation's own id, one level in, is now built - so it
+    # is not reported at all, while the Concern Act's still is. Same tag,
+    # different depth, different outcome.
+    assert not [loc for loc in by_loc if loc.endswith("observation/id")]
 
 
 def test_cda_unsourced_shape_still_says_unchecked():
@@ -594,3 +612,15 @@ def test_cda_unsourced_shape_still_says_unchecked():
     assert verdict is None
     assert citation.authoritative is False
     assert "not yet checked" in citation.title.lower()
+
+
+def test_edi_drops_cite_the_missing_crosswalk_not_unchecked():
+    """X12 publishes no FHIR crosswalk at all, so "not yet checked" would
+    imply pending work that cannot be done. The honest citation is that no
+    authoritative crosswalk exists - which is also why it is the one
+    citation here marked non-authoritative by design."""
+    decisions = _edi_decisions("edi_837i_basic.x12")
+    dropped = [d for d in decisions if d.kind == "dropped"]
+    assert dropped
+    assert all("No official X12-to-FHIR crosswalk" in d.citation.title for d in dropped)
+    assert all(d.citation.authoritative is False for d in dropped)

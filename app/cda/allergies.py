@@ -11,7 +11,13 @@ from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, effective_time_location, find_nested_observation, parse_partial_ts
+from app.cda.common import (
+    build_codeable_concept_from_cd,
+    build_identifiers,
+    effective_time_location,
+    find_nested_observation,
+    parse_partial_ts,
+)
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
 from app.cda.problems import STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS as _PROBLEM_STATUS_MAP
 from app.provenance.location import xpath_location
@@ -269,6 +275,21 @@ def _build_allergy_intolerance(allergy_observation, patient_id: str, recorder=No
         code=code,
         clinicalStatus=clinical_status,
     )
+
+
+    # The IG maps the Allergy - Intolerance Observation's own <id> as a
+    # source value to AllergyIntolerance.identifier. Procedure already
+    # built its identifier; this one did not, and the drop register
+    # flagged it as a gap against the IG.
+    identifiers = build_identifiers(
+        find_all(allergy_observation, "id"),
+        "urn:interop-tools:cda-allergy-id",
+        resource_id=allergy_id,
+        location_prefix=xpath_location(_ENTRY_BASE, "id"),
+        recorder=recorder,
+    )
+    if identifiers:
+        allergy.identifier = identifiers
 
     if recorder:
         if code.coding:

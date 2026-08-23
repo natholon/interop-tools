@@ -39,7 +39,12 @@ from pydantic import BaseModel
 
 from app.edi.parser import read_isa_delimiters, split_segments, strip_bom_and_whitespace
 from app.hl7.parser import normalize_segment_separators, truncate_to_first_message
-from app.provenance.citations import Citation, DEFAULT_BY_FORMAT, DROP_NOT_YET_CHECKED
+from app.provenance.citations import (
+    Citation,
+    DEFAULT_BY_FORMAT,
+    DROP_NOT_YET_CHECKED,
+    X12_NO_OFFICIAL_CROSSWALK,
+)
 from app.provenance.hl7_field_names import SEGMENT_FIELD_NAMES, component_names_for_field
 from app.provenance.cda_field_names import resolve_cda_field_label
 from app.provenance.cda_ig_verdicts import GAP, verdict_for
@@ -821,7 +826,10 @@ def _dropped_edi_decisions(
                 source_location=location,
                 field_label=label,
                 lost_value=value,
-                citation=DROP_NOT_YET_CHECKED,
+                # Not "not yet checked": X12 publishes no FHIR crosswalk at
+                # all, so there is nothing pending to check this against.
+                # Saying "unchecked" would imply work that cannot be done.
+                citation=X12_NO_OFFICIAL_CROSSWALK,
             )
         )
     return decisions

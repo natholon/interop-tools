@@ -13,6 +13,7 @@ from fhir.resources.R4B.timing import Timing, TimingRepeat
 
 from app.cda.common import (
     build_codeable_concept_from_cd,
+    build_identifiers,
     build_quantity_from_pq,
     effective_time_location,
     parse_partial_ts,
@@ -218,6 +219,20 @@ def build_medication_request(substance_administration, patient_id: str, recorder
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
         medicationCodeableConcept=medication_code,
     )
+
+
+    # The IG maps this entry's own <id> as a source value to
+    # MedicationRequest.identifier. Procedure already built its identifier; this one did
+    # not, and the drop register flagged it as a gap against the IG.
+    identifiers = build_identifiers(
+        find_all(substance_administration, "id"),
+        "urn:interop-tools:cda-medication-id",
+        resource_id=medication_request_id,
+        location_prefix=xpath_location(_ENTRY_BASE, "id"),
+        recorder=recorder,
+    )
+    if identifiers:
+        request.identifier = identifiers
 
     if recorder:
         code_location = xpath_location(_ENTRY_BASE, "consumable", "manufacturedProduct", "manufacturedMaterial", "code")

@@ -23,6 +23,7 @@ from fhir.resources.R4B.reference import Reference
 
 from app.cda.common import (
     build_codeable_concept_from_cd,
+    build_identifiers,
     build_quantity_from_pq,
     effective_time_location,
     parse_partial_ts,
@@ -114,6 +115,20 @@ def _build_immunization(substance_administration, patient_id: str, recorder=None
         vaccineCode=vaccine_code,
         **occurrence_kwargs,
     )
+
+
+    # The IG maps this entry's own <id> as a source value to
+    # Immunization.identifier. Procedure already built its identifier; this one did
+    # not, and the drop register flagged it as a gap against the IG.
+    identifiers = build_identifiers(
+        find_all(substance_administration, "id"),
+        "urn:interop-tools:cda-immunization-id",
+        resource_id=immunization_id,
+        location_prefix=xpath_location(_ENTRY_BASE, "id"),
+        recorder=recorder,
+    )
+    if identifiers:
+        immunization.identifier = identifiers
 
     if recorder:
         code_location = xpath_location(_ENTRY_BASE, "consumable", "manufacturedProduct", "manufacturedMaterial", "code")

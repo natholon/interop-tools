@@ -9,7 +9,13 @@ from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.condition import Condition
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, effective_time_location, iter_nested_observations, parse_partial_ts
+from app.cda.common import (
+    build_codeable_concept_from_cd,
+    build_identifiers,
+    effective_time_location,
+    iter_nested_observations,
+    parse_partial_ts,
+)
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
 from app.provenance.location import xpath_location
 
@@ -106,6 +112,21 @@ def build_condition(act, problem_observation, patient_id: str, recorder=None) ->
             recorder.record(condition_id, "code.coding[0].code", f"{value_location}/@code", code_value)
         if display_value:
             recorder.record(condition_id, "code.coding[0].display", f"{value_location}/@displayName", display_value)
+
+
+    # The IG's own table maps this entry's <id> as a source value to
+    # Condition.identifier. It was the one entry-level identifier this app never built
+    # - Procedure's already was - so the drop register flagged it as a real
+    # gap against the standard.
+    identifiers = build_identifiers(
+        find_all(problem_observation, "id"),
+        "urn:interop-tools:cda-problem-id",
+        resource_id=condition_id,
+        location_prefix=xpath_location("act", "entryRelationship[SUBJ]", "observation", "id"),
+        recorder=recorder,
+    )
+    if identifiers:
+        condition.identifier = identifiers
 
     clinical_status, status_location = _resolve_clinical_status(act, problem_observation)
     if clinical_status:
