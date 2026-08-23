@@ -173,18 +173,44 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
 }
 
 
-def verdict_for(shape: str) -> tuple[str | None, Citation, str | None]:
+def verdict_for(
+    shape: str, template_ids: frozenset[str] = frozenset()
+) -> tuple[str | None, Citation, str | None]:
     """(verdict, citation, what the IG says) for an element shape.
 
-    Longest matching suffix wins, so `entryRelationship/observation/id`
-    beats a bare `id` entry. An unmatched shape keeps the honest
-    "not yet checked" citation rather than being assumed either way.
+    A key may be scoped to a templateId (`"<root>|<shape>"`), which is how
+    two identically-shaped elements governed by different IG tables are
+    told apart - an Allergy Reaction Observation's `id` from a Problem
+    Observation's. Scoped keys are tried first and beat any unscoped one,
+    however specific; within each pass the longest matching suffix wins,
+    so `entryRelationship/observation/id` beats a bare `id`.
+
+    An unmatched shape keeps the honest "not yet checked" citation rather
+    than being assumed either way.
     """
-    best: str | None = None
-    for key in IG_VERDICTS:
-        if (shape == key or shape.endswith("/" + key)) and (best is None or len(key) > len(best)):
-            best = key
-    if best is None:
-        return None, DROP_NOT_YET_CHECKED, None
-    verdict, note = IG_VERDICTS[best]
-    return verdict, _CITATION_BY_VERDICT[verdict], note
+    for candidate in (_scoped_keys(template_ids), _UNSCOPED_KEYS):
+        best: str | None = None
+        for key, suffix in candidate:
+            if (shape == suffix or shape.endswith("/" + suffix)) and (
+                best is None or len(suffix) > len(_suffix_of(best))
+            ):
+                best = key
+        if best is not None:
+            verdict, note = IG_VERDICTS[best]
+            return verdict, _CITATION_BY_VERDICT[verdict], note
+    return None, DROP_NOT_YET_CHECKED, None
+
+
+def _suffix_of(key: str) -> str:
+    return key.split("|", 1)[1] if "|" in key else key
+
+
+_UNSCOPED_KEYS = [(k, k) for k in IG_VERDICTS if "|" not in k]
+
+
+def _scoped_keys(template_ids: frozenset[str]) -> list[tuple[str, str]]:
+    return [
+        (key, key.split("|", 1)[1])
+        for key in IG_VERDICTS
+        if "|" in key and key.split("|", 1)[0] in template_ids
+    ]

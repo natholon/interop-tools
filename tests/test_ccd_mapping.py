@@ -161,7 +161,11 @@ def test_header_multiplicities_and_fallbacks():
     assert patient.identifier[0].value == "urn:oid:7c2d4e6f-0000-0000-0000-000000000002"
     assert bundle.identifier.value == "urn:oid:8f3c6b2a-0000-0000-0000-000000000001"
 
-    assert [n.use for n in patient.name] == ["official", "old"]
+    # The source's own use codes decide: "L" (legal) is the official name
+    # and "P" is a pseudonym. Position alone used to decide, which called
+    # the second name "old" - a former name - when the document had said
+    # it was a pseudonym.
+    assert [n.use for n in patient.name] == ["official", "nickname"]
     assert [n.family for n in patient.name] == ["Plicity", "Named"]
     assert len(patient.address) == 2
     assert [t.value for t in patient.telecom] == ["+1-555-555-3001", "+1-555-555-3002"]

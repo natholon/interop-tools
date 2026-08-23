@@ -240,6 +240,12 @@ def _build_ivl_pq_value(value_element, resource_id: str | None = None, value_bas
         if recorder and resource_id and value_base:
             recorder.record(resource_id, "valueRange.low.value", f"{value_base}/low/@value", low_element.get("value"))
             recorder.record(resource_id, "valueRange.high.value", f"{value_base}/high/@value", high_element.get("value"))
+            # Each bound carries its own @unit. Recording only the values
+            # left the units looking dropped when Range.low/high had them.
+            if range_value.low.unit:
+                recorder.record(resource_id, "valueRange.low.unit", f"{value_base}/low/@unit", range_value.low.unit)
+            if range_value.high.unit:
+                recorder.record(resource_id, "valueRange.high.unit", f"{value_base}/high/@unit", range_value.high.unit)
         return {"valueRange": range_value}
     if high is not None:
         inclusive = high_element.get("inclusive", "true") != "false"
@@ -407,6 +413,13 @@ def _apply_collection_body_site(specimen: Specimen, collection_procedure_element
         recorder.record(
             specimen.id, "collection.bodySite.coding[0].code", xpath_location(location, "targetSiteCode", "@code"), body_site.coding[0].code
         )
+        if body_site.coding[0].display:
+            recorder.record(
+                specimen.id,
+                "collection.bodySite.coding[0].display",
+                xpath_location(location, "targetSiteCode", "@displayName"),
+                body_site.coding[0].display,
+            )
 
 
 def _find_specimen_collection_procedure(organizer):

@@ -94,6 +94,23 @@ DROP_NOT_YET_CHECKED = Citation(
     ),
 )
 
+# An entry whose whole subtree went unread. This app skips some entries by
+# design - a negated observation, a relationship whose typeCode is not the
+# one the section's template calls for - and everything inside a skipped
+# entry is then dropped as a consequence, not on its own merits. Reporting
+# each leaf separately made one decision look like six unrelated ones and
+# buried the fact that a whole clinical statement had been discarded.
+CDA_ENTRY_NOT_CONVERTED = Citation(
+    title="Source entry not converted",
+    url="https://build.fhir.org/ig/HL7/ccda-on-fhir/",
+    authoritative=False,
+    note=(
+        "Nothing in this entry was read, so it produced no FHIR resource at all. The individual "
+        "elements beneath it are unmapped because the entry itself was skipped - which is the "
+        "decision to review, rather than each element in turn."
+    ),
+)
+
 # --- C-CDA drop verdicts, checked against the IG's own mapping tables ---
 #
 # The IG publishes per-resource CSVs (mappings/CF/*.csv) whose `Approach`

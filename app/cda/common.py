@@ -70,6 +70,18 @@ _TELECOM_SCHEME_TO_SYSTEM = {"tel": "phone", "mailto": "email", "fax": "fax"}
 # extensible; an unrecognized use code is simply omitted rather than guessed.
 _TELECOM_USE_MAP = {"HP": "home", "WP": "work", "MC": "mobile"}
 
+# CDA's own use codes for names and addresses, mapped only where the HL7
+# v3 code and the FHIR code mean the same thing. The C-CDA on FHIR IG maps
+# `..addr` and `...name` as whole datatypes ("source value") and publishes
+# no datatype-level table for either, so these are read off the two code
+# systems directly. Deliberately partial: v3's HV (vacation home), DIR,
+# PUB, ASGN and the name-use codes for artist and indigenous names have no
+# unambiguous FHIR counterpart, and an entry here would be a guess. A code
+# with no row stays unmapped and keeps being reported as dropped, which is
+# the honest outcome rather than a plausible-looking mismap.
+_NAME_USE_MAP = {"L": "official", "P": "nickname", "C": "official"}
+_ADDRESS_USE_MAP = {"H": "home", "HP": "home", "WP": "work", "TMP": "temp", "BAD": "old"}
+
 
 def parse_partial_ts(raw_value: str | None) -> str | None:
     """CDA TS/IVL_TS @value strings use the identical HL7 TS digit shape
@@ -231,7 +243,15 @@ def record_coding(recorder, resource_id: str, relative_path: str, base_location:
     though the mapper had carried it into `.coding[0].display`. Recording
     both together in one helper keeps the pair from drifting apart again.
     """
-    if not recorder or concept is None or not concept.coding:
+    if not recorder or concept is None:
+        return
+    if concept.text:
+        # CodeableConcept.text comes from <originalText>, which
+        # resolve_narrative_references has already de-referenced into the
+        # element by the time any builder sees it. Recording only the
+        # coding left it looking dropped while the Bundle carried it.
+        recorder.record(resource_id, f"{relative_path}.text", f"{base_location}/originalText", concept.text)
+    if not concept.coding:
         return
     coding = concept.coding[0]
     if coding.code:
@@ -373,8 +393,27 @@ def _build_patient_names(patient_element, resource_id: str | None = None, record
         given_parts = [g.text.strip() for g in find_all(name_element, "given") if g.text and g.text.strip()]
         if not family and not given_parts:
             continue
-        name = HumanName(use="official" if i == 0 else "old")
+        # The source's own use code wins where it maps. Position was the
+        # only signal before, which labelled a leading <name use="P">
+        # (pseudonym) "official" - stating something about the patient the
+        # document never said. Position stays the fallback for a name that
+        # carries no use, or one whose code has no FHIR counterpart.
         name_index = len(names)
+        source_use = (name_element.get("use") or "").strip().upper()
+        mapped_use = _NAME_USE_MAP.get(source_use)
+        name = HumanName(use=mapped_use or ("official" if i == 0 else "old"))
+        if recorder and resource_id:
+            location = xpath_location("recordTarget", "patientRole", "patient", f"name[{i}]", "@use")
+            if mapped_use:
+                recorder.record(resource_id, f"name[{name_index}].use", location, name.use, source_value=source_use)
+            else:
+                recorder.record_inferred(
+                    resource_id,
+                    f"name[{name_index}].use",
+                    f"No usable name use code{f' ({source_use!r} has no FHIR counterpart)' if source_use else ''}; "
+                    "the first name is taken as the official one.",
+                    name.use,
+                )
         if family:
             name.family = family
             if recorder and resource_id:
@@ -423,6 +462,17 @@ def _build_patient_addresses(patient_role, resource_id: str | None = None, recor
             continue
         address = Address()
         addr_index = len(addresses)
+        address_use = _ADDRESS_USE_MAP.get((addr_element.get("use") or "").strip().upper())
+        if address_use:
+            address.use = address_use
+            if recorder and resource_id:
+                recorder.record(
+                    resource_id,
+                    f"address[{addr_index}].use",
+                    xpath_location("recordTarget", "patientRole", f"addr[{i}]", "@use"),
+                    address_use,
+                    source_value=addr_element.get("use"),
+                )
         if lines:
             address.line = lines
             if recorder and resource_id:
@@ -496,6 +546,14 @@ def _build_patient_telecoms(patient_role, resource_id: str | None = None, record
         use = _TELECOM_USE_MAP.get(telecom_element.get("use", ""))
         if use:
             contact_point.use = use
+            if recorder and resource_id:
+                recorder.record(
+                    resource_id,
+                    f"telecom[{telecom_index}].use",
+                    xpath_location("recordTarget", "patientRole", f"telecom[{i}]", "@use"),
+                    use,
+                    source_value=telecom_element.get("use"),
+                )
         telecoms.append(contact_point)
     return telecoms
 
@@ -641,18 +699,25 @@ def build_encounter_from_header(document, patient_id: str, recorder=None) -> Enc
         return None
 
     class_code = _DEFAULT_ENCOUNTER_CLASS
+    class_display = ""
     code_element = find_child(encompassing_encounter, "code")
     if code_element is not None:
         raw_code = (code_element.get("code") or "").strip().upper()
         if raw_code in RECOGNIZED_ENCOUNTER_CLASSES:
             class_code = raw_code
+            # Only carried for a code we actually recognised: a display
+            # name belonging to some other code would misdescribe the
+            # default class we fell back to.
+            class_display = (code_element.get("displayName") or "").strip()
 
     encounter_id = str(uuid.uuid4())
     encounter = Encounter(
         id=encounter_id,
         status="unknown",
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
-        class_fhir=Coding(system=_ENCOUNTER_CLASS_SYSTEM, code=class_code),
+        class_fhir=Coding(
+            system=_ENCOUNTER_CLASS_SYSTEM, code=class_code, display=class_display or None
+        ),
     )
     if recorder:
         # Recorded as direct (not inferred) even when code_element is
@@ -669,6 +734,13 @@ def build_encounter_from_header(document, patient_id: str, recorder=None) -> Enc
             class_code,
             source_value=code_element.get("code") if code_element is not None else None,
         )
+        if class_display:
+            recorder.record(
+                encounter_id,
+                "class.display",
+                xpath_location("componentOf", "encompassingEncounter", "code", "@displayName"),
+                class_display,
+            )
 
     identifiers = build_identifiers(
         find_all(encompassing_encounter, "id"),

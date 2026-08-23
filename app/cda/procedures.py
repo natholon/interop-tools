@@ -334,6 +334,18 @@ def _build_organization_from_represented_org(represented_org_element, location: 
                 contact_point.value,
                 source_value=telecom_element.get("value"),
             )
+            if contact_point.use:
+                # ContactPoint.use is resolved by
+                # build_contact_point_from_telecom but was never
+                # recorded, so the register reported @use as dropped
+                # while the Bundle carried it.
+                recorder.record(
+                    organization_id,
+                    "telecom[0].use",
+                    xpath_location(location, "telecom", "@use"),
+                    contact_point.use,
+                    source_value=telecom_element.get("use"),
+                )
 
     return organization
 
@@ -426,6 +438,18 @@ def _build_performer(performer_element, index: int, recorder=None) -> tuple[Proc
                 contact_point.value,
                 source_value=telecom_element.get("value"),
             )
+            if contact_point.use:
+                # ContactPoint.use is resolved by
+                # build_contact_point_from_telecom but was never
+                # recorded, so the register reported @use as dropped
+                # while the Bundle carried it.
+                recorder.record(
+                    role_id,
+                    "telecom[0].use",
+                    xpath_location(telecom_location, "@use"),
+                    contact_point.use,
+                    source_value=telecom_element.get("use"),
+                )
 
     resources.append(role)
     performer = ProcedurePerformer(actor=Reference(reference=f"urn:uuid:{role.id}"))
@@ -494,6 +518,18 @@ def _build_service_delivery_location(participant_element, index: int, recorder=N
                 contact_point.value,
                 source_value=telecom_element.get("value"),
             )
+            if contact_point.use:
+                # ContactPoint.use is resolved by
+                # build_contact_point_from_telecom but was never
+                # recorded, so the register reported @use as dropped
+                # while the Bundle carried it.
+                recorder.record(
+                    location_id,
+                    "telecom[0].use",
+                    xpath_location(location_base, "telecom", "@use"),
+                    contact_point.use,
+                    source_value=telecom_element.get("use"),
+                )
 
     return location
 

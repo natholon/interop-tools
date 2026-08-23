@@ -39,7 +39,12 @@ from pydantic import BaseModel
 
 from app.edi.parser import read_isa_delimiters, split_segments, strip_bom_and_whitespace
 from app.hl7.parser import normalize_segment_separators, truncate_to_first_message
-from app.provenance.citations import Citation, DEFAULT_BY_FORMAT, X12_NO_OFFICIAL_CROSSWALK
+from app.provenance.citations import (
+    CDA_ENTRY_NOT_CONVERTED,
+    Citation,
+    DEFAULT_BY_FORMAT,
+    X12_NO_OFFICIAL_CROSSWALK,
+)
 from app.provenance.hl7_field_names import SEGMENT_FIELD_NAMES, component_names_for_field
 from app.provenance.hl7_ig_verdicts import GAP as HL7_GAP, verdict_for as hl7_verdict_for
 from app.provenance.cda_field_names import resolve_cda_field_label
@@ -466,6 +471,15 @@ class _CdaLeaf(NamedTuple):
     value: str
     in_narrative: bool
     span: tuple[int, int] | None
+    # Every templateId root on this leaf's ancestor chain. A bare element
+    # shape is often ambiguous - an Allergy Reaction Observation's `id`
+    # and a Problem Observation's `id` sit at identical depths under
+    # identically-named tags, and the IG gives them different answers.
+    # Keying a verdict on the shape alone therefore misattributed one
+    # section's ruling to another, so two were withdrawn rather than left
+    # wrong. Carrying the chain lets a verdict name the template it
+    # actually read, which is what the IG's own tables are organised by.
+    template_ids: frozenset[str]
 
 
 def scan_populated_cda_values(raw_text: str) -> list[_CdaLeaf]:
@@ -487,17 +501,26 @@ def scan_populated_cda_values(raw_text: str) -> list[_CdaLeaf]:
         return []
     leaves: list[_CdaLeaf] = []
 
-    def walk(node, path: str, in_narrative: bool) -> None:
+    def walk(node, path: str, in_narrative: bool, templates: frozenset[str]) -> None:
         if node.tag in CDA_STRUCTURAL_ELEMENTS:
             return
         narrative = in_narrative or node.tag == CDA_NARRATIVE_TAG
+        # templateId is structural (skipped as a leaf), but its root is
+        # what says which IG table governs everything beneath it.
+        own = {
+            child.attrs.get("root", "")
+            for child in node.children
+            if child.tag == "templateId" and child.attrs.get("root")
+        }
+        if own:
+            templates = templates | own
         for name, value in node.attrs.items():
             if value:
                 span = _resolve_attribute_span(raw_text, node.start_tag_span, name)
-                leaves.append(_CdaLeaf(f"{path}/@{name}", node.tag, name, value, narrative, span))
+                leaves.append(_CdaLeaf(f"{path}/@{name}", node.tag, name, value, narrative, span, templates))
         text = node.text.strip()
         if text and not node.children:
-            leaves.append(_CdaLeaf(f"{path}/text()", node.tag, "", text, narrative, node.text_span))
+            leaves.append(_CdaLeaf(f"{path}/text()", node.tag, "", text, narrative, node.text_span, templates))
         # Repeated siblings need a positional index or they collapse onto
         # one path, and so one decision id - an Allergy entry nests several
         # observations under the same tag. Indexed from the second onward,
@@ -506,9 +529,9 @@ def scan_populated_cda_values(raw_text: str) -> list[_CdaLeaf]:
         for child in node.children:
             index = seen_tags.get(child.tag, 0)
             seen_tags[child.tag] = index + 1
-            walk(child, f"{path}/{child.tag}{_repetition_suffix(index)}", narrative)
+            walk(child, f"{path}/{child.tag}{_repetition_suffix(index)}", narrative, templates)
 
-    walk(root, root.tag, False)
+    walk(root, root.tag, False, frozenset())
     return leaves
 
 
@@ -539,21 +562,56 @@ def _shape_of(location: str) -> str:
     return "/".join(part.split("[")[0] for part in location.split("/"))
 
 
-def _collapse_repeated_shapes(rows: list[tuple[str, str, str, str | None]]) -> list[MappingDecision]:
+class _CdaRow(NamedTuple):
+    location: str
+    label_key: str
+    value: str
+    detail: str | None
+    template_ids: frozenset[str]
+    unconverted_entry: bool = False
+
+
+def _unconverted_entry_paths(leaves: list[_CdaLeaf], is_mapped) -> set[str]:
+    """Paths of `<entry>` elements with no mapped leaf anywhere beneath."""
+    read: set[str] = set()
+    entries: set[str] = set()
+    for leaf in leaves:
+        entry = _enclosing_entry(leaf.path)
+        if entry is None:
+            continue
+        entries.add(entry)
+        if is_mapped(leaf):
+            read.add(entry)
+    return entries - read
+
+
+def _enclosing_entry(path: str) -> str | None:
+    parts = path.split("/")
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i].split("[")[0] == "entry":
+            return "/".join(parts[: i + 1])
+    return None
+
+
+def _collapse_repeated_shapes(rows: list[_CdaRow]) -> list[MappingDecision]:
     """One decision per *shape*, carrying how many occurrences it covers.
 
     A Problems section with seven entries drops seven identical
     `entry/act/id/@root` facts. Seven rows say nothing the first does not,
     and they bury the findings that differ - so they collapse into one row
     that states the count and lists the values it covers.
+
+    Grouped by templateId chain as well as shape, so two sections that
+    drop the same-looking element stay separate findings - they are
+    governed by different IG tables and can have different answers.
     """
-    grouped: dict[str, list[tuple[str, str, str, str | None]]] = {}
+    grouped: dict[tuple[frozenset[str], str], list[_CdaRow]] = {}
     for row in rows:
-        grouped.setdefault(_shape_of(row[0]), []).append(row)
+        grouped.setdefault((row.template_ids, _shape_of(row.location)), []).append(row)
 
     decisions: list[MappingDecision] = []
-    for shape, group in grouped.items():
-        first_location, label_key, first_value, detail = group[0]
+    for (template_ids, shape), group in grouped.items():
+        first_location, label_key, first_value, detail = group[0][:4]
         count = len(group)
         if count == 1:
             summary = f"{first_location} is present in the source but not mapped to any FHIR field."
@@ -561,9 +619,27 @@ def _collapse_repeated_shapes(rows: list[tuple[str, str, str, str | None]]) -> l
             summary = (
                 f"{shape} is present {count} times in the source but not mapped to any FHIR field."
             )
-            values = ", ".join(dict.fromkeys(repr(row[2]) for row in group))
+            values = ", ".join(dict.fromkeys(repr(row.value) for row in group))
             detail = f"{count} occurrences, carrying {values}."
-        verdict, citation, ig_note = verdict_for(shape)
+        if group[0].unconverted_entry:
+            decisions.append(
+                MappingDecision(
+                    id=_decision_id("dropped", shape),
+                    kind="dropped",
+                    summary=(
+                        f"{first_location} produced no FHIR resource; everything it carried was dropped."
+                        if count == 1
+                        else f"{shape} produced no FHIR resource {count} times; everything they carried was dropped."
+                    ),
+                    detail=detail,
+                    source_location=first_location if count == 1 else shape,
+                    field_label=None,
+                    lost_value=first_value,
+                    citation=CDA_ENTRY_NOT_CONVERTED,
+                )
+            )
+            continue
+        verdict, citation, ig_note = verdict_for(shape, template_ids)
         if ig_note:
             detail = f"{detail} {ig_note}" if detail else ig_note
         if verdict == GAP:
@@ -619,12 +695,34 @@ def _dropped_cda_decisions(
                     return True
         return leaf.value in mapped_values
 
+    # An entry nothing was read from produced no resource at all, so every
+    # leaf under it is collateral. One row for the entry says what six rows
+    # for its parts do not: a whole clinical statement was discarded.
+    unconverted = _unconverted_entry_paths(leaves, is_mapped)
+
     by_element: dict[str, list[_CdaLeaf]] = {}
     for leaf in leaves:
         by_element.setdefault(_element_path(leaf.path), []).append(leaf)
 
-    rows: list[tuple[str, str, str, str | None]] = []  # (location, label_key, value, detail)
+    rows: list[_CdaRow] = []
+    entry_rows: list[_CdaRow] = []
+    for entry_path in sorted(unconverted):
+        entry_leaves = [lf for lf in leaves if lf.path.startswith(entry_path + "/")]
+        carried = ", ".join(dict.fromkeys(f"{lf.value!r}" for lf in entry_leaves))
+        entry_rows.append(
+            _CdaRow(
+                entry_path,
+                "entry",
+                entry_leaves[0].value,
+                f"Nothing in this entry was read. It carried {carried}.",
+                entry_leaves[0].template_ids,
+                unconverted_entry=True,
+            )
+        )
+
     for element_path, element_leaves in by_element.items():
+        if any(element_path == p or element_path.startswith(p + "/") for p in unconverted):
+            continue
         reportable = [
             leaf
             for leaf in element_leaves
@@ -643,12 +741,13 @@ def _dropped_cda_decisions(
                 continue
             narrative_sections_seen.add(section)
             rows.append(
-                (
+                _CdaRow(
                     f"{section}/{CDA_NARRATIVE_TAG}()",
                     f"{CDA_NARRATIVE_TAG}/text()",
                     reportable[0].value,
                     "C-CDA requires a section's narrative to restate its entries for human display. "
                     "Only the entries are mapped; this block's own wording is not.",
+                    reportable[0].template_ids,
                 )
             )
             continue
@@ -660,22 +759,26 @@ def _dropped_cda_decisions(
             # HL7v2 half already applies to a wholly unmapped field.
             tag = reportable[0].tag
             carried = ", ".join(f"{_leaf_name(leaf)}={leaf.value!r}" for leaf in reportable)
-            rows.append((element_path, f"{tag}/text()" if not tag else tag, reportable[0].value, f"Carried {carried}."))
+            rows.append(
+                _CdaRow(element_path, f"{tag}/text()" if not tag else tag, reportable[0].value,
+                        f"Carried {carried}.", reportable[0].template_ids)
+            )
             continue
 
         # Partially read: name the specific parts that were not, since the
         # element as a whole *was* used for something.
         for leaf in reportable:
             rows.append(
-                (
+                _CdaRow(
                     leaf.path,
                     f"{leaf.tag}/@{leaf.name}" if leaf.name else f"{leaf.tag}/text()",
                     leaf.value,
                     f"It carried {leaf.value!r}.",
+                    leaf.template_ids,
                 )
             )
 
-    return _collapse_repeated_shapes(rows)
+    return _collapse_repeated_shapes(entry_rows + rows)
 
 
 # --- X12 EDI -----------------------------------------------------------
