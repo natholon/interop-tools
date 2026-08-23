@@ -110,9 +110,14 @@ def _resolve_status(element) -> str:
 
 
 def _build_activity_detail(
-    planned_element, entry_tag: str, index: int, kind: str = _DEFAULT_ACTIVITY_KIND,
-    resource_id: str | None = None, recorder=None,
+    planned_element, entry_tag: str, source_index: int, fhir_index: int,
+    kind: str = _DEFAULT_ACTIVITY_KIND, resource_id: str | None = None, recorder=None,
 ):
+    """`source_index` is the entry's position in the document;
+    `fhir_index` is its position in `CarePlan.activity[]`. They are not the
+    same number once an entry produces no activity - an entry with no
+    resolvable code is skipped - and using one for both recorded facts
+    against an `activity[N]` that does not exist."""
     code_element = find_child(planned_element, "code")
     code = build_codeable_concept_from_cd(code_element)
     if code is None:
@@ -120,36 +125,36 @@ def _build_activity_detail(
 
     status = _resolve_status(planned_element)
     detail = CarePlanActivityDetail(code=code, status=status, kind=kind)
-    entry_base = xpath_location(f"entry[{index}]", entry_tag)
+    entry_base = xpath_location(f"entry[{source_index}]", entry_tag)
 
     if recorder and resource_id:
         code_value = code_element.get("code")
         display_value = code_element.get("displayName")
         if code_value:
             recorder.record(
-                resource_id, f"activity[{index}].detail.code.coding[0].code", f"{entry_base}/code/@code", code_value
+                resource_id, f"activity[{fhir_index}].detail.code.coding[0].code", f"{entry_base}/code/@code", code_value
             )
         if display_value:
             recorder.record(
                 resource_id,
-                f"activity[{index}].detail.code.coding[0].display",
+                f"activity[{fhir_index}].detail.code.coding[0].display",
                 f"{entry_base}/code/@displayName",
                 display_value,
             )
         status_element = find_child(planned_element, "statusCode")
         raw_status = status_element.get("code") if status_element is not None else None
         if raw_status and raw_status.strip().lower() in STATUS_MAP:
-            recorder.record(resource_id, f"activity[{index}].detail.status", f"{entry_base}/statusCode/@code", status)
+            recorder.record(resource_id, f"activity[{fhir_index}].detail.status", f"{entry_base}/statusCode/@code", status)
         else:
             recorder.record_inferred(
                 resource_id,
-                f"activity[{index}].detail.status",
+                f"activity[{fhir_index}].detail.status",
                 f'statusCode was absent or not one of the disclosed recognized codes - defaults to "{_DEFAULT_STATUS}".',
                 status,
             )
         recorder.record_inferred(
             resource_id,
-            f"activity[{index}].detail.kind",
+            f"activity[{fhir_index}].detail.kind",
             f'Chosen from the entry\'s own template ("{entry_tag}"), not read from a source field - '
             "CarePlanActivityKind is a hint at what this planned item would materialize as, and no IG "
             "crosswalk defines it.",
@@ -165,13 +170,13 @@ def _build_activity_detail(
         if recorder and resource_id:
             recorder.record(
                 resource_id,
-                f"activity[{index}].detail.scheduledPeriod.start",
+                f"activity[{fhir_index}].detail.scheduledPeriod.start",
                 effective_time_location(f"{entry_base}/effectiveTime", effective_time, "low"),
                 low_dt,
             )
             recorder.record(
                 resource_id,
-                f"activity[{index}].detail.scheduledPeriod.end",
+                f"activity[{fhir_index}].detail.scheduledPeriod.end",
                 effective_time_location(f"{entry_base}/effectiveTime", effective_time, "high"),
                 high_dt,
             )
@@ -181,7 +186,7 @@ def _build_activity_detail(
         if recorder and resource_id:
             recorder.record(
                 resource_id,
-                f"activity[{index}].detail.scheduledString",
+                f"activity[{fhir_index}].detail.scheduledString",
                 effective_time_location(f"{entry_base}/effectiveTime", effective_time, "low" if low_dt else "high"),
                 scheduled,
             )
@@ -204,7 +209,8 @@ def build_plan_of_treatment_resources(section, patient_id: str, recorder=None) -
             if planned_element is None or not has_template_id(planned_element, template_id):
                 continue
             detail = _build_activity_detail(
-                planned_element, entry_tag, index, kind, resource_id=care_plan_id, recorder=recorder
+                planned_element, entry_tag, index, len(activities), kind,
+                resource_id=care_plan_id, recorder=recorder,
             )
             if detail is not None:
                 activities.append(CarePlanActivity(detail=detail))

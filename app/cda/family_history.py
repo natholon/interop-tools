@@ -108,19 +108,26 @@ def _find_entry_relationship(observation_element, type_code: str, *, inversion_i
         yield relationship
 
 
-def _build_condition(observation_element, resource_id: str | None = None, index: int = 0, recorder=None):
+def _build_condition(
+    observation_element, resource_id: str | None = None, source_index: int = 0,
+    fhir_index: int = 0, recorder=None,
+):
+    """`source_index` is the component's position in the organizer;
+    `fhir_index` is its position in `.condition[]`. They diverge once a
+    component produces no condition, and using one for both recorded facts
+    against a `condition[N]` that does not exist."""
     value_element = find_child(observation_element, "value")
     code = build_codeable_concept_from_cd(value_element)
     if code is None:
         return None
 
     condition = FamilyMemberHistoryCondition(code=code)
-    condition_base = xpath_location(f"component[{index}]", "observation", "value")
+    condition_base = xpath_location(f"component[{source_index}]", "observation", "value")
     if recorder and resource_id:
-        recorder.record(resource_id, f"condition[{index}].code.coding[0].code", f"{condition_base}/@code", code.coding[0].code)
+        recorder.record(resource_id, f"condition[{fhir_index}].code.coding[0].code", f"{condition_base}/@code", code.coding[0].code)
         if code.coding[0].display:
             recorder.record(
-                resource_id, f"condition[{index}].code.coding[0].display", f"{condition_base}/@displayName", code.coding[0].display
+                resource_id, f"condition[{fhir_index}].code.coding[0].display", f"{condition_base}/@displayName", code.coding[0].display
             )
 
     for age_relationship in _find_entry_relationship(observation_element, "SUBJ", inversion_ind=True):
@@ -135,10 +142,10 @@ def _build_condition(observation_element, resource_id: str | None = None, index:
             value=age_quantity.value, unit=age_quantity.unit, system=_UCUM_SYSTEM, code=age_quantity.unit
         )
         if recorder and resource_id:
-            age_base = xpath_location(f"component[{index}]", "observation", "entryRelationship[SUBJ]", "observation", "value")
-            recorder.record(resource_id, f"condition[{index}].onsetAge.value", f"{age_base}/@value", str(age_quantity.value))
+            age_base = xpath_location(f"component[{source_index}]", "observation", "entryRelationship[SUBJ]", "observation", "value")
+            recorder.record(resource_id, f"condition[{fhir_index}].onsetAge.value", f"{age_base}/@value", str(age_quantity.value))
             if age_quantity.unit:
-                recorder.record(resource_id, f"condition[{index}].onsetAge.unit", f"{age_base}/@unit", age_quantity.unit)
+                recorder.record(resource_id, f"condition[{fhir_index}].onsetAge.unit", f"{age_base}/@unit", age_quantity.unit)
         break
 
     # next(..., None) is not None rather than any(...) - ElementTree's own
@@ -151,8 +158,8 @@ def _build_condition(observation_element, resource_id: str | None = None, index:
         if recorder and resource_id:
             recorder.record(
                 resource_id,
-                f"condition[{index}].contributedToDeath",
-                xpath_location(f"component[{index}]", "observation", "entryRelationship[CAUS]"),
+                f"condition[{fhir_index}].contributedToDeath",
+                xpath_location(f"component[{source_index}]", "observation", "entryRelationship[CAUS]"),
                 "true",
             )
 
@@ -184,7 +191,10 @@ def _build_family_member_history(organizer_element, patient_id: str, recorder=No
         observation_element = find_child(component, "observation")
         if observation_element is None or not has_template_id(observation_element, OBSERVATION_TEMPLATE_ID):
             continue
-        condition = _build_condition(observation_element, resource_id=history_id, index=index, recorder=recorder)
+        condition = _build_condition(
+            observation_element, resource_id=history_id, source_index=index,
+            fhir_index=len(conditions), recorder=recorder,
+        )
         if condition is not None:
             conditions.append(condition)
     if not conditions:

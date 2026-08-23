@@ -234,7 +234,7 @@ def apply_patient_extensions(section, patient, recorder=None) -> None:
     Mutates `patient` in place and returns nothing; an unrecognised or
     unresolvable observation is left alone rather than guessed at.
     """
-    for entry in find_all(section, "entry"):
+    for entry_index, entry in enumerate(find_all(section, "entry")):
         observation_element = find_child(entry, "observation")
         if observation_element is None:
             continue
@@ -244,10 +244,10 @@ def apply_patient_extensions(section, patient, recorder=None) -> None:
 
         if has_template_id(observation_element, BIRTH_SEX_TEMPLATE_ID):
             _add_code_extension(
-                patient, US_CORE_BIRTHSEX_EXTENSION, value_element, "birthsex", recorder
+                patient, US_CORE_BIRTHSEX_EXTENSION, value_element, entry_index, recorder
             )
         elif has_template_id(observation_element, SEX_TEMPLATE_ID):
-            _add_code_extension(patient, US_CORE_SEX_EXTENSION, value_element, "sex", recorder)
+            _add_code_extension(patient, US_CORE_SEX_EXTENSION, value_element, entry_index, recorder)
         elif has_template_id(observation_element, GENDER_IDENTITY_TEMPLATE_ID):
             concept = build_codeable_concept_from_cd(value_element)
             if concept is None:
@@ -261,12 +261,12 @@ def apply_patient_extensions(section, patient, recorder=None) -> None:
                     recorder,
                     patient.id,
                     f"extension[{index}].valueCodeableConcept",
-                    xpath_location("entry", "observation", "value"),
+                    xpath_location(f"entry[{entry_index}]", "observation", "value"),
                     concept,
                 )
 
 
-def _add_code_extension(patient, url: str, value_element, label: str, recorder) -> None:
+def _add_code_extension(patient, url: str, value_element, entry_index: int, recorder) -> None:
     """A US Core extension whose value[x] is a bare `code` (birthsex, sex),
     taken from the source `<value>`'s own @code."""
     code = (value_element.get("code") or "").strip()
@@ -278,7 +278,7 @@ def _add_code_extension(patient, url: str, value_element, label: str, recorder) 
         recorder.record(
             patient.id,
             f"extension[{index}].valueCode",
-            xpath_location("entry", "observation", "value", "@code"),
+            xpath_location(f"entry[{entry_index}]", "observation", "value", "@code"),
             code,
         )
 
