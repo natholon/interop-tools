@@ -58,7 +58,7 @@ def _generate_claim_status(rng: random.Random, st01: str, bht02: str, include_st
     parameterization of the same one (see app/edi/claim_status.py's own
     module docstring for the same "different HL03 table, don't force a
     shared walk" reasoning)."""
-    now = random_datetime_near_now(rng, min_days=-5, max_days=5)
+    now = random_datetime_near_now(rng, min_days=-5, max_days=0)
     sender_id = f"SENDER{random_identifier(rng, digits=4)}"
     receiver_id = f"RECEIVER{random_identifier(rng, digits=4)}"
     isa_control = random_identifier(rng, digits=9)

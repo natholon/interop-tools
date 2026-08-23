@@ -74,7 +74,7 @@ def _generate_prior_auth(rng: random.Random, bht02: str) -> str:
     request vs. response is purely a BHT02 difference, not a body-shape
     one at the envelope level; the two callers below differ only in
     bht02 and whether an HCR segment gets appended."""
-    now = random_datetime_near_now(rng, min_days=-5, max_days=5)
+    now = random_datetime_near_now(rng, min_days=-5, max_days=0)
     sender_id = f"SENDER{random_identifier(rng, digits=4)}"
     receiver_id = f"RECEIVER{random_identifier(rng, digits=4)}"
     isa_control = random_identifier(rng, digits=9)

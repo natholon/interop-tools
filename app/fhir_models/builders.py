@@ -199,4 +199,24 @@ def build_codeable_concept_from_cwe(
                 hl7_location(segment_id, field_num, component=2),
                 display,
             )
+        # Component 3 becomes Coding.system verbatim when present, so it is
+        # mapped, not lost - recording only code/display made every CWE
+        # field's own coding system report as dropped data while the value
+        # sat in the Bundle. Absent, the system is a fixed local fallback
+        # with no source component to point at, so it is inferred instead.
+        source_system = field_str(segment, field_num, component=3)
+        if source_system:
+            recorder.record(
+                resource_id,
+                f"{relative_path}.coding[0].system",
+                hl7_location(segment_id, field_num, component=3),
+                source_system,
+            )
+        else:
+            recorder.record_inferred(
+                resource_id,
+                f"{relative_path}.coding[0].system",
+                f"No coding system in component 3; defaulted to {CWE_FALLBACK_SYSTEM!r}.",
+                CWE_FALLBACK_SYSTEM,
+            )
     return CodeableConcept(coding=[coding])

@@ -222,22 +222,28 @@ def test_repeated_segments_each_report_their_own_drops():
     # earlier segment was invisible no matter what it carried.
     raw = (Path(__file__).parent / "fixtures" / "oru_r01_basic.hl7").read_text()
     lines = raw.replace("\n", "\r").split("\r")
+    marked = 0
     for i, line in enumerate(lines):
-        if line.startswith("OBX"):
+        if line.startswith("OBX") and marked < 2:
             fields = line.split("|")
-            fields[3] = fields[3] + "^^^ONLYONFIRST"
+            fields[3] = fields[3] + f"^^^ONLYON{marked}"
             lines[i] = "|".join(fields)
-            break
+            marked += 1
+    assert marked == 2, "the fixture must carry at least two OBX segments"
     patched = "\r".join(lines)
 
     _, report, _ = convert_with_provenance(patched)
     decisions = compute_decisions(report, patched)
-    assert any(d.lost_value == "ONLYONFIRST" for d in decisions)
+    dropped = _by_location([d for d in decisions if d.kind == "dropped"])
 
-    # And each OBX reports its own drop rather than one standing for all.
-    obx = [d for d in decisions if (d.source_location or "").startswith("OBX")]
-    assert len({d.id for d in obx}) == len(obx)
-    assert any("[1]" in (d.source_location or "") for d in obx)
+    # Both are reported, each against its own physical segment. Marking two
+    # segments rather than one is deliberate: an earlier version proved the
+    # point using OBX-3.3, which was itself a false positive (the CWE coding
+    # system is mapped to Coding.system), so the test passed for the wrong
+    # reason and broke as soon as that was fixed.
+    assert dropped["OBX-3.6"].lost_value == "ONLYON0"
+    assert dropped["OBX[1]-3.6"].lost_value == "ONLYON1"
+    assert dropped["OBX-3.6"].id != dropped["OBX[1]-3.6"].id
 
 
 # --- rejection -------------------------------------------------------

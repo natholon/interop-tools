@@ -16,7 +16,6 @@ from app.generators.base import (
     generate_msh_segment,
     generate_pid_segment,
     maybe,
-    random_abnormal_flag,
     random_observation_test,
     random_physician_xcn,
     random_report_panel,
@@ -39,7 +38,10 @@ def _generate_obx(rng: random.Random, set_id: int) -> str:
     fields = {1: str(set_id), 11: random_result_status(rng)}
     if maybe(rng, p=0.8):
         code, display, unit, low, high = random_observation_test(rng)
-        value = round(rng.uniform(float(low) * 0.7, float(high) * 1.3), 1)
+        # Within its own reference range. A sample carrying a haemoglobin
+        # of 18.4 against a stated 12.0-16.0 range is not valid test data -
+        # it is a result the message itself contradicts.
+        value = round(rng.uniform(float(low), float(high)), 1)
         fields[2] = "NM"
         fields[3] = f"{code}^{display}^LOCAL"
         fields[5] = str(value)
@@ -47,6 +49,11 @@ def _generate_obx(rng: random.Random, set_id: int) -> str:
             fields[6] = unit
         if maybe(rng):
             fields[7] = f"{low}-{high}"
+        # OBX-8 has to agree with the value beside it: an in-range result
+        # flagged "H" is self-contradictory, and the flag was previously
+        # drawn independently of the number.
+        if maybe(rng):
+            fields[8] = "N"
     else:
         # Occasionally a coded/free-text result instead of numeric, to
         # exercise the non-NM branches of _build_observation_value.
@@ -54,8 +61,6 @@ def _generate_obx(rng: random.Random, set_id: int) -> str:
         fields[2] = "ST"
         fields[3] = f"{code}^{display}^LOCAL"
         fields[5] = random_text_result_value(rng)
-    if maybe(rng):
-        fields[8] = random_abnormal_flag(rng)
     if maybe(rng):
         obs_time, _ = random_time_range(rng, min_days=-5, max_days=0)
         fields[14] = format_hl7_datetime(obs_time)

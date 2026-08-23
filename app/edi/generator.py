@@ -198,7 +198,7 @@ def build_837_envelope(
     (SBR02/SBR09 vary: 837P's "CI", 837I's own "18"/"MB" pair).
     `include_pat_segment` covers 837P's own optional `PAT*19~` segment
     on the dependent loop, which 837I/837D never emit."""
-    now = random_datetime_near_now(rng, min_days=-5, max_days=5)
+    now = random_datetime_near_now(rng, min_days=-5, max_days=0)
     sender_id = f"SENDER{random_identifier(rng, digits=4)}"
     receiver_id = f"RECEIVER{random_identifier(rng, digits=4)}"
     isa_control = random_identifier(rng, digits=9)

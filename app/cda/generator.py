@@ -355,7 +355,7 @@ def _random_encounter(rng: random.Random, force: bool = False) -> str | None:
     # end (random_time_range always derives end = start + a positive
     # duration), so this can never trip the (error-severity) "period end
     # before start" rule.
-    start, end = random_time_range(rng, min_days=-30, max_days=10)
+    start, end = random_time_range(rng, min_days=-30, max_days=0)
     return (
         f'<componentOf><encompassingEncounter>{ids}'
         f'<code code="{class_code}" codeSystem="2.16.840.1.113883.5.4"/>'
@@ -379,7 +379,7 @@ def _random_problem_entry(rng: random.Random) -> str:
     # severity) "onset before birth" rule, while still occasionally landing
     # in the future to exercise the (warning-severity) "onset in the
     # future" rule.
-    start, end = random_time_range(rng, min_days=-300, max_days=10)
+    start, end = random_time_range(rng, min_days=-300, max_days=0)
     effective_time = _random_ivl_ts(rng, start, end)
 
     if negated:
@@ -435,7 +435,7 @@ def _random_hospital_discharge_diagnosis_entry(rng: random.Random) -> str:
     act_id = _random_uuid_like(rng)
     obs_id = _random_uuid_like(rng)
     code, display = rng.choice(_PROBLEM_CODES)
-    start, end = random_time_range(rng, min_days=-14, max_days=2)
+    start, end = random_time_range(rng, min_days=-14, max_days=0)
     effective_time = _random_ivl_ts(rng, start, end)
     value = f'<value xsi:type="CD" code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
     return (
@@ -486,7 +486,7 @@ def _random_medication_entry(rng: random.Random) -> str:
     dosing = ""
     if dosing_choice < 0.45:
         route_code, route_display = rng.choice(_MEDICATION_ROUTES)
-        start, end = random_time_range(rng, min_days=-60, max_days=30)
+        start, end = random_time_range(rng, min_days=-60, max_days=0)
         dose_value = rng.choice((5, 10, 20, 25, 50, 100, 200, 500))
         rate = f'<rateQuantity value="{rng.choice((1, 2, 5))}" unit="mL/h"/>' if maybe(rng, 0.15) else ""
         dosing = (
@@ -605,7 +605,7 @@ def _random_allergy_entry(rng: random.Random) -> str:
 
     # Same window/rationale as _random_problem_entry - always safely after
     # even the earliest possible generated birthTime.
-    start, end = random_time_range(rng, min_days=-300, max_days=10)
+    start, end = random_time_range(rng, min_days=-300, max_days=0)
     effective_time = _random_ivl_ts(rng, start, end)
 
     # A negated entry can still carry a resolvable allergen (-> "no known
@@ -732,7 +732,7 @@ def _random_immunization_entry(rng: random.Random, start, end) -> str:
 def _random_immunizations_section(rng: random.Random) -> str | None:
     if not maybe(rng, 0.85):
         return None
-    start, end = random_time_range(rng, min_days=-300, max_days=10)
+    start, end = random_time_range(rng, min_days=-300, max_days=0)
     entries = "".join(_random_immunization_entry(rng, start, end) for _ in range(rng.randint(1, 3)))
     return (
         f'<component><section><templateId root="{IMMUNIZATIONS_SECTION_TEMPLATE_ID}"/>'
@@ -767,7 +767,7 @@ def _random_vital_sign_observation(rng: random.Random, start) -> str:
 
 def _random_vital_signs_organizer(rng: random.Random) -> str:
     org_id = _random_uuid_like(rng)
-    start, _ = random_time_range(rng, min_days=-60, max_days=5)
+    start, _ = random_time_range(rng, min_days=-60, max_days=0)
     count = rng.randint(1, 4)
     components = "".join(_random_vital_sign_observation(rng, start) for _ in range(count))
 
@@ -903,7 +903,7 @@ def _random_result_observation(rng: random.Random, start) -> str:
 def _random_result_organizer(rng: random.Random) -> str:
     org_id = _random_uuid_like(rng)
     panel_code, panel_display = rng.choice(_RESULT_PANEL_CODES)
-    start, _ = random_time_range(rng, min_days=-90, max_days=5)
+    start, _ = random_time_range(rng, min_days=-90, max_days=0)
     status_code = rng.choice(list(RESULT_STATUS_MAP)) if maybe(rng, 0.85) else "nullified"
     count = rng.randint(1, 3)
     components = "".join(_random_result_observation(rng, start) for _ in range(count))
@@ -1063,10 +1063,10 @@ def _random_procedure_entry(rng: random.Random) -> str:
     # _build_procedure needs to distinguish (use performedDateTime only
     # when effectiveTime@value is populated, else performedPeriod).
     if maybe(rng, 0.6):
-        point_in_time, _ = random_time_range(rng, min_days=-400, max_days=5)
+        point_in_time, _ = random_time_range(rng, min_days=-400, max_days=0)
         effective_time = f'<effectiveTime value="{format_hl7_datetime(point_in_time)}"/>'
     else:
-        start, end = random_time_range(rng, min_days=-400, max_days=5)
+        start, end = random_time_range(rng, min_days=-400, max_days=0)
         effective_time = (
             f'<effectiveTime><low value="{format_hl7_datetime(start)}"/>'
             f'<high value="{format_hl7_datetime(end)}"/></effectiveTime>'
@@ -1276,7 +1276,7 @@ def _random_social_history_entry(rng: random.Random) -> str:
     specific templateId and the generic Social History Observation one,
     exercising both templateIds build_social_history_resources()
     recognizes."""
-    point_in_time, _ = random_time_range(rng, min_days=-400, max_days=5)
+    point_in_time, _ = random_time_range(rng, min_days=-400, max_days=0)
     effective_time = f'<effectiveTime value="{format_hl7_datetime(point_in_time)[:8]}"/>'
     if maybe(rng, 0.6):
         code, display = rng.choice(_SMOKING_STATUS_VALUES)
@@ -1536,7 +1536,7 @@ def _generate_sectioned_document(
     # A ~10-day window around "now" (rather than always-past) exercises the
     # (warning-severity) "document date in the future" rule about half the
     # time without any error-severity consequence.
-    doc_dt = random_datetime_near_now(rng, min_days=-5, max_days=5)
+    doc_dt = random_datetime_near_now(rng, min_days=-5, max_days=0)
     if maybe(rng, 0.7):
         effective_time = f'<effectiveTime value="{format_hl7_datetime(doc_dt)}"/>'
     else:

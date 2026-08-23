@@ -66,7 +66,7 @@ def generate_835(rng: random.Random) -> str:
     module docstring) - the envelope + N1 header pair + repeating CLP/CAS
     body is built directly, still reusing EdiDraft/assemble_generated_
     interchange for the generic envelope/trailer-count machinery."""
-    now = random_datetime_near_now(rng, min_days=-5, max_days=5)
+    now = random_datetime_near_now(rng, min_days=-5, max_days=0)
     sender_id = f"SENDER{random_identifier(rng, digits=4)}"
     receiver_id = f"RECEIVER{random_identifier(rng, digits=4)}"
     isa_control = random_identifier(rng, digits=9)

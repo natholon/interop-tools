@@ -39,7 +39,7 @@ def _sch_common_fields(rng: random.Random) -> dict:
         code, display = random_appointment_type_code(rng)
         fields[8] = f"{code}^{display}^LOCAL"
     if maybe(rng, p=0.5):
-        start, end = random_time_range(rng)
+        start, end = random_time_range(rng, min_days=0, max_days=30)
         fields[9] = str(int((end - start).total_seconds() // 60))
         fields[10] = "MIN"
     if maybe(rng, p=0.2):
@@ -58,7 +58,7 @@ def _apply_required_timing(rng: random.Random, sch_fields: dict) -> list[str]:
     """S12/S13/S14: timing is required. ~75% via TQ1, ~25% via legacy SCH-11
     (component 4 = start, component 5 = end) - both must always resolve to a
     real start+end, exercising resolve_appointment_timing's two paths."""
-    start, end = random_time_range(rng)
+    start, end = random_time_range(rng, min_days=0, max_days=30)
     if maybe(rng, p=0.75):
         return [_tq1_segment(rng, start, end)]
     sch_fields[11] = f"^^^{format_hl7_datetime(start)}^{format_hl7_datetime(end)}"
@@ -69,7 +69,7 @@ def _apply_optional_timing(rng: random.Random) -> list[str]:
     """S15: timing is optional - ~40% include a TQ1, ~60% omit entirely."""
     if not maybe(rng, p=0.4):
         return []
-    start, end = random_time_range(rng)
+    start, end = random_time_range(rng, min_days=0, max_days=30)
     return [_tq1_segment(rng, start, end)]
 
 

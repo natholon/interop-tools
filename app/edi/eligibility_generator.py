@@ -70,7 +70,7 @@ def _generate_eligibility(rng: random.Random, st01: str, bht02: str) -> EdiDraft
     diverging only in their patient-loop leader segment (EQ vs EB) and
     271's optional AAA rejection, both appended by the caller-specific
     branch below."""
-    now = random_datetime_near_now(rng, min_days=-5, max_days=5)
+    now = random_datetime_near_now(rng, min_days=-5, max_days=0)
     sender_id = f"SENDER{random_identifier(rng, digits=4)}"
     receiver_id = f"RECEIVER{random_identifier(rng, digits=4)}"
     isa_control = random_identifier(rng, digits=9)

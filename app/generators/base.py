@@ -132,7 +132,16 @@ def format_hl7_datetime(dt: datetime) -> str:
     return dt.strftime("%Y%m%d%H%M%S")
 
 
-def random_datetime_near_now(rng: random.Random, min_days: int = -2, max_days: int = 30) -> datetime:
+def random_datetime_near_now(rng: random.Random, min_days: int = -30, max_days: int = 0) -> datetime:
+    """A datetime within roughly [now+min_days, now+max_days].
+
+    **Defaults to the past.** Almost everything these generators date has
+    already happened - an admission, an observation, a document, a claim -
+    and a sample carrying next month's onset date is not realistic test
+    data. The two places a future date is correct (a scheduled SIU
+    appointment, a C-CDA Planned Observation) pass a positive `max_days`
+    explicitly, so the intent is visible at the call site.
+    """
     # Truncated to the minute: only days/hours/minutes are seeded below, so
     # leaving real seconds/microseconds in the base would let unseeded
     # wall-clock entropy leak into the result - two calls with the same
@@ -140,16 +149,34 @@ def random_datetime_near_now(rng: random.Random, min_days: int = -2, max_days: i
     # output, breaking the "same seed always reproduces the same message"
     # guarantee whenever they straddle a real second boundary.
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-    return now + timedelta(
+    result = now + timedelta(
         days=rng.randint(min_days, max_days),
         hours=rng.randint(0, 23),
         minutes=rng.randint(0, 59),
     )
+    # The random time-of-day is added on top of the day offset, so a
+    # max_days=0 draw still lands up to 23h59m in the future - which is how
+    # every format produced tomorrow's date despite asking for none.
+    if max_days <= 0 and result > now:
+        result -= timedelta(days=1)
+    return result
 
 
-def random_time_range(rng: random.Random, min_days: int = -2, max_days: int = 30) -> tuple[datetime, datetime]:
+def random_time_range(rng: random.Random, min_days: int = -30, max_days: int = 0) -> tuple[datetime, datetime]:
+    """A (start, end) pair with end 15-90 minutes after start. Past by
+    default, for the reason random_datetime_near_now documents."""
     start = random_datetime_near_now(rng, min_days, max_days)
     end = start + timedelta(minutes=rng.randint(15, 90))
+    if max_days <= 0:
+        # The duration is added after the clamp above, so an end can still
+        # cross now even when the start did not. Shift the whole range
+        # rather than shortening it, keeping the duration the caller's
+        # rules depend on (e.g. discharge strictly after admit).
+        now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        if end > now:
+            overshoot = end - now
+            start -= overshoot
+            end -= overshoot
     return start, end
 
 
