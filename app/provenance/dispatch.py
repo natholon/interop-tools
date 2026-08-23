@@ -72,41 +72,24 @@ _INSTRUMENTED_MESSAGE_TYPES = {"ADT", "SIU", "ORU", "MDM"}
 
 
 def convert_with_provenance(raw_text: str, deduplicate: bool = False) -> tuple[Bundle, CrosswalkReport, DedupResult | None]:
-    """Sniff the input format (reusing app.pipeline's own sniffing, not
-    re-derived) and convert it, returning the real Bundle (identical to
-    what convert_to_bundle would produce when `deduplicate=False` -
-    conversion behavior itself is never altered by requesting provenance),
-    a CrosswalkReport, and - only when `deduplicate=True` - the
-    `DedupResult` describing what was merged (`None` otherwise, the same
-    "opt-in, never automatic" contract `app/dedup.py` itself establishes).
-    See this module's own docstring for how dedup and provenance resolution
-    interact.
+    """Sniff the format (reusing `app.pipeline`'s own sniffing) and convert,
+    returning the Bundle, a CrosswalkReport, and - only when
+    `deduplicate=True` - the `DedupResult` describing what merged (`None`
+    otherwise). The Bundle is identical to `convert_to_bundle`'s: requesting
+    provenance never alters conversion behaviour.
 
-    EDI input converts normally and threads a recorder through when its own
-    ST01 is in `_INSTRUMENTED_TRANSACTION_SETS` (so `entries` is genuinely
-    non-empty for a 270/271 transaction set) and reports `unsupported=True`
-    for every other transaction-set family, checked explicitly the same
-    way HL7v2's own `_INSTRUMENTED_MESSAGE_TYPES` is - not inferred from
-    "the recorder produced zero facts," since every EDI family's own
-    `build_bundle()` accepts a recorder and threads it into the shared
-    `assemble_bundle()` call it shares with every other family (see
-    app/edi/common.py), so a not-yet-instrumented family's own recorder can
-    still accumulate a Bundle.identifier/.timestamp fact or two despite
-    having no instrumentation for its own resource-specific fields at all.
-    C-CDA input converts normally and threads a recorder through too;
-    every document type this app recognizes (CCD, Discharge Summary,
-    History and Physical) is now fully instrumented and reports
-    `unsupported=False` - see `_INSTRUMENTED_CDA_DOCUMENT_TYPES` and the
-    long comment above it for why that graduation is correct rather than
-    an overclaim. An HL7v2 message whose message_type isn't in
-    `_INSTRUMENTED_MESSAGE_TYPES` converts normally too and reports
-    `unsupported=True`.
+    Whether a format reports `unsupported` is checked against an explicit set
+    per format (`_INSTRUMENTED_MESSAGE_TYPES`,
+    `_INSTRUMENTED_TRANSACTION_SETS`, `_INSTRUMENTED_CDA_DOCUMENT_TYPES`),
+    **never inferred from "the recorder produced no facts"**: every EDI
+    family threads a recorder into the shared `assemble_bundle()`, so an
+    uninstrumented one still accumulates a `Bundle.identifier`/`.timestamp`
+    fact or two and would look instrumented. All three C-CDA document types
+    now report `unsupported=False`.
 
-    Raises the same exception shapes convert_to_bundle does
-    (Hl7ParseError/CdaParseError/EdiParseError, MissingSegmentError,
-    MappingError, or pydantic.ValidationError) for a genuinely
-    unconvertible message - this function never swallows a real
-    conversion failure into an "unsupported" report."""
+    Raises the same exceptions `convert_to_bundle` does for a genuinely
+    unconvertible message - a real conversion failure is never swallowed into
+    an "unsupported" report."""
     if is_x12(raw_text):
         interchange = parse_interchange(raw_text)
         transaction_set = first_transaction_set(interchange)

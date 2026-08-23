@@ -1591,46 +1591,24 @@ def _build_plan_of_treatment_entries(care_plans) -> str:
 
 
 def _build_narrative_section(document_reference, binaries_by_id: dict, extra_entries: str = "") -> str:
-    """Reverses app.cda.narrative_sections.build_narrative_document_reference
-    - the twelve narrative-only Discharge Summary/History and Physical
-    sections (Hospital Course, Plan of Treatment, all three Reason for
-    Visit/Chief Complaint shapes, History of Present Illness, Physical
-    Exam, Assessment, Review of Systems, Social History, Family History,
-    General Status), each converted forward to a DocumentReference+Binary
-    pair rather than a structured entry (see that module's own docstring
-    for why).
+    """Reverses `app.cda.narrative_sections.build_narrative_document_reference` -
+    the twelve narrative-only Discharge Summary/History and Physical sections,
+    each converted forward to a DocumentReference+Binary pair.
 
-    **Which of the twelve templateIds to regenerate is resolved from
-    DocumentReference.type.coding[0].code alone**, via
-    NARRATIVE_LOINC_TO_TEMPLATE_ID (the reverse of the forward module's own
-    templateId->LOINC table) - the one signal a bare FHIR DocumentReference
-    reliably carries back to its real originating section, the same
-    "resolve the real signal, don't guess from Bundle order" spirit every
-    other cross-cutting resolver in this app already follows. A
-    DocumentReference with no resolvable/recognized LOINC code - never
-    produced by this app's own forward direction, but a hand-built or
-    third-party Bundle legitimately could carry one (e.g. an HL7v2 MDM-
-    sourced DocumentReference, whose own LOINC vocabulary is unrelated) -
-    is silently skipped rather than guessed at, the same "no signal, no way
-    to know which section this belongs to" precedent this app's every other
-    unresolvable-input case already establishes.
+    **Which templateId to regenerate is resolved from
+    `DocumentReference.type.coding[0].code` alone**, via
+    NARRATIVE_LOINC_TO_TEMPLATE_ID - the one signal a bare DocumentReference
+    carries back to its originating section. One with no recognized LOINC code
+    is skipped rather than guessed at; this app never produces one, but a
+    hand-built or MDM-sourced Bundle legitimately could.
 
-    **A genuine, disclosed lossy simplification, distinct from every other
-    reverse mapping in this app**: the forward direction's own
-    `extract_narrative_text` collapses `<paragraph>`/`<list>`/`<table>`
-    shapes all down to one joined, newline-separated plain-text string with
-    no marker distinguishing which original shape produced which line (a
-    table's own row/column structure becomes indistinguishable from an
-    ordinary paragraph run once flattened) - so this reverse builder always
-    regenerates one `<paragraph>` per line, never a `<table>`/`<list>`,
-    regardless of the original section's own shape. This is round-trip
-    *stable* from the second pass onward (re-running the forward extractor
-    over N `<paragraph>` elements rejoins them with the identical newlines,
-    reproducing the exact same Binary.data every time), even though the
-    very first reverse pass can't recover a table's own original visual
-    structure - the same "recoverable content, not recoverable original
-    shape" tradeoff MDM's own OBX-5 join and SIU's own NTE-3 join already
-    disclose for an analogous many-lines-to-one-field forward collapse."""
+    **Lossy, and disclosed**: the forward `extract_narrative_text` flattens
+    `<paragraph>`/`<list>`/`<table>` into one newline-joined string with no
+    marker of the original shape, so this always regenerates one
+    `<paragraph>` per line. Round-trip *stable* from the second pass onward -
+    re-extracting N paragraphs rejoins them identically - but a table's
+    original structure is not recoverable on the first reverse pass. The same
+    tradeoff MDM's OBX-5 join and SIU's NTE-3 join already disclose."""
     if not document_reference.type or not document_reference.type.coding:
         return ""
     code = document_reference.type.coding[0].code
@@ -1695,53 +1673,28 @@ def build_sectioned_document(
     title: str,
     include_discharge_specific_sections: bool = False,
 ) -> str:
-    """Header + all seven general-purpose sections (Problems/Medications/
-    Allergies/Immunizations/Vital Signs/Results/Procedures) - the reverse-
-    direction mirror of app.cda.common.build_sectioned_bundle's own role on
-    the forward side. Public (not module-private) - extracted here once
-    app/transform/cda_discharge_summary.py became a second real consumer of
-    the identical header+section assembly, confirmed structurally identical
-    the same way the forward `DischargeSummaryBuilder` itself was (both
-    document types share CCD's own recordTarget/componentOf header shape,
-    verified against a real HL7 C-CDA-Examples Discharge Summary).
+    """Header + all seven general-purpose sections - the reverse-direction mirror
+    of `app.cda.common.build_sectioned_bundle`. Shared by all three document
+    builders, which differ only in the templateId and title they pass.
 
-    `include_discharge_specific_sections=True` (only `DischargeSummaryReverseBuilder`
-    passes this) additionally splits out a Hospital Discharge Diagnosis
-    section: any `Condition` carrying `category == "encounter-diagnosis"`
-    (the one real, reliable marker `app.cda.hospital_discharge_diagnosis`'s
-    own forward module sets, and a plain Problems section never does) is
-    routed there instead of into the plain Problems section. **Discharge
-    Medications is deliberately NOT split out the same way, a genuine,
-    permanent limitation rather than a deferred slice**: unlike Hospital
-    Discharge Diagnosis, the forward `app.cda.discharge_medications` module
-    reuses `build_medication_request` with zero modification - no field on
-    the resulting `MedicationRequest` distinguishes it from one sourced from
-    a plain Medications section (confirmed by reading that module's own
-    docstring, not assumed) - so every `MedicationRequest` in the Bundle
-    continues to route into the plain Medications section regardless of
-    which document type is being reversed, since there is no FHIR-side
-    signal this builder could reverse even in principle.
+    `include_discharge_specific_sections=True` (only Discharge Summary passes
+    it) splits out a Hospital Discharge Diagnosis section: any `Condition`
+    carrying `category == "encounter-diagnosis"`, the marker the forward
+    module sets and a plain Problems section never does.
 
-    **Also regenerates any of the twelve narrative-only sections** (Hospital
-    Course, Plan of Treatment, Reason for Visit/Chief Complaint, History of
-    Present Illness, Physical Exam, Assessment, Review of Systems, Social
-    History, Family History, General Status) found as a DocumentReference+
-    Binary pair in the Bundle - see `_build_narrative_section`'s own
-    docstring for the full reasoning. Unconditional, not gated by
-    `include_discharge_specific_sections` - `CcdReverseBuilder` itself never
-    encounters one of these in practice (this app's own CCD generator never
-    produces one), but nothing about resolving them depends on which
-    document type is being built, the same "SECTION_BUILDERS itself has no
-    document-type awareness" precedent the forward direction already
-    established for these same twelve templateIds.
+    **Discharge Medications is deliberately NOT split out.** The forward
+    module reuses `build_medication_request` unmodified, so nothing on the
+    resulting `MedicationRequest` distinguishes it from a plain-Medications
+    one - there is no FHIR-side signal to reverse. A permanent limitation,
+    not a deferred slice.
 
-    **Three of those twelve additionally get real structured entries
-    injected alongside their narrative pair**: Social History's own
-    category="social-history" Observations, Family History's own
-    FamilyMemberHistory resources, and Plan of Treatment's own CarePlan
-    activities - see `_build_social_history_entries`/`_build_family_history_
-    entries`/`_build_plan_of_treatment_entries`'s own docstrings for each
-    reversal's field mapping and disclosed round-trip ambiguities."""
+    Also regenerates any of the twelve narrative-only sections found as a
+    DocumentReference+Binary pair, unconditionally rather than gated by the
+    flag - nothing about resolving them depends on document type, matching the
+    forward direction, where SECTION_BUILDERS has no document-type awareness
+    either. Three of the twelve additionally get structured entries injected
+    alongside the narrative pair (Social History Observations, Family History
+    FamilyMemberHistory, Plan of Treatment CarePlan activities)."""
     patient = find_resource(bundle, "Patient")
     if patient is None:
         raise MappingError("Bundle has no Patient resource - cannot build a CDA document")

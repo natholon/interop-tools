@@ -36,48 +36,31 @@ def grouped_supported_types() -> list[tuple[str, list[tuple[str, str, str]]]]:
 
 
 def grouped_supported_targets() -> list[tuple[str, list[tuple[str, str]]]]:
-    """The identical <optgroup> treatment for the reverse-transform
-    "Target format" dropdown - same grouping, same group order, and each
-    option's own visible text reuses `list_supported_types()`'s own label
-    *verbatim* (e.g. `"CDA^DischargeSummary - Discharge Summary"`, the
-    exact text a user already sees for the corresponding entry in the
-    "Sample message type" dropdown) rather than reconstructing an
-    equivalent string from the transform registry's own all-caps
-    `target_type` - a real, caught-before-shipping bug in an earlier
-    version of this function did exactly that and silently lost the
-    generator label's own deliberate mixed-case "DischargeSummary" (see
-    that registry's own comment for why the casing is deliberate), a
-    literal `list_supported_types()` reuse was what CLAUDE.md is describing.
-    Each item is (value, label) - `value` is the exact `"{target_format}
-    {target_type}^{target_trigger}"` string (or without the trigger suffix
-    when there's none) `transform_form`'s own POST handler and `app.js`'s
-    own submit handler already parse via `partition(" ")`/`partition("^")`
-    - unchanged from before this dropdown was grouped, so this reshaping
-    only changes what's *displayed*, not how a submitted value gets parsed
-    back apart.
+    """The same <optgroup> treatment for the reverse-transform "Target format"
+    dropdown - same grouping and group order as the sample dropdown.
 
-    Driven by `list_supported_types()`'s own order (not `list_supported_
-    targets()`'s own alphabetical one) specifically because they can
-    genuinely disagree: EDI's 837P/837I/837D targets are registered in
-    that P/I/D order in `app/generators/registry.py` but would sort D/I/P
-    alphabetically - reusing the generator's own order keeps both
-    dropdowns' EDI group in the same order a user already knows from the
-    sample dropdown, not a coincidentally-similar one.
+    **Each option's visible text reuses `list_supported_types()`'s label
+    verbatim** rather than rebuilding one from the transform registry's
+    all-caps `target_type`. Rebuilding silently loses the generator label's
+    deliberate mixed-case "DischargeSummary".
 
-    Each generator `(message_type, trigger)` key is translated to its
-    corresponding transform `(target_format, target_type, target_trigger)`
-    one before the membership check: HL7 targets keep `(target_type,
-    target_trigger) = (message_type, trigger)` directly; CDA/EDI targets
-    have no real trigger-event concept (`target_trigger` is always `""`
-    for them), so their own `(target_format, target_type)` plays that role
-    instead (e.g. `("CDA", "CCD", "")` for generator key `("CDA", "CCD")`,
-    `("EDI", "270", "")` for `("EDI", "270")`) - confirmed by direct
-    inspection that every entry in both registries lines up this way, not
-    assumed - see `app/transform/registry.py`'s own `_BUILDERS` for the
-    identical key shape. See
-    `test_grouped_supported_targets_covers_every_registered_target` for
-    the regression test guarding against the two registries' own entries
-    ever silently drifting apart."""
+    Order comes from `list_supported_types()`, not `list_supported_targets()`,
+    because the two genuinely disagree: 837P/837I/837D are registered in P/I/D
+    order but sort D/I/P, and both dropdowns should show the order a user
+    already knows.
+
+    Each item is (value, label). `value` keeps the exact
+    `"{target_format} {target_type}^{target_trigger}"` string that
+    `transform_form` and `app.js` already parse via
+    `partition(" ")`/`partition("^")`, so grouping changed only what is
+    displayed.
+
+    Generator keys are translated to transform keys before the membership
+    check: HL7 keeps `(message_type, trigger)` directly, while CDA/EDI have no
+    trigger concept, so `(target_format, target_type)` plays that role with
+    `target_trigger` always `""`. See
+    `test_grouped_supported_targets_covers_every_registered_target`, which
+    guards against the two registries drifting apart."""
     target_keys = set(list_supported_targets())
     groups: dict[str, list[tuple[str, str]]] = {}
     for msg_type, trigger, generator_label in list_supported_types():

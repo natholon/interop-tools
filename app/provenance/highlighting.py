@@ -414,35 +414,26 @@ def _borrow_occurrence(
     reference_map: dict[str, set[str]],
     allow_relayed: bool = False,
 ) -> int | None:
-    """If some other resource directly connected to `resource_id` by a
-    Reference (in either direction) already holds an *original* (counter-
-    assigned, not itself borrowed) claim for `count_key`, reuse it - see
-    this module's own docstring for the shared-physical-segment problem
-    this exists to fix (ORU's OBX-16 Practitioner).
+    """If another resource connected to `resource_id` by a Reference (either
+    direction) already holds an *original* claim for `count_key` - one
+    assigned by the counter, not itself borrowed - reuse it. See the module
+    docstring for the shared-physical-segment problem this solves (ORU's
+    OBX-16 Practitioner).
 
-    Deliberately restricted to *original* claims only - a real, reproduced
-    bug during this module's own development: a Practitioner shared by two
-    different Observations' own OBX-16 (see `app/dedup.py`'s own
-    performer-caching precedent) first borrowed the *first* Observation's
-    occurrence correctly, but the *second* Observation - a genuinely
-    independent, later physical OBX segment - then wrongly borrowed that
-    *same* occurrence too, via the shared Practitioner as an unintended
-    bridge between two otherwise-unrelated leader resources. Restricting
-    donors to resources whose own claim came directly from the counter
-    (never itself borrowed) means a shared "follower" resource like the
-    Practitioner can be borrowed *from* by its first referencer, but can't
-    relay that borrowed occurrence on to a second, independent referencer -
-    which then correctly falls through to claiming its own, fresh
-    occurrence instead.
+    **Restricted to original claims** because of a real bug: a Practitioner
+    shared by two Observations' OBX-16 correctly lent its occurrence to the
+    first, then wrongly lent the *same* one to the second - a genuinely later
+    physical OBX - by acting as a bridge between two unrelated leaders. A
+    shared follower can be borrowed from, but cannot relay a borrowed
+    occurrence onward; the second referencer then claims its own fresh one.
 
-    `allow_relayed` lifts that restriction, and is set only when every
-    physical occurrence is already spoken for. The bug above depended on a
-    *fresh* occurrence still being available for the second referencer to
-    take; when none is, relaying is strictly better than inventing an index
-    past the end that cannot resolve at all. That is the ordinary case
-    wherever one source element builds several resources - a C-CDA Vital
-    Signs organizer produces a panel plus one Observation per reading, all
-    from the one `<organizer>`."""
+    `allow_relayed` lifts that restriction, and only when every physical
+    occurrence is already claimed. The bug depended on a fresh occurrence
+    still being available; when none is, relaying beats inventing an index
+    past the end that resolves to nothing. That is the ordinary case wherever
+    one source element builds several resources - a Vital Signs organizer
+    produces a panel plus one Observation per reading, all from one
+    `<organizer>`."""
     relayed: int | None = None
     for related_id in reference_map.get(resource_id, ()):
         claims = resource_claims.get(related_id)

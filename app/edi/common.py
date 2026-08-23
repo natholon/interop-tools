@@ -325,39 +325,26 @@ def build_diagnosis_codeable_concepts(
     index_offset: int = 0,
     segment_repetition: int | None = None,
 ) -> list[CodeableConcept]:
-    """Parse an HI segment's repeating diagnosis-code composites
-    (`HI*ABK:J209*ABF:E119~` = two diagnoses, not two segments) into one
-    CodeableConcept per resolved diagnosis, in composite position order -
-    shared by prior_auth.py (278) and claim_837p.py (837P), both of which
-    read the identical composite shape (component 1 = qualifier, component
-    2 = code) via `component()`, the same way STC01/SV1-01 already
-    established. Positions with no code component are skipped rather than
-    breaking the whole scan (a qualifier-only or malformed composite
-    shouldn't silently drop every diagnosis after it), but an entirely
-    empty element still stops the scan (HI's own repetition is positional
-    and left-packed - a real sender never leaves a gap).
+    """Parse an HI segment's repeating diagnosis composites
+    (`HI*ABK:J209*ABF:E119~` is two diagnoses, not two segments) into one
+    CodeableConcept each, in position order. Component 1 is the qualifier,
+    component 2 the code.
 
-    `resource_id`/`relative_path_prefix`/`recorder` are optional (see
-    app/provenance/recorder.py) - when given, each resolved diagnosis is
-    recorded against `{relative_path_prefix}[{index}].diagnosisCodeableConcept
-    .coding[0].code`, the real FHIR `ClaimDiagnosis` shape both 278 and
-    837P wrap this function's own returned CodeableConcepts in - hardcoding
-    that wrapper name here (rather than leaving it to each caller) is safe
-    since both of this function's real consumers target the identical
-    `Claim.diagnosis[]` field. `index_offset`/`segment_repetition` are both
-    for claim_837i.py's/claim_837d.py's own genuinely different shape:
-    institutional/dental claims can carry several HI segments per claim
-    (one per code-list "type"), each parsed via its own separate call to
-    this function - `index_offset` is needed since each call's own internal
-    `concepts` list starts fresh, so without it every call would record its
-    own diagnoses starting back at FHIR index 0, silently overwriting an
-    earlier HI segment's own facts instead of continuing the real, combined
-    `Claim.diagnosis[]` index sequence; `segment_repetition` (passed through
-    to `edi_location`) is needed for the identical reason on the *source*
-    side - two different physical HI segments can each have their own
-    diagnosis at intra-segment position 1, which would otherwise both
-    record the identical, ambiguous `"HI-1.2"` location string even though
-    they came from different segments in the raw X12 text."""
+    A position with no code component is skipped rather than ending the scan -
+    one malformed composite should not drop every diagnosis after it - but an
+    entirely empty element does stop it, since HI's repetition is positional
+    and left-packed, so a real sender leaves no gaps.
+
+    Recording (`resource_id`/`relative_path_prefix`/`recorder`) hardcodes the
+    `.diagnosisCodeableConcept.coding[0].code` wrapper, which is safe because
+    both consumers wrap the result in the same `Claim.diagnosis[]` field.
+
+    `index_offset` and `segment_repetition` exist for 837I/837D, where a claim
+    carries several HI segments (one per code-list type), each parsed by its
+    own call. Without `index_offset` every call would start recording at FHIR
+    index 0 and overwrite the previous segment's facts; without
+    `segment_repetition` two diagnoses at intra-segment position 1 in
+    different physical segments would both record the ambiguous `"HI-1.2"`."""
     if hi is None:
         return []
     concepts = []

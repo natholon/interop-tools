@@ -35,33 +35,24 @@ _TRANSACTION_BUILDERS: dict[str, EdiTransactionBuilder] = {
 }
 
 def get_transaction_builder(st01: str, st03: str = "") -> EdiTransactionBuilder:
-    """Raises MappingError if st01 isn't registered at all. **"837" is
-    intercepted before the registry dict is ever consulted** - 837P/837I/
-    837D all share the literal ST01="837", so ST01 alone can't select a
-    builder for this one family the way it can for every other EDI
-    transaction set here. `st03` (Implementation Convention Reference -
-    confirmed as the officially authoritative field for this exact
-    purpose, "ST03 will always take precedence over GS08" per multiple
-    companion guides, and, unlike GS08, local to the ST segment itself so
-    no change to Interchange/FunctionalGroup's own parsed shape was
-    needed) is resolved via the shared `common.py::resolve_837_variant` -
-    shared, not a locally-written if/elif chain, since `app/edi/
-    validation.py` needs the identical decision tree for its own
-    837-family rule dispatch and both sides must never disagree (an
-    earlier version had each side write out its own copy of the same
-    is_837i_transaction -> is_837d_transaction -> default chain, kept in
-    sync by comment discipline alone rather than shared code). `st03` is
-    situational (a real, disclosed possibility - not every real-world
-    sender populates it) - when absent or unrecognized, this defaults to
-    `Edi837pBuilder` (Professional), the dominant real-world 837 variant
-    and this app's only-ever-registered 837 builder before 837I/837D
-    shipped, the same "default to the most common real value when the
-    identifying field doesn't resolve" precedent as 270's
-    DEFAULT_PURPOSE/278's DEFAULT_CLAIM_TYPE - not a content-sniffing
-    fallback (e.g. SV1 vs SV2 vs SV3 presence), which was considered but
-    judged more complexity than this situational-field-absent edge case
-    warrants, matching this codebase's own established risk tolerance for
-    comparable "identifying field missing" cases elsewhere."""
+    """Raises MappingError if st01 isn't registered.
+
+    **"837" is intercepted before the dict is consulted**: 837P/837I/837D
+    share the literal ST01="837", so ST01 alone cannot select a builder for
+    this one family. The variant comes from `st03` (Implementation Convention
+    Reference), resolved via the shared `common.py::resolve_837_variant` -
+    shared because `app/edi/validation.py` needs the identical decision for
+    its own 837 rule dispatch and the two must never disagree.
+
+    ST03 rather than GS08 because it is the authoritative field for this
+    ("ST03 will always take precedence over GS08", per multiple companion
+    guides) and, being local to the ST segment, needs no change to
+    Interchange/FunctionalGroup's parsed shape.
+
+    `st03` is situational - not every sender populates it - so an absent or
+    unrecognized value defaults to `Edi837pBuilder`, the dominant real-world
+    variant. Content sniffing (SV1 vs SV2 vs SV3) was considered and judged
+    more complexity than this edge case warrants."""
     normalized_st01 = st01.strip().upper()
     if normalized_st01 == "837":
         variant = resolve_837_variant(st03)
