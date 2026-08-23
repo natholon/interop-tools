@@ -72,14 +72,6 @@ def test_api_convert_with_deduplicate_merges_837p_billing_and_rendering_provider
     assert len(practitioners) == 1
 
 
-def test_form_convert_with_deduplicate_checkbox_renders_summary():
-    response = client.post(
-        "/convert", data={"hl7_text": read_fixture("edi_837p_basic.x12"), "deduplicate": "on"}
-    )
-    assert response.status_code == 200
-    assert "Merged 1 duplicate resource" in response.text
-
-
 def test_api_convert_malformed_returns_error_category():
     response = client.post("/api/convert", json={"hl7_text": read_fixture("adt_a01_malformed.hl7")})
     assert response.status_code == 400
@@ -87,18 +79,10 @@ def test_api_convert_malformed_returns_error_category():
     assert body["error"]["category"] == "Parse error"
 
 
-def test_form_convert_renders_bundle_in_page():
-    response = client.post("/convert", data={"hl7_text": read_fixture("adt_a01_basic.hl7")})
-    assert response.status_code == 200
-    # Jinja2 autoescapes the JSON in <pre><code>, so check for unescaped words rather than quotes.
-    assert "resourceType" in response.text
-    assert "Bundle" in response.text
-
-
-def test_form_convert_renders_error_in_page():
-    response = client.post("/convert", data={"hl7_text": read_fixture("adt_a01_malformed.hl7")})
-    assert response.status_code == 200
-    assert "Parse error" in response.text
+# The no-JS "Convert to FHIR" form posts to /data-specification (the crosswalk
+# renders the Bundle alongside the field detail), so the form-post equivalents
+# of the three tests that used to live here are in
+# tests/test_data_specification_routes.py instead.
 
 
 def test_api_convert_resolves_non_a01_trigger_end_to_end():

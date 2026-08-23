@@ -1,24 +1,25 @@
 """Routes for the Data Specification pillar - the field-level provenance
 crosswalk. Mirrors app/routes/convert.py's own established shape exactly
 (a `_run_X` helper returning a result BaseModel with error_category/
-error_message/status_code, a GET that renders the page, a no-JS POST form
-fallback, and a JSON POST API), but as its own router/page rather than a
-new pane on index.html - see CLAUDE.md's own Data Specification section
-for why a genuinely separate page was chosen over folding this into the
-existing single-page template."""
+error_message/status_code, a no-JS POST form fallback, and a JSON POST
+API). The crosswalk is now the app's Message -> FHIR conversion view -
+converting and showing which source field produced each FHIR field are one
+action, so both live on the single `index.html` page this router shares
+with app/routes/convert.py; GET /data-specification survives only as a
+redirect for existing links."""
 
 import json
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from app.provenance.decisions import apply_rejections, compute_decisions, scan_populated_components
 from app.provenance.dispatch import convert_with_provenance
 from app.provenance.highlighting import build_highlighting_payload
-from app.routes.dropdowns import grouped_supported_types
 from app.routes.errors import ERROR_STATUS, resolve_raw_text
+from app.routes.page_context import default_page_context
 from app.routes.static_assets import static_url
 
 router = APIRouter()
@@ -87,20 +88,11 @@ def _run_crosswalk(
     )
 
 
-def _default_context() -> dict:
-    return {
-        "hl7_text": "",
-        "supported_types": grouped_supported_types(),
-        "crosswalk_result": None,
-        "crosswalk_bundle": None,
-        "crosswalk_error": None,
-        "dedup_summary": None,
-    }
-
-
 @router.get("/data-specification")
-async def data_specification_page(request: Request):
-    return templates.TemplateResponse(request, "data_specification.html", _default_context())
+async def data_specification_page():
+    """Kept so bookmarks and existing links still land somewhere useful now
+    that the crosswalk lives on the one page."""
+    return RedirectResponse(url="/", status_code=308)
 
 
 @router.post("/data-specification")
@@ -115,12 +107,12 @@ async def data_specification_form(
     error = (
         {"category": outcome.error_category, "message": outcome.error_message} if outcome.error_category else None
     )
-    context = _default_context()
+    context = default_page_context()
     # The no-JS fallback can't drive the interactive, correlated-
     # highlighting view (that's entirely mark-injection/hover JS - see
-    # app/static/data_specification.js) - it keeps this app's own
-    # established fallback shape instead: the report table plus both raw
-    # JSON blocks, matching every other feature's own no-JS precedent.
+    # app/static/app.js) - it keeps this app's own established fallback
+    # shape instead: the report table plus both raw JSON blocks, matching
+    # every other feature's own no-JS precedent.
     context.update(
         {
             "hl7_text": raw_text,
@@ -130,7 +122,7 @@ async def data_specification_form(
             "dedup_summary": outcome.dedup_summary,
         }
     )
-    return templates.TemplateResponse(request, "data_specification.html", context)
+    return templates.TemplateResponse(request, "index.html", context)
 
 
 class CrosswalkApiRequest(BaseModel):

@@ -25,6 +25,8 @@ kept deliberately tiny, and a field listed there still reports any
 component *outside* its consumed set as dropped.
 """
 
+import re
+
 from pydantic import BaseModel
 
 from app.hl7.parser import normalize_segment_separators, truncate_to_first_message
@@ -34,6 +36,13 @@ from app.provenance.hl7_locator import parse_hl7_location
 from app.provenance.models import CrosswalkReport
 
 DecisionKind = str  # "inferred" | "dropped"
+
+# Leading "SEG-N" of a recorded location, for the disclosed multi-segment
+# markers that are not otherwise parseable (see _mapped_components).
+_MARKER_PREFIX_RE = re.compile(r"^([A-Z][A-Z0-9]{2})-(\d+)\b")
+# Sentinel in a consumed-component set: the whole field was mapped, so no
+# component of it can be a drop. Never a real component number.
+_WHOLE_FIELD_MAPPED = 0
 
 # Fields whose mapper reads several components and collapses them into one
 # recorded value. Maps (segment, field) -> the components genuinely
@@ -53,6 +62,37 @@ JOINED_FIELDS: dict[tuple[str, int], set[int]] = {
 # AIG-3 is deliberately absent: it is CWE-shaped, not PL, and
 # app.mappings.siu._build_aig_resource records the component it actually
 # used (2, falling back to 1), so the plain diff is already accurate.
+
+# Fields carrying no mappable content. Excluded so the register reports
+# real data loss rather than structural noise - the same hand-maintained-
+# but-tiny discipline as JOINED_FIELDS, each entry stating why it is not a
+# loss. Anything not listed here is reported, so the default stays
+# "disclose it".
+UNMAPPABLE_FIELDS: dict[tuple[str, int], str] = {
+    # Set ID - a segment's sequence number within the message, not data
+    # about the patient or the event.
+    ("PID", 1): "Set ID",
+    ("PV1", 1): "Set ID",
+    ("OBR", 1): "Set ID",
+    ("OBX", 1): "Set ID",
+    ("NTE", 1): "Set ID",
+    ("TQ1", 1): "Set ID",
+    ("TXA", 1): "Set ID",
+    ("AIS", 1): "Set ID",
+    ("AIG", 1): "Set ID",
+    ("AIL", 1): "Set ID",
+    ("AIP", 1): "Set ID",
+    ("RGS", 1): "Set ID",
+    # The trigger event is read from MSH-9, which selects the mapper - EVN-1
+    # restates it and is not a second, unmapped value.
+    ("EVN", 1): "Read from MSH-9",
+    # Control fields: fully consumed to decide where another field's value
+    # goes, so they are mapped rather than lost, but there is no FHIR path
+    # of their own to record them against.
+    # app.mappings.oru._build_observation_value branches on OBX-2 to pick
+    # which Observation.value[x] OBX-5 populates.
+    ("OBX", 2): "Selects which Observation.value[x] OBX-5 populates",
+}
 
 
 class MappingDecision(BaseModel):
@@ -76,6 +116,19 @@ class MappingDecision(BaseModel):
 def _decision_id(kind: str, *parts: str | None) -> str:
     joined = "|".join(p for p in parts if p)
     return f"{kind}:{joined}"
+
+
+def _repetition_suffix(repetition: int) -> str:
+    """`[n]` for a second or later repetition, empty for the first.
+
+    A repeating field (PID-3 carrying several identifiers is routine)
+    otherwise collapses every repetition onto one location string, and so
+    onto one decision id - `apply_rejections` builds a dict keyed by id, so
+    one of them silently becomes unreachable and the UI shares a single
+    review state across both rows. Repetition 0 stays unsuffixed so ids for
+    the ordinary non-repeating case are unchanged.
+    """
+    return f"[{repetition}]" if repetition else ""
 
 
 def _inferred_decisions(report: CrosswalkReport) -> list[MappingDecision]:
@@ -109,10 +162,21 @@ def _mapped_components(report: CrosswalkReport) -> dict[tuple[str, int, int], se
         if not entry.source_location:
             continue
         parsed = parse_hl7_location(entry.source_location)
-        if parsed is None:
+        if parsed is not None:
+            key = (parsed.segment_id, parsed.field, parsed.repetition or 0)
+            seen.setdefault(key, set()).add(parsed.component or 1)
             continue
-        key = (parsed.segment_id, parsed.field, parsed.repetition or 0)
-        seen.setdefault(key, set()).add(parsed.component or 1)
+        # Not every recorded location is a parseable SEG-N: a value joined
+        # from several segments is recorded against a disclosed marker
+        # ("OBX-5 (x2 segments)" for an MDM document body, "NTE-3 (xN
+        # segments)" for an appointment comment). Reading only the leading
+        # SEG-N off those still identifies the field as mapped - without
+        # this the marker parses as nothing and the register reports the
+        # document body itself as dropped data.
+        prefix = _MARKER_PREFIX_RE.match(entry.source_location)
+        if prefix:
+            key = (prefix.group(1), int(prefix.group(2)), 0)
+            seen.setdefault(key, set()).add(_WHOLE_FIELD_MAPPED)
     return seen
 
 
@@ -124,23 +188,29 @@ def _dropped_decisions(
     decisions = []
     for key, components in sorted(populated.items()):
         segment_id, field, repetition = key
+        if (segment_id, field) in UNMAPPABLE_FIELDS:
+            continue
         consumed = set(mapped.get(key, set())) | JOINED_FIELDS.get((segment_id, field), set())
+        if _WHOLE_FIELD_MAPPED in consumed:
+            continue
 
         # A field nothing touched at all is one decision ("this field is
         # not mapped"), not one per component - a reviewer reading five
         # rows for an entirely-unmapped PV1-8 learns nothing the single
         # row doesn't already say, and the noise buries the fields where
         # only *part* was dropped.
+        rep = _repetition_suffix(repetition)
         if not consumed:
             whole = SEGMENT_FIELD_NAMES.get(segment_id, {}).get(field)
             raw = "^".join(components.get(i, "") for i in range(1, max(components) + 1))
+            field_location = f"{segment_id}-{field}{rep}"
             decisions.append(
                 MappingDecision(
-                    id=_decision_id("dropped", f"{segment_id}-{field}"),
+                    id=_decision_id("dropped", field_location),
                     kind="dropped",
-                    summary=f"{segment_id}-{field} is present in the source but not mapped to any FHIR field.",
+                    summary=f"{field_location} is present in the source but not mapped to any FHIR field.",
                     detail=f"{whole} carried {raw!r}." if whole else f"The field carried {raw!r}.",
-                    source_location=f"{segment_id}-{field}",
+                    source_location=field_location,
                     field_label=whole,
                     lost_value=raw,
                     citation=DROP_NOT_YET_CHECKED,
@@ -151,7 +221,7 @@ def _dropped_decisions(
         for component, value in sorted(components.items()):
             if component in consumed:
                 continue
-            location = f"{segment_id}-{field}.{component}"
+            location = f"{segment_id}-{field}{rep}.{component}"
             names = component_names_for_field(segment_id, field)
             label = names.get(component) if names else None
             decisions.append(
@@ -213,10 +283,12 @@ def scan_populated_components(raw_text: str) -> dict[tuple[str, int, int], dict[
             for repetition, repetition_text in enumerate(field_text.split("~")):
                 if not repetition_text:
                     continue
+                # A field with no "^" is a single component, not "nothing to
+                # drop" - a wholly unmapped simple field (PV1-10 Hospital
+                # Service, say) is real data loss, and skipping it here made
+                # every non-composite field structurally invisible to the
+                # register regardless of what it carried.
                 components = repetition_text.split("^")
-                if len(components) == 1:
-                    # No component separator at all - nothing to drop.
-                    continue
                 values = {i: v for i, v in enumerate(components, start=1) if v}
                 if values:
                     populated[(segment_id, field_index, repetition)] = values

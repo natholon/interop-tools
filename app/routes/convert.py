@@ -10,8 +10,8 @@ from app.dedup import deduplicate_bundle
 from app.generators.registry import generate as generate_sample
 from app.hl7.errors import MappingError
 from app.pipeline import convert_to_bundle, validate_any
-from app.routes.dropdowns import grouped_supported_targets, grouped_supported_types
 from app.routes.errors import ERROR_STATUS, VALIDATION_ERROR_STATUS, resolve_raw_text
+from app.routes.page_context import default_page_context
 from app.routes.static_assets import static_url
 from app.transform.pipeline import build_message_from_bundle
 
@@ -91,57 +91,9 @@ def _run_transform(bundle_json: str, target_format: str, target_type: str, targe
     return TransformResult(message_text=message_text)
 
 
-def _default_context() -> dict:
-    """Shared defaults for every index.html render - each route overrides
-    only the keys its own outcome actually changes, so a new context key
-    (like the transform_* ones below) only needs to be added here once
-    rather than in every route's own dict literal."""
-    return {
-        "hl7_text": "",
-        "result": None,
-        "dedup_summary": None,
-        "error": None,
-        "validation_result": None,
-        "validation_error": None,
-        "supported_types": grouped_supported_types(),
-        "transform_bundle_json": "",
-        "transform_target": "",
-        "transform_target_options": grouped_supported_targets(),
-        "transform_result": None,
-        "transform_error": None,
-    }
-
-
 @router.get("/")
 async def index(request: Request):
-    return templates.TemplateResponse(request, "index.html", _default_context())
-
-
-@router.post("/convert")
-async def convert_form(
-    request: Request,
-    hl7_text: str = Form(""),
-    hl7_file: UploadFile | None = File(None),
-    deduplicate: str | None = Form(None),
-):
-    raw_text = await resolve_raw_text(hl7_text, hl7_file)
-
-    outcome = _run_conversion(raw_text, deduplicate=deduplicate is not None)
-    error = (
-        {"category": outcome.error_category, "message": outcome.error_message}
-        if outcome.error_category
-        else None
-    )
-    context = _default_context()
-    context.update(
-        {
-            "hl7_text": raw_text,
-            "result": outcome.bundle_json,
-            "dedup_summary": outcome.dedup_summary,
-            "error": error,
-        }
-    )
-    return templates.TemplateResponse(request, "index.html", context)
+    return templates.TemplateResponse(request, "index.html", default_page_context())
 
 
 @router.post("/validate")
@@ -158,7 +110,7 @@ async def validate_form(
         if outcome.error_category
         else None
     )
-    context = _default_context()
+    context = default_page_context()
     context.update(
         {
             "hl7_text": raw_text,
@@ -190,7 +142,7 @@ async def transform_form(
     # subsequent paste, so round-tripping through this app's own forms is
     # unaffected.
     display_text = outcome.message_text.replace("\r\n", "\n").replace("\r", "\n") if outcome.message_text else None
-    context = _default_context()
+    context = default_page_context()
     context.update(
         {
             "transform_bundle_json": bundle_json,

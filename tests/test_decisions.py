@@ -16,6 +16,17 @@ def _message(pid: str, pv1: str) -> str:
     return "\r".join([_MSH, "EVN|A01|20260101120000", pid, pv1])
 
 
+def _segment(segment_id: str, fields: dict[int, str]) -> str:
+    """Build a segment from {field_number: value}, so a test never depends
+    on hand-counting pipes - the same discipline tests/fixtures/*.hl7 are
+    built with, and it already caught one test asserting on PV1-8 while
+    meaning PV1-10."""
+    out = [segment_id] + [""] * max(fields)
+    for number, value in fields.items():
+        out[number] = value
+    return "|".join(out)
+
+
 def _decisions(message: str):
     _, report, _ = convert_with_provenance(message)
     return compute_decisions(report, scan_populated_components(message))
@@ -130,13 +141,72 @@ def test_decision_ids_are_stable_across_runs_and_values():
     assert _by_location(baseline)["PID-5.4"].id == _by_location(different_suffix)["PID-5.4"].id
 
 
-def test_scan_ignores_msh_and_non_composite_fields():
+def test_repeating_field_components_get_distinct_decision_ids():
+    # PID-3 carrying two identifiers used to collapse both repetitions onto
+    # one location ("PID-3.5") and so one id: apply_rejections keys a dict
+    # by id, so one decision became unreachable, and the UI shared a single
+    # review state across both rows.
+    decisions = _decisions(
+        _message(
+            "PID|1||578324^^^MRN^MR~ALT999^^^OTHER^PI||Doe^Jane||19620305|F",
+            "PV1|1|I|C100^^A^GENHOSP|||||||||||||||||V1",
+        )
+    )
+    dropped = [d for d in decisions if d.kind == "dropped" and (d.source_location or "").startswith("PID-3")]
+    assert len(dropped) == 2, [d.source_location for d in dropped]
+    assert len({d.id for d in dropped}) == 2
+    assert {d.source_location for d in dropped} == {"PID-3.5", "PID-3[1].5"}
+    assert {d.lost_value for d in dropped} == {"MR", "PI"}
+
+
+def test_unmapped_simple_field_is_reported_as_dropped():
+    # A field with no "^" is still real data. PV1-10 (Hospital Service) is
+    # genuinely unmapped by this app and must show up - the register claims
+    # completeness, and skipping non-composite fields quietly broke it.
+    decisions = _decisions(
+        _message(
+            "PID|1||578324^^^MRN||Doe^Jane||19620305|F",
+            _segment("PV1", {1: "1", 2: "I", 3: "C100^^A^GENHOSP", 10: "CAR", 19: "V1"}),
+        )
+    )
+    dropped = _by_location([d for d in decisions if d.kind == "dropped"])
+    assert "PV1-10" in dropped
+    assert dropped["PV1-10"].lost_value == "CAR"
+
+
+def test_set_id_and_control_fields_are_not_reported_as_drops():
+    # Reporting these would be noise, not loss: a Set ID is sequencing, and
+    # OBX-2 is fully consumed to pick which Observation.value[x] gets OBX-5.
+    decisions = _decisions(
+        _message("PID|1||578324^^^MRN||Doe^Jane||19620305|F", "PV1|1|I|C100^^A^GENHOSP|||||||||||||||||V1")
+    )
+    reported = set(_by_location(decisions))
+    assert "PID-1" not in reported
+    assert "PV1-1" not in reported
+    assert "EVN-1" not in reported
+
+
+def test_multi_segment_marker_location_counts_the_field_as_mapped():
+    # An MDM document body is recorded against the disclosed marker
+    # "OBX-5 (xN segments)", which is not a parseable SEG-N. Reading only
+    # the leading prefix keeps it mapped; without that the register
+    # reported the document text itself as dropped data.
+    raw = open("tests/fixtures/mdm_t02_basic.hl7").read()
+    _, report, _ = convert_with_provenance(raw)
+    decisions = compute_decisions(report, scan_populated_components(raw))
+    assert any(e.source_location and e.source_location.startswith("OBX-5 (") for e in report.entries)
+    assert not [d for d in decisions if (d.source_location or "").startswith("OBX-5")]
+
+
+def test_scan_ignores_msh_but_sees_non_composite_fields():
     populated = scan_populated_components(
         _message("PID|1||578324^^^MRN||Doe^Jane||19620305|F", "PV1|1|I|C100|||||||||||||||||V1")
     )
     assert not any(segment == "MSH" for segment, _, _ in populated)
-    # PV1-3 here has no "^" at all, so there is nothing to drop from it.
-    assert ("PV1", 3, 0) not in populated
+    # A field with no "^" is one component, not "nothing to drop" - skipping
+    # it made every non-composite field invisible to the register no matter
+    # what it carried.
+    assert populated[("PV1", 3, 0)] == {1: "C100"}
 
 
 # --- rejection -------------------------------------------------------

@@ -2,13 +2,33 @@
 {% block title %}HL7v2 / C-CDA / X12 &harr; FHIR | interop-tools{% endblock %}
 {% block content %}
 <h2 class="section-heading">Message &rarr; FHIR</h2>
-<form id="convert-form" method="post" action="/convert" enctype="multipart/form-data">
-    <div class="field">
-        <div class="field-label-row">
-            <label for="hl7_text">Raw HL7v2 message, C-CDA XML document, or X12 EDI interchange</label>
-            <span id="format-badge" class="format-badge" hidden></span>
+<p class="page-intro">Paste (or generate) an HL7v2 message, C-CDA document, or X12 EDI interchange, then convert it to a FHIR R4 Bundle. The crosswalk shows exactly which source field produced each FHIR field - matching colors mark the correlation, and hovering either side shows the detail. <strong>Validate</strong> checks the source message on its own, without converting.</p>
+<form id="crosswalk-form" method="post" action="/data-specification" enctype="multipart/form-data">
+    <div class="crosswalk-panes">
+        <div class="crosswalk-pane">
+            <div class="crosswalk-pane-head">
+                <label for="hl7_text">Raw HL7v2 message, C-CDA XML document, or X12 EDI interchange</label>
+                <span id="format-badge" class="format-badge" hidden></span>
+            </div>
+            <textarea id="hl7_text" name="hl7_text" rows="14" spellcheck="false" placeholder="MSH|^~\&amp;|... or &lt;ClinicalDocument xmlns=&quot;urn:hl7-org:v3&quot;&gt;... or ISA*00*...">{{ hl7_text or "" }}</textarea>
+            <pre id="source-highlighted" class="xwalk-pre" hidden><code id="source-highlighted-code"></code></pre>
+            <button type="button" id="edit-source-btn" class="btn-link" style="margin-top: 0.4rem;" hidden>&larr; Edit source</button>
         </div>
-        <textarea id="hl7_text" name="hl7_text" rows="14" spellcheck="false" placeholder="MSH|^~\&amp;|... or &lt;ClinicalDocument xmlns=&quot;urn:hl7-org:v3&quot;&gt;... or ISA*00*...">{{ hl7_text or "" }}</textarea>
+        <div class="crosswalk-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="4" y1="12" x2="20" y2="12"></line>
+                <polyline points="13 5 20 12 13 19"></polyline>
+            </svg>
+        </div>
+        <div class="crosswalk-pane">
+            <div class="crosswalk-pane-head">
+                <label>Resulting FHIR Bundle</label>
+                {# Shown by showCrosswalk() once there is a Bundle to copy. #}
+                <button type="button" class="btn-copy" id="copy-bundle" hidden>Copy JSON</button>
+            </div>
+            <div id="fhir-placeholder" class="crosswalk-placeholder">Convert to see the resulting FHIR Bundle here.</div>
+            <pre id="fhir-highlighted" class="xwalk-pre" hidden><code id="fhir-highlighted-code"></code></pre>
+        </div>
     </div>
     <div class="field">
         <label for="hl7_file">Or upload a file (overrides pasted text)</label>
@@ -27,14 +47,14 @@
         </select>
     </div>
     <div class="actions">
-        <label class="checkbox-field" title="Merge duplicate Patient/Practitioner/Organization/Location resources within the converted Bundle (e.g. a billing provider and rendering provider that are the same person). Only applies to Convert to FHIR.">
-            <input type="checkbox" id="deduplicate" name="deduplicate">
+        <label class="checkbox-field" title="Merge duplicate Patient/Practitioner/Organization/Location resources within the resulting Bundle before building the crosswalk (e.g. a billing provider and rendering provider that are the same person). A merged-away duplicate's own source field no longer has a separate resource to highlight, so it drops out of the crosswalk - only the kept resource's own fields stay highlighted.">
+            <input type="checkbox" id="crosswalk-deduplicate" name="deduplicate">
             Deduplicate resources
         </label>
-        <button type="button" id="generate-sample" data-busy-text="Generating&hellip;">
+        <button type="button" id="crosswalk-generate-sample" data-busy-text="Generating&hellip;">
             <span class="btn-label">Generate sample</span>
         </button>
-        <button type="submit" formaction="/validate" data-busy-text="Validating&hellip;">
+        <button type="submit" formaction="/validate" formenctype="multipart/form-data" data-busy-text="Validating&hellip;">
             <span class="btn-label">Validate</span>
         </button>
         <button type="submit" class="btn-primary" data-busy-text="Converting&hellip;">
@@ -43,30 +63,32 @@
     </div>
 </form>
 
-<section id="error-pane" class="panel error-panel" role="alert" {% if not error %}hidden{% endif %}>
-    {% if error %}
-    <strong>{{ error.category }}</strong>
-    <pre>{{ error.message }}</pre>
-    {% endif %}
-</section>
-
-<section id="validation-pane" class="panel validation-panel" aria-live="polite" {% if not validation_result and not validation_error %}hidden{% endif %}>
-    {% if validation_error %}
+<section id="crosswalk-error-pane" class="panel error-panel" role="alert" {% if not crosswalk_error and not validation_error %}hidden{% endif %}>
+    {% if crosswalk_error %}
+    <strong>{{ crosswalk_error.category }}</strong>
+    <pre>{{ crosswalk_error.message }}</pre>
+    {% elif validation_error %}
     <strong>{{ validation_error.category }}</strong>
     <pre>{{ validation_error.message }}</pre>
-    {% else %}
-    <h2>Validation Report</h2>
-    <pre><code id="validation-code">{{ validation_result or "" }}</code></pre>
     {% endif %}
 </section>
 
-<section id="output-pane" class="panel output-panel" aria-live="polite" {% if not result %}hidden{% endif %}>
+<section id="validation-pane" class="panel validation-panel" aria-live="polite" {% if not validation_result %}hidden{% endif %}>
+    {# No-JS fallback only - showValidationResult() replaces this with the
+       grouped, severity-filterable list on the JS-driven path. #}
+    <h2>Validation Report</h2>
+    <pre><code id="validation-code">{{ validation_result or "" }}</code></pre>
+</section>
+
+<section id="crosswalk-output-pane" class="panel output-panel" aria-live="polite" {% if not crosswalk_result %}hidden{% endif %}>
     <div class="panel-head">
-        <h2>FHIR Bundle</h2>
-        <button type="button" class="btn-copy" id="copy-output" data-target="output-code">Copy JSON</button>
+        <h2>Field detail</h2>
+        {# JS-only: the no-JS fallback below renders raw JSON, which is already
+           machine-readable, so this button is shown by showCrosswalk() rather
+           than server-rendered. #}
+        <button type="button" class="btn-panel-action" id="download-crosswalk-csv" hidden>Download CSV</button>
     </div>
-    <div id="resource-chip-row" class="chip-row" hidden></div>
-    <div id="dedup-summary" class="dedup-summary" {% if not dedup_summary %}hidden{% endif %}>
+    <div id="crosswalk-dedup-summary" class="dedup-summary" {% if not dedup_summary %}hidden{% endif %}>
         {% if dedup_summary %}
         {% if dedup_summary.resources_merged %}
         Merged {{ dedup_summary.resources_merged }} duplicate resource{{ "s" if dedup_summary.resources_merged != 1 else "" }}.
@@ -75,7 +97,42 @@
         {% endif %}
         {% endif %}
     </div>
-    <pre><code id="output-code">{{ result or "" }}</code></pre>
+    <div id="crosswalk-unsupported-banner" class="unsupported-banner" hidden></div>
+
+    {# Mapping decisions - every value this conversion inferred, and every
+       source component it dropped. Computed, not declared, so the list is
+       complete by construction. Review state lives in the browser and
+       applies only to the conversion at hand. #}
+    <section id="decision-register" class="decision-register" hidden>
+        <div class="panel-head">
+            <h3>Mapping decisions <span id="decision-count" class="decision-count"></span></h3>
+            <button type="button" class="btn-panel-action" id="reset-decisions" hidden>Reset review</button>
+        </div>
+        <p class="decision-intro">
+            Values this conversion inferred, and source data it did not map. Rejecting an inferred
+            value re-runs the conversion without it.
+        </p>
+        <ul id="decision-list" class="decision-list"></ul>
+    </section>
+    <div id="crosswalk-table-wrapper" class="table-wrapper" hidden>
+        <table id="crosswalk-table">
+            <thead>
+                <tr>
+                    <th>Source Location</th>
+                    <th>Source Field Name</th>
+                    <th>FHIR Path</th>
+                    <th>Source Value</th>
+                    <th>FHIR Value</th>
+                </tr>
+            </thead>
+            <tbody id="crosswalk-table-body"></tbody>
+        </table>
+    </div>
+    {# No-JS fallback only - the JS-driven path renders the two panes above instead. #}
+    <pre id="crosswalk-raw-json" {% if not crosswalk_result %}hidden{% endif %}><code>{{ crosswalk_result or "" }}</code></pre>
+    {% if crosswalk_bundle %}
+    <pre id="crosswalk-raw-bundle"><code>{{ crosswalk_bundle }}</code></pre>
+    {% endif %}
 </section>
 
 <h2 class="section-heading">FHIR &rarr; Message</h2>
@@ -83,7 +140,7 @@
     <div class="field">
         <div class="field-label-row">
             <label for="transform_bundle_json">FHIR Bundle JSON</label>
-            <button type="button" id="use-bundle-for-transform" class="btn-link" {% if not result %}hidden{% endif %}>Use Bundle above</button>
+            <button type="button" id="use-bundle-for-transform" class="btn-link" {% if not crosswalk_bundle %}hidden{% endif %}>Use Bundle above</button>
         </div>
         <textarea id="transform_bundle_json" name="bundle_json" rows="10" spellcheck="false" placeholder='{"resourceType": "Bundle", "entry": [...]}'>{{ transform_bundle_json or "" }}</textarea>
     </div>
@@ -121,6 +178,7 @@
     <pre><code id="transform-output-code">{{ transform_result or "" }}</code></pre>
 </section>
 
+<div id="xwalk-tooltip" class="xwalk-tooltip" role="tooltip" hidden></div>
 <div id="toast" class="toast" role="status" hidden></div>
 
 <script src="{{ static_url('app.js') }}"></script>

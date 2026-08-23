@@ -13,32 +13,28 @@ def read_fixture(name: str) -> str:
     return (FIXTURES / name).read_text()
 
 
-def test_data_specification_page_renders():
-    response = client.get("/data-specification")
+def test_crosswalk_form_renders_on_the_index_page():
+    response = client.get("/")
     assert response.status_code == 200
     assert "crosswalk-form" in response.text
     assert "hl7_text" in response.text
 
 
-def test_data_specification_static_asset_urls_are_cache_busted():
-    # See app/routes/static_assets.py - this page has its own separate
-    # Jinja2Templates instance from app/routes/convert.py's, so the global
-    # needed registering on both, not just one.
-    response = client.get("/data-specification")
-    assert 'src="/static/data_specification.js?v=' in response.text
-    assert 'href="/static/style.css?v=' in response.text
+def test_data_specification_url_redirects_to_the_index_page():
+    # The crosswalk moved onto the one page; this route survives only so
+    # existing links/bookmarks still land somewhere useful.
+    response = client.get("/data-specification", follow_redirects=False)
+    assert response.status_code == 308
+    assert response.headers["location"] == "/"
 
 
-def test_index_page_has_nav_linking_to_data_specification():
+def test_static_asset_urls_are_cache_busted():
+    # See app/routes/static_assets.py - app/routes/convert.py and
+    # app/routes/data_specification.py each build their own Jinja2Templates
+    # instance, so the global needed registering on both, not just one.
     response = client.get("/")
-    assert response.status_code == 200
-    assert 'href="/data-specification"' in response.text
-
-
-def test_data_specification_page_has_nav_linking_back_to_index():
-    response = client.get("/data-specification")
-    assert response.status_code == 200
-    assert 'href="/"' in response.text
+    assert 'src="/static/app.js?v=' in response.text
+    assert 'href="/static/style.css?v=' in response.text
 
 
 def test_api_data_specification_adt_a01_returns_supported_report_with_entries():
