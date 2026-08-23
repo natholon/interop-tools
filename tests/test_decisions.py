@@ -152,17 +152,20 @@ def test_repeating_field_components_get_distinct_decision_ids():
     # one location ("PID-3.5") and so one id: apply_rejections keys a dict
     # by id, so one decision became unreachable, and the UI shared a single
     # review state across both rows.
+    # CX.6 (Assigning Facility) is used rather than CX.5: the IG maps CX.5
+    # to Identifier.type and this app now builds it, so it is no longer a
+    # drop at all - the test needs a component that genuinely still is one.
     decisions = _decisions(
         _message(
-            "PID|1||578324^^^MRN^MR~ALT999^^^OTHER^PI||Doe^Jane||19620305|F",
+            "PID|1||578324^^^MRN^MR^FAC1~ALT999^^^OTHER^PI^FAC2||Doe^Jane||19620305|F",
             "PV1|1|I|C100^^A^GENHOSP|||||||||||||||||V1",
         )
     )
     dropped = [d for d in decisions if d.kind == "dropped" and (d.source_location or "").startswith("PID-3")]
     assert len(dropped) == 2, [d.source_location for d in dropped]
     assert len({d.id for d in dropped}) == 2
-    assert {d.source_location for d in dropped} == {"PID-3.5", "PID-3[1].5"}
-    assert {d.lost_value for d in dropped} == {"MR", "PI"}
+    assert {d.source_location for d in dropped} == {"PID-3.6", "PID-3[1].6"}
+    assert {d.lost_value for d in dropped} == {"FAC1", "FAC2"}
 
 
 def test_unmapped_simple_field_is_reported_as_dropped():
@@ -664,3 +667,55 @@ def _document_reference_status(bundle, report):
     )
     path = f"Bundle.entry[{index}].resource.status"
     return next(e for e in report.entries if e.fhir_path == path)
+
+
+def test_cx5_identifier_type_is_mapped_not_dropped():
+    """CX.5 maps to Identifier.type.coding.code in the v2-to-FHIR IG's own
+    CX[Identifier] datatype table. Leaving it unbuilt made PID-3.5 the
+    single largest class of dropped HL7v2 data in this app."""
+    import json
+
+    message = _message("PID|1||578324^^^MRN^MR||Doe^Jane||19620305|F", "PV1|1|I|C100|||||||||||||||||V1")
+    bundle, report, _ = convert_with_provenance(message)
+    built = json.loads(bundle.model_dump_json(exclude_none=True))
+    patient = next(e["resource"] for e in built["entry"] if e["resource"]["resourceType"] == "Patient")
+    coding = patient["identifier"][0]["type"]["coding"][0]
+    assert coding["code"] == "MR"
+    assert coding["system"] == "http://terminology.hl7.org/CodeSystem/v2-0203"
+    assert "PID-3.5" not in _by_location(compute_decisions(report, message))
+
+
+def test_xcn7_degree_is_mapped_not_dropped():
+    """XCN.7 maps to qualification.code in the IG's XCN[Practitioner]
+    table; every XCN-derived Practitioner dropped its degree before."""
+    import json
+
+    raw = (Path(__file__).parent / "fixtures" / "siu_s12_basic.hl7").read_text()
+    bundle, report, _ = convert_with_provenance(raw)
+    built = json.loads(bundle.model_dump_json(exclude_none=True))
+    practitioners = [e["resource"] for e in built["entry"] if e["resource"]["resourceType"] == "Practitioner"]
+    qualified = [p for p in practitioners if p.get("qualification")]
+    assert qualified, "the SIU fixture carries an AIP degree"
+    assert qualified[0]["qualification"][0]["code"]["coding"][0]["code"] == "MD"
+    assert not [loc for loc in _by_location(compute_decisions(report, raw)) if loc.endswith(".7")]
+
+
+def test_hl7v2_drops_cite_the_v2_to_fhir_ig():
+    """HL7v2 has a ballot-published IG with per-segment ConceptMaps, so its
+    drops can state what the IG says rather than "not yet checked" - the
+    parity gap that remained after C-CDA got its verdicts."""
+    raw = (Path(__file__).parent / "fixtures" / "adt_a01_basic.hl7").read_text()
+    _, report, _ = convert_with_provenance(raw)
+    by_location = _by_location([d for d in compute_decisions(report, raw) if d.kind == "dropped"])
+
+    # EVN maps to Provenance, which this app deliberately never builds.
+    evn = by_location["EVN-2"]
+    assert "does not build" in evn.citation.title
+    assert evn.citation.authoritative is True
+    assert "Provenance.recorded" in (evn.detail or "")
+
+    # XCN.7 has a real target, but ADT materialises no Practitioner for
+    # PV1-7 to carry it - a genuine gap, flagged as one.
+    degree = by_location["PV1-7.7"]
+    assert degree.summary.startswith("GAP:")
+    assert "qualification.code" in (degree.detail or "")

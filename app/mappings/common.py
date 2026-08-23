@@ -8,7 +8,7 @@ from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.identifier import Identifier
 from fhir.resources.R4B.location import Location
 from fhir.resources.R4B.patient import Patient
-from fhir.resources.R4B.practitioner import Practitioner
+from fhir.resources.R4B.practitioner import Practitioner, PractitionerQualification
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.resource import Resource
 
@@ -27,6 +27,14 @@ _ENCOUNTER_CLASS_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ActCode"
 _PATIENT_CLASS_MAP = {"I": "IMP", "O": "AMB", "E": "EMER", "P": "PRENC"}
 
 
+# HL7 table 0203, the IdentifierType value set the v2-to-FHIR IG binds
+# CX.5 to for Identifier.type.
+IDENTIFIER_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0203"
+# HL7 table 0360, the DegreeLicenseCertificate value set the IG binds
+# XCN.7 to for Practitioner.qualification.code.
+DEGREE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0360"
+
+
 def build_patient(pid, recorder=None) -> Patient:
     """PID -> Patient. Shared by every HL7 message type; PID is mapped
     identically regardless of message type or trigger event. `recorder`
@@ -40,9 +48,26 @@ def build_patient(pid, recorder=None) -> Patient:
             continue
         assigning_authority = component_str(repetition, 4)
         system = assigning_authority or "urn:interop-tools:patient-id"
-        identifiers.append(Identifier(system=system, value=value))
+        identifier = Identifier(system=system, value=value)
+        # CX.5 -> Identifier.type.coding.code, per the v2-to-FHIR IG's own
+        # CX[Identifier] datatype map, which binds it to the IdentifierType
+        # value set (HL7 table 0203). Leaving it unmapped made PID-3.5 the
+        # single largest class of dropped HL7v2 data in this app.
+        identifier_type = component_str(repetition, 5)
+        if identifier_type:
+            identifier.type = CodeableConcept(
+                coding=[Coding(system=IDENTIFIER_TYPE_SYSTEM, code=identifier_type)]
+            )
+        identifiers.append(identifier)
         if recorder:
             index = len(identifiers) - 1
+            if identifier_type:
+                recorder.record(
+                    patient_id,
+                    f"identifier[{index}].type.coding[0].code",
+                    hl7_location("PID", 3, repetition=idx, component=5),
+                    identifier_type,
+                )
             recorder.record(
                 patient_id,
                 f"identifier[{index}].value",
@@ -259,6 +284,23 @@ def build_practitioner_from_xcn(segment, field_num: int, recorder=None) -> Pract
                     practitioner.id, "name[0].given[0]", hl7_location(segment_id, field_num, component=3), given
                 )
         practitioner.name = [name]
+    # XCN.7 -> qualification.code, per the v2-to-FHIR IG's own
+    # XCN[Practitioner] datatype map (bound to DegreeLicenseCertificate).
+    # Every XCN-derived Practitioner in this app dropped its degree before.
+    degree = field_str(segment, field_num, component=7)
+    if degree:
+        practitioner.qualification = [
+            PractitionerQualification(
+                code=CodeableConcept(coding=[Coding(system=DEGREE_SYSTEM, code=degree)])
+            )
+        ]
+        if recorder:
+            recorder.record(
+                practitioner.id,
+                "qualification[0].code.coding[0].code",
+                hl7_location(segment_id, field_num, component=7),
+                degree,
+            )
     return practitioner
 
 

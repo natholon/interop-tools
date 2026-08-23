@@ -39,13 +39,9 @@ from pydantic import BaseModel
 
 from app.edi.parser import read_isa_delimiters, split_segments, strip_bom_and_whitespace
 from app.hl7.parser import normalize_segment_separators, truncate_to_first_message
-from app.provenance.citations import (
-    Citation,
-    DEFAULT_BY_FORMAT,
-    DROP_NOT_YET_CHECKED,
-    X12_NO_OFFICIAL_CROSSWALK,
-)
+from app.provenance.citations import Citation, DEFAULT_BY_FORMAT, X12_NO_OFFICIAL_CROSSWALK
 from app.provenance.hl7_field_names import SEGMENT_FIELD_NAMES, component_names_for_field
+from app.provenance.hl7_ig_verdicts import GAP as HL7_GAP, verdict_for as hl7_verdict_for
 from app.provenance.cda_field_names import resolve_cda_field_label
 from app.provenance.cda_ig_verdicts import GAP, verdict_for
 from app.provenance.cda_locator import _resolve_attribute_span, parse_with_positions
@@ -248,16 +244,23 @@ def _dropped_decisions(
             whole = SEGMENT_FIELD_NAMES.get(segment_id, {}).get(field)
             raw = "^".join(components.get(i, "") for i in range(1, max(components) + 1))
             field_location = f"{segment_id}{seg_rep}-{field}{rep}"
+            summary = f"{field_location} is present in the source but not mapped to any FHIR field."
+            detail = f"{whole} carried {raw!r}." if whole else f"The field carried {raw!r}."
+            verdict, citation, ig_note = hl7_verdict_for(f"{segment_id}-{field}")
+            if ig_note:
+                detail = f"{detail} {ig_note}"
+            if verdict == HL7_GAP:
+                summary = f"GAP: {summary}"
             decisions.append(
                 MappingDecision(
                     id=_decision_id("dropped", field_location),
                     kind="dropped",
-                    summary=f"{field_location} is present in the source but not mapped to any FHIR field.",
-                    detail=f"{whole} carried {raw!r}." if whole else f"The field carried {raw!r}.",
+                    summary=summary,
+                    detail=detail,
                     source_location=field_location,
                     field_label=whole,
                     lost_value=raw,
-                    citation=DROP_NOT_YET_CHECKED,
+                    citation=citation,
                 )
             )
             continue
@@ -268,18 +271,23 @@ def _dropped_decisions(
             location = f"{segment_id}{seg_rep}-{field}{rep}.{component}"
             names = component_names_for_field(segment_id, field)
             label = names.get(component) if names else None
+            summary = f"{location} was present in the source but is not mapped to any FHIR field."
+            detail = f"{label} carried {value!r}." if label else f"Component {component} carried {value!r}."
+            verdict, citation, ig_note = hl7_verdict_for(f"{segment_id}-{field}.{component}")
+            if ig_note:
+                detail = f"{detail} {ig_note}"
+            if verdict == HL7_GAP:
+                summary = f"GAP: {summary}"
             decisions.append(
                 MappingDecision(
                     id=_decision_id("dropped", location),
                     kind="dropped",
-                    summary=f"{location} was present in the source but is not mapped to any FHIR field.",
-                    detail=(
-                        f"{label} carried {value!r}." if label else f"Component {component} carried {value!r}."
-                    ),
+                    summary=summary,
+                    detail=detail,
                     source_location=location,
                     field_label=label,
                     lost_value=value,
-                    citation=DROP_NOT_YET_CHECKED,
+                    citation=citation,
                 )
             )
     return decisions
