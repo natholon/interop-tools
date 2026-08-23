@@ -1,44 +1,20 @@
 """Top-level entry point for the Data Specification pillar - the
-provenance-tracking mirror of `app/pipeline.py::convert_to_bundle`, but
-deliberately NOT built by threading a `recorder` parameter through
-`app/pipeline.py`/`app/cda/pipeline.py`/`app/edi/pipeline.py` themselves.
-Instead this module reuses `app.pipeline`'s own `is_x12`/`is_xml` sniffing
-functions directly (the real, stable, single-purpose functions - not
-re-derived) and, for all three formats, does the same tiny parse-then-
-dispatch `app/hl7/pipeline.py::convert_hl7_to_bundle`/
-`app/cda/pipeline.py::convert_cda_to_bundle`/
-`app/edi/pipeline.py::convert_edi_to_bundle` already do, just with a
-`ProvenanceRecorder` threaded into the one call
-(`mapper.to_bundle(...)`/`builder.build_bundle(...)`) that actually needs
-it.
+provenance-tracking mirror of `app/pipeline.py::convert_to_bundle`.
 
-**Dedup-aware provenance, an opt-in `deduplicate` parameter**: `app/
-dedup.py::deduplicate_bundle` merges duplicate Patient/Practitioner/
-Organization/Location entries within an already-built Bundle - a real,
-evidenced case for 837P/837I's own Billing-vs-Rendering-provider shape
-(see that module's own docstring). Wiring it in here turned out to need
-*zero* changes to `app/provenance/{recorder,resolver,highlighting}.py`
-themselves - `ProvenanceRecorder`'s own facts are keyed by
-`(resource_id, relative_path)`, and `deduplicate_bundle` never changes a
-surviving resource's own `.id` (only entries for the *removed* duplicate
-drop out of `bundle.entry`, via `model_copy(deep=True)` followed by an
-entry-list filter), so a fact recorded during mapping against a resource
-that dedup goes on to remove simply hits `resolve_bundle_paths`'s own
-pre-existing "a `resource_id` not found in `bundle.entry` is skipped, not
-raised" branch (see that function's own docstring - written for a
-different, hypothetical reason originally, but it's exactly the
-mechanism this needs) once `deduplicate_bundle` runs *before*
-`resolve_bundle_paths`, not after. The surviving (canonical) resource's
-own facts are completely unaffected - dedup never rewrites a kept
-resource's own fields, only *other* resources' `Reference`s that pointed
-at a resource now removed - so they resolve against their own,
-correctly-recomputed post-dedup `Bundle.entry[N]` index exactly as
-before. This also means a removed duplicate's own source segment/element
-(e.g. an 837P claim's Rendering Provider `NM1` loop, once its
-`Practitioner` gets merged into the Billing Provider's) simply shows no
-highlight in the Data Specification page's correlated view - the
-correct, honest result, since that segment's own data didn't produce a
-*separate* surviving resource for a highlight to point at."""
+Deliberately does NOT thread a `recorder` through the three format
+pipelines: that would add a dead parameter to two of them. Instead it
+reuses `app.pipeline`'s own `is_x12`/`is_xml` sniffing and repeats the
+small parse-then-dispatch each format pipeline already does, with a
+`ProvenanceRecorder` passed into the one call that needs it.
+
+`deduplicate=True` runs `app.dedup.deduplicate_bundle` *before*
+`resolve_bundle_paths`, which is what makes it work with no changes to
+the recorder/resolver: facts are keyed by `(resource_id, relative_path)`,
+dedup never rewrites a surviving resource's fields, and a fact against a
+removed duplicate hits `resolve_bundle_paths`'s existing "resource_id not
+in bundle.entry is skipped" branch. A merged-away duplicate's source
+segment then shows no highlight in the correlated view - correct, since
+its data produced no separate surviving resource to point at."""
 
 from fhir.resources.R4B.bundle import Bundle
 
@@ -57,22 +33,14 @@ from app.provenance.models import CrosswalkReport
 from app.provenance.recorder import ProvenanceRecorder
 from app.provenance.resolver import resolve_bundle_paths
 
-# X12 transaction-set families (keyed by ST01, EXCEPT the 837 trio - see
-# below) with real, complete field-level instrumentation - the EDI-format
-# mirror of _INSTRUMENTED_MESSAGE_TYPES below. Extended as each family's
-# own provenance slice actually ships. 270/271 became this pillar's own
-# first proof the architecture generalizes to a delimited-text format with
-# no XML/pipe-delimited structure to lean on - see CLAUDE.md's own Data
-# Specification section for the edi_location() design notes.
+# X12 families with complete field-level instrumentation - the EDI mirror
+# of _INSTRUMENTED_MESSAGE_TYPES below.
 #
-# 837P/837I/837D share the literal ST01="837" (see app/edi/registry.py's
-# own get_transaction_builder docstring), so a single "837" entry here
-# would incorrectly mark all three variants instrumented the moment any
-# one of them ships - keyed by the resolved variant string ("837P"/"837I"/
-# "837D", via the same resolve_837_variant() registry.py/validation.py
-# both already use) instead, the identical finer-than-ST01 granularity
-# problem C-CDA's own per-section (not per-document-type) instrumentation
-# already had to solve.
+# Keyed by ST01 EXCEPT the 837 trio, which all share ST01="837" (see
+# app/edi/registry.py::get_transaction_builder): a single "837" entry
+# would mark all three instrumented as soon as any one shipped, so they
+# are keyed by resolved variant instead, via the same resolve_837_variant
+# the registry and validator already use.
 _INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835", "837P", "837I", "837D"}
 # Every section registered in app/cda/registry.py::SECTION_BUILDERS is now
 # instrumented: all seven general-purpose sections (Problems, Medications,
@@ -84,48 +52,25 @@ _INSTRUMENTED_TRANSACTION_SETS = {"270", "271", "276", "277", "278", "835", "837
 # Summary's own Hospital Course/Plan of Treatment, History and Physical's
 # own nine required narrative sections) - see each module's own docstring.
 #
-# `unsupported` still deliberately stays True unconditionally for every CDA
-# document, though - not graduated to a per-document-type
-# _INSTRUMENTED_...-style set the way HL7v2/EDI's own binary
-# "registered => fully covered" bar works. **The justification has
-# narrowed three times now, not disappeared**: once when narrative_
-# sections.py shipped (every section either document type's own IG
-# requires converts to *something*, not silently skipped), again once
-# app/cda/social_history.py/family_history.py/plan_of_treatment.py's own
-# follow-up slice shipped real structured-entry parsing (Observation/
-# FamilyMemberHistory/CarePlan) for the three sections that can carry one,
-# and again once app/cda/procedures.py's own Indication/Comment Activity/
-# `author`->`Procedure.recorder` follow-up shipped, a fourth time once
-# app/cda/common.py's own originalText -> CodeableConcept.text resolution
-# shipped (both the inline and the narrative-anchor `<reference
-# value="#ID"/>` shapes), and a fifth once app/cda/discharge_medications.py
-# gained its own `MedicationRequest.category="discharge"` marker.
+# `unsupported` is keyed per document type below rather than staying
+# unconditionally True. Everything that used to hold C-CDA back has been
+# resolved: narrative sections, the structured entries Plan of Treatment/
+# Social History/Family History carry, Procedures' Indication/Comment
+# Activity/recorder, and originalText resolution.
 #
-# **The last standing item, `author` -> a FHIR `Provenance` resource, has
-# since been reclassified as a deliberate, permanent scope decision rather
-# than deferred work** - see CLAUDE.md's own C-CDA subsection for the full
-# reasoning. In short: `Provenance` models "who created/revised/signed
-# this record, and when," which presumes a system that STORES records over
-# time; this app is a stateless converter with no record lifecycle for
-# such a resource to describe (its required `recorded` timestamp has no
-# honest value here - conversion time is clinically meaningless). Where
-# the source `<author>` has a real home on the resource itself, the plain
-# attribute already carries it (`Procedure.recorder`,
-# `Annotation.authorReference`), which reaches a downstream consumer
-# without fabricating an audit record for an event that never happened.
-# The C-CDA on FHIR IG itself explicitly declines to give guidance here
-# ("does not provide definitive CDA <-> FHIR guidance on when resource
-# attributes... vs. dedicated Provenance resources should be used").
+# The last item, `author` -> a FHIR Provenance resource, is a deliberate
+# permanent scope decision rather than deferred work: Provenance models an
+# audit trail over *stored* records, and this is a stateless converter
+# with no such lifecycle (its required `recorded` timestamp has no honest
+# value here). Where `<author>` has a real home on the resource, the plain
+# attribute already carries it (Procedure.recorder,
+# Annotation.authorReference). The C-CDA on FHIR IG explicitly declines to
+# say which of the two to use.
 #
-# With that reclassified, C-CDA now sits exactly where every fully-
-# instrumented HL7v2 message type already does: a deliberate decision NOT
-# to map something has never counted against provenance coverage here
-# (app/mappings/mdm.py leaves TXA-13/TXA-17 unmapped for well-documented
-# reasons, and MDM still reports unsupported=False). So every C-CDA
-# document type now graduates to fully supported too - see
-# _INSTRUMENTED_CDA_DOCUMENT_TYPES below. This constant is kept for the
-# one case that genuinely remains: a document type this app doesn't
-# recognize at all.
+# A deliberate decision not to map something has never counted against
+# coverage here - app/mappings/mdm.py leaves TXA-13/TXA-17 unmapped and
+# MDM still reports unsupported=False - so holding C-CDA to a different
+# bar was an inconsistency, not a stricter standard.
 _CDA_UNSUPPORTED_REASON = (
     "Field-level provenance for C-CDA is implemented for the CCD, "
     "Discharge Summary, and History and Physical document types; this "
