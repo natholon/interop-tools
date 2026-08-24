@@ -223,7 +223,7 @@ def _build_social_history_observation(observation_element, patient_id: str, reco
     return observation
 
 
-def apply_patient_extensions(section, patient, recorder=None) -> None:
+def apply_patient_extensions(section, patient, section_index: int = 0, recorder=None) -> None:
     """Attach the US Core Patient extensions this section carries.
 
     Called with the Patient resource itself rather than its id, which is
@@ -231,9 +231,22 @@ def apply_patient_extensions(section, patient, recorder=None) -> None:
     section builder - SECTION_BUILDERS hands builders only `patient.id`,
     and these observations have no resource of their own to return.
 
+    **Locations are recorded absolutely**, from ClinicalDocument down,
+    which no other C-CDA fact does. Every other one is section-relative and
+    resolved by claiming an occurrence of its leading element, but that
+    machinery keys off the resource a fact belongs to - and these belong to
+    Patient, whose other facts all come from the header where no ambiguity
+    exists. Left relative, a Gender Identity fact claimed whichever <entry>
+    the counter happened to reach and highlighted the Birth Sex one. An
+    absolute path has a single root and needs no occurrence at all, which
+    is why `section_index` has to be threaded in.
+
     Mutates `patient` in place and returns nothing; an unrecognised or
     unresolvable observation is left alone rather than guessed at.
     """
+    section_base = xpath_location(
+        "ClinicalDocument", "component", "structuredBody", f"component[{section_index}]", "section"
+    )
     for entry_index, entry in enumerate(find_all(section, "entry")):
         observation_element = find_child(entry, "observation")
         if observation_element is None:
@@ -244,10 +257,12 @@ def apply_patient_extensions(section, patient, recorder=None) -> None:
 
         if has_template_id(observation_element, BIRTH_SEX_TEMPLATE_ID):
             _add_code_extension(
-                patient, US_CORE_BIRTHSEX_EXTENSION, value_element, entry_index, recorder
+                patient, US_CORE_BIRTHSEX_EXTENSION, value_element, section_base, entry_index, recorder
             )
         elif has_template_id(observation_element, SEX_TEMPLATE_ID):
-            _add_code_extension(patient, US_CORE_SEX_EXTENSION, value_element, entry_index, recorder)
+            _add_code_extension(
+                patient, US_CORE_SEX_EXTENSION, value_element, section_base, entry_index, recorder
+            )
         elif has_template_id(observation_element, GENDER_IDENTITY_TEMPLATE_ID):
             concept = build_codeable_concept_from_cd(value_element)
             if concept is None:
@@ -261,12 +276,14 @@ def apply_patient_extensions(section, patient, recorder=None) -> None:
                     recorder,
                     patient.id,
                     f"extension[{index}].valueCodeableConcept",
-                    xpath_location(f"entry[{entry_index}]", "observation", "value"),
+                    xpath_location(section_base, f"entry[{entry_index}]", "observation", "value"),
                     concept,
                 )
 
 
-def _add_code_extension(patient, url: str, value_element, entry_index: int, recorder) -> None:
+def _add_code_extension(
+    patient, url: str, value_element, section_base: str, entry_index: int, recorder
+) -> None:
     """A US Core extension whose value[x] is a bare `code` (birthsex, sex),
     taken from the source `<value>`'s own @code."""
     code = (value_element.get("code") or "").strip()
@@ -278,7 +295,7 @@ def _add_code_extension(patient, url: str, value_element, entry_index: int, reco
         recorder.record(
             patient.id,
             f"extension[{index}].valueCode",
-            xpath_location(f"entry[{entry_index}]", "observation", "value", "@code"),
+            xpath_location(section_base, f"entry[{entry_index}]", "observation", "value", "@code"),
             code,
         )
 

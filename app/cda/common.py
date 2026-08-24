@@ -853,7 +853,9 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
     encounter = build_encounter_from_header(document, patient.id, recorder=recorder)
     resources = [encounter] if encounter is not None else []
 
-    for section in find_all(document, "component/structuredBody/component/section"):
+    for section_index, section in enumerate(
+        find_all(document, "component/structuredBody/component/section")
+    ):
         for section_template_id, builder in SECTION_BUILDERS.items():
             if has_template_id(section, section_template_id):
                 # Convert this section's own narrative-referenced
@@ -869,7 +871,9 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
                 # SECTION_BUILDERS hands builders only `patient.id`, and
                 # these have no resource of their own to return.
                 if section_template_id == SOCIAL_HISTORY_SECTION_TEMPLATE_ID:
-                    apply_patient_extensions(section, patient, recorder=recorder)
+                    apply_patient_extensions(
+                        section, patient, section_index, recorder=recorder
+                    )
                 break
         # An unrecognized section is silently skipped - disclosed, not a
         # bug (see CLAUDE.md's per-document-type scope-limit notes).

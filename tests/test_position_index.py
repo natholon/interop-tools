@@ -125,3 +125,47 @@ def test_every_span_is_within_its_own_text(fixture):
     ):
         for entry in index:
             assert 0 <= entry.start < entry.end <= len(text), f"{entry} out of range for {fixture}"
+
+
+def test_an_absolute_path_resolves_without_claiming_an_occurrence():
+    # A relative location is resolved by claiming an occurrence of its
+    # leading element, which needs a resource-scoped hint to disambiguate.
+    # Patient's US Core extensions come from inside a section, where no
+    # such hint exists, so they record an absolute path instead - and the
+    # document root is unique, so there is exactly one candidate.
+    #
+    # CdaLocator._candidates only walked *children*, so an absolute path
+    # matched nothing at all until the root was made a candidate for its
+    # own tag.
+    from app.provenance.cda_locator import CdaLocator
+
+    raw = (FIXTURES / "history_and_physical_basic.xml").read_text(encoding="utf-8")
+    index = build_source_position_index(raw, "CDA")
+    gender_identity = next(
+        e for e in index if e.path.endswith("/@code") and raw[e.start : e.end] == "446141000124107"
+    )
+    assert gender_identity.path.startswith("ClinicalDocument/")
+
+    span = CdaLocator(raw).locate(gender_identity.path, 0)
+    assert span is not None
+    assert raw[span[0] : span[1]] == "446141000124107"
+
+
+def test_patient_extension_facts_highlight_their_own_source_element():
+    # The regression this exists for: both Birth Sex and Gender Identity
+    # recorded a relative entry/observation/value path, so the occurrence
+    # counter gave them the same element and Gender Identity highlighted
+    # the Birth Sex text.
+    payload, _fmt = _panes("history_and_physical_basic.xml")
+    raw = (FIXTURES / "history_and_physical_basic.xml").read_text(encoding="utf-8")
+    _bundle, report, _dedup = convert_with_provenance(raw)
+
+    spans = {}
+    for match, entry in zip(payload.matches, report.entries):
+        if entry.fhir_path and "extension" in entry.fhir_path and match.source_span:
+            spans[entry.fhir_path.split(".resource.")[-1]] = raw[
+                match.source_span[0] : match.source_span[1]
+            ]
+
+    assert spans["extension[0].valueCode"] == "F"
+    assert spans["extension[1].valueCodeableConcept.coding[0].code"] == "446141000124107"

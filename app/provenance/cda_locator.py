@@ -326,6 +326,17 @@ class CdaLocator:
         if self._root is None:
             return []
         template_id = _SCOPE_TEMPLATE_IDS.get(scope_hint) if scope_hint else None
+
+        # An absolute location names the document root, which is not a
+        # child of anything and so is invisible to the walk below. It is
+        # also unique, so there is exactly one candidate and no occurrence
+        # to claim - which is the point of using one: a fact whose source
+        # has no unambiguous relative root can name its full path instead.
+        if self._root.tag == root_tag and (
+            template_id is None or _has_template_id(self._root, template_id)
+        ):
+            return [self._root]
+
         found: list[_ElementNode] = []
 
         def walk(node: _ElementNode) -> None:
