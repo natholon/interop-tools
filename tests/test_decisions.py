@@ -1116,3 +1116,27 @@ def test_range_bounds_record_their_units_not_just_their_values():
 
     dropped = [d.source_location or "" for d in _cda_decisions_for_text(raw) if d.kind == "dropped"]
     assert not [loc for loc in dropped if loc.endswith("/@unit")], dropped
+
+
+def test_a_skipped_entry_cannot_borrow_a_siblings_read_by_value():
+    # _unconverted_entry_paths disables the fallbacks so a wholly skipped
+    # entry cannot borrow a sibling's reads and vanish. The relative-path
+    # fallback was disabled; the value fallback was not, and ran first -
+    # so one leaf whose text happened to match a mapped value anywhere in
+    # the document made the entry look partly read. The entry-level
+    # finding then disappeared and its parts scattered as leaf rows.
+    import random
+
+    from app.cda.generator import generate_discharge_summary
+
+    raw = generate_discharge_summary(random.Random(0))
+    dropped = [d for d in _cda_decisions_for_text(raw) if d.kind == "dropped"]
+    section = "ClinicalDocument/component/structuredBody/component[1]/section"
+
+    unconverted = [d for d in dropped if d.source_location == f"{section}/entry"]
+    assert len(unconverted) == 1
+    assert "produced no FHIR resource" in unconverted[0].summary
+
+    # Nothing beneath it is reported separately any more.
+    beneath = [d.source_location for d in dropped if (d.source_location or "").startswith(f"{section}/entry/")]
+    assert beneath == [], beneath
