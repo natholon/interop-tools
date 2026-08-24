@@ -1042,12 +1042,35 @@ def test_required_header_participations_report_once_each_with_a_verdict():
     assert beneath == [], [d.source_location for d in beneath]
 
 
-def test_a_device_header_author_groups_the_same_way_as_a_person():
-    # The header carries two authors, one an assignedAuthoringDevice - the
-    # grouping keys off the participation, not what is inside it.
+def test_two_header_authors_stay_two_findings():
+    # Repeated shapes normally collapse into one row carrying a count -
+    # right for seven Problems entries dropping the same id, wrong here.
+    # Two document authors are two statements, and this header's are not
+    # even the same kind: one is a person, one a software system.
     dropped = [d for d in _decisions_for_any_fixture("ccd_header_multiplicities.xml") if d.kind == "dropped"]
     authors = [d for d in dropped if (d.source_location or "").startswith("ClinicalDocument/author")]
-    assert [d.source_location for d in authors] == ["ClinicalDocument/author"]
-    # One row, but it still names what both authors carried.
-    assert "Cedar Ridge EHR 5" in (authors[0].detail or "")
+    assert [d.source_location for d in authors] == [
+        "ClinicalDocument/author",
+        "ClinicalDocument/author[1]",
+    ]
     assert "Bergstrom" in (authors[0].detail or "")
+    assert "Cedar Ridge EHR 5" in (authors[1].detail or "")
+    # Each is headed by a name or device model, not by its <time>.
+    assert [d.lost_value for d in authors] == ["Bergstrom", "Cedar Ridge EHR 5"]
+
+
+@pytest.mark.parametrize("fixture", _ALL_FIXTURES)
+def test_decision_ids_are_unique(fixture):
+    # apply_rejections keys a dict by id, so a collision makes one of the
+    # colliding pair unreachable and has the UI share one review state
+    # across both rows. Rows group by templateId chain as well as shape,
+    # so two sections dropping the same-looking element are correctly two
+    # findings - and used to collide, since the id carries only the shape.
+    try:
+        decisions = _decisions_for_any_fixture(fixture)
+    except Exception:
+        # Fixtures that deliberately do not convert have no register.
+        return
+    ids = [d.id for d in decisions]
+    duplicates = sorted({i for i in ids if ids.count(i) > 1})
+    assert duplicates == []

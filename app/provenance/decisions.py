@@ -608,6 +608,9 @@ class _CdaRow(NamedTuple):
     detail: str | None
     template_ids: frozenset[str]
     unconverted_entry: bool = False
+    # Never collapsed with same-shaped siblings: two document authors are
+    # two distinct statements, not one shape repeated.
+    distinct: bool = False
 
 
 def _unconverted_entry_paths(leaves: list[_CdaLeaf], is_mapped) -> set[str]:
@@ -712,11 +715,19 @@ def _collapse_repeated_shapes(rows: list[_CdaRow]) -> list[MappingDecision]:
     """
     grouped: dict[tuple[frozenset[str], str], list[_CdaRow]] = {}
     for row in rows:
-        grouped.setdefault((row.template_ids, _shape_of(row.location)), []).append(row)
+        # A distinct row keys off its own location, so an indexed sibling
+        # stays its own finding rather than becoming "2 occurrences".
+        key = row.location if row.distinct else _shape_of(row.location)
+        grouped.setdefault((row.template_ids, key), []).append(row)
 
     decisions: list[MappingDecision] = []
-    for (template_ids, shape), group in grouped.items():
+    for (template_ids, group_key), group in grouped.items():
         first_location, label_key, first_value, detail = group[0][:4]
+        # A distinct row's key is its own indexed location, which no
+        # verdict is written against - the verdict answers the shape. The
+        # id keeps the key, though: two rows sharing one id makes one of
+        # them unreachable in apply_rejections, which keys a dict by it.
+        shape = _shape_of(group_key)
         count = len(group)
         if count == 1:
             summary = f"{first_location} is present in the source but not mapped to any FHIR field."
@@ -729,7 +740,7 @@ def _collapse_repeated_shapes(rows: list[_CdaRow]) -> list[MappingDecision]:
         if group[0].unconverted_entry:
             decisions.append(
                 MappingDecision(
-                    id=_decision_id("dropped", shape),
+                    id=_decision_id("dropped", group_key),
                     kind="dropped",
                     summary=(
                         f"{first_location} produced no FHIR resource; everything it carried was dropped."
@@ -753,7 +764,7 @@ def _collapse_repeated_shapes(rows: list[_CdaRow]) -> list[MappingDecision]:
             summary = f"GAP: {summary}"
         decisions.append(
             MappingDecision(
-                id=_decision_id("dropped", shape),
+                id=_decision_id("dropped", group_key),
                 kind="dropped",
                 summary=summary,
                 detail=detail,
@@ -763,7 +774,26 @@ def _collapse_repeated_shapes(rows: list[_CdaRow]) -> list[MappingDecision]:
                 citation=citation,
             )
         )
-    return decisions
+    return _with_unique_ids(decisions)
+
+
+def _with_unique_ids(decisions: list[MappingDecision]) -> list[MappingDecision]:
+    """Suffix any id a later decision would otherwise repeat.
+
+    Rows group by templateId chain as well as shape, so two sections that
+    drop the same-looking element are correctly two findings - but the id
+    only carries the shape, so they collided. `apply_rejections` keys a
+    dict by id, which makes one of a colliding pair unreachable and has
+    the UI share one review state across both rows. Same `[n]` suffix the
+    HL7v2 half already uses from a repeating field's second repetition on.
+    """
+    seen: dict[str, int] = {}
+    out: list[MappingDecision] = []
+    for decision in decisions:
+        count = seen.get(decision.id, 0)
+        seen[decision.id] = count + 1
+        out.append(decision if count == 0 else decision.model_copy(update={"id": f"{decision.id}[{count}]"}))
+    return out
 
 
 def _dropped_cda_decisions(
@@ -843,10 +873,9 @@ def _dropped_cda_decisions(
     for participation_path in sorted(unread_participations):
         part_leaves = [lf for lf in leaves if lf.path.startswith(participation_path + "/")]
         carried = ", ".join(dict.fromkeys(f"{lf.value!r}" for lf in part_leaves))
-        # Two authors collapse into one shape row listing each row's value,
-        # so that value has to identify the participation - a name or a
-        # device model, not whichever leaf happened to come first (the
-        # <time>, which says nothing about who authored anything).
+        # Head the row with a name or device model rather than whichever
+        # leaf came first - that is the <time>, which says nothing about
+        # who authored anything.
         identifying = next(
             (lf for lf in part_leaves if lf.tag in _PARTICIPATION_IDENTIFYING_TAGS),
             part_leaves[0],
@@ -858,6 +887,7 @@ def _dropped_cda_decisions(
                 identifying.value,
                 f"Carried {carried}.",
                 part_leaves[0].template_ids,
+                distinct=True,
             )
         )
 
