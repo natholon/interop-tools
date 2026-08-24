@@ -681,7 +681,8 @@ pre {
     background: var(--match-color, var(--surface-sunk));
     border-radius: 3px;
     padding: 0 1px;
-    cursor: default;
+    /* Clicking a mark locates its counterpart in the other pane. */
+    cursor: pointer;
     transition: outline-color 100ms ease;
     outline: 2px solid transparent;
     outline-offset: 1px;
@@ -689,6 +690,14 @@ pre {
 
 .xwalk-mark.is-active {
     outline-color: var(--accent);
+}
+
+/* A pin outlives the pointer, so it needs to read as held rather than
+   hovered - a solid ring plus a shadow, distinct from is-active's thin
+   outline, which can sit on the same element at the same time. */
+.xwalk-mark.is-pinned {
+    outline-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
 }
 
 .xwalk-mark.xwalk-inferred {
@@ -892,6 +901,19 @@ pre {
 .decision-inline-toggle {
     display: block;
     margin-top: 0.25rem;
+}
+/* A row is a second way to locate the same fact, and the keyboard's way
+   in: the rows carry the tab stop, not the panes' hundreds of marks. */
+#crosswalk-table tr.crosswalk-locatable {
+    cursor: pointer;
+}
+#crosswalk-table tr.crosswalk-locatable:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+#crosswalk-table tr.is-pinned > td {
+    background: var(--surface-sunk);
+    box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
 }
 #crosswalk-table tr.is-rejected {
     opacity: 0.6;

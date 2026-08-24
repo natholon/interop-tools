@@ -2,7 +2,7 @@
 {% block title %}HL7v2 / C-CDA / X12 &harr; FHIR | interop-tools{% endblock %}
 {% block content %}
 <h2 class="section-heading">Message &rarr; FHIR</h2>
-<p class="page-intro">Paste (or generate) an HL7v2 message, C-CDA document, or X12 EDI interchange, then convert it to a FHIR R4 Bundle. The crosswalk shows exactly which source field produced each FHIR field - matching colors mark the correlation, and hovering either side shows the detail. <strong>Validate</strong> checks the source message on its own, without converting.</p>
+<p class="page-intro">Paste (or generate) an HL7v2 message, C-CDA document, or X12 EDI interchange, then convert it to a FHIR R4 Bundle. The crosswalk shows exactly which source field produced each FHIR field - matching colors mark the correlation, hovering either side shows the detail, and clicking a highlight scrolls the other side to its counterpart and holds both marked (Esc to release). <strong>Validate</strong> checks the source message on its own, without converting.</p>
 <form id="crosswalk-form" method="post" action="/data-specification" enctype="multipart/form-data">
     <div class="crosswalk-panes">
         <div class="crosswalk-pane">

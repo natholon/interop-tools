@@ -560,9 +560,20 @@ document.addEventListener("DOMContentLoaded", () => {
 function renderCrosswalkTable(entries) {
         if (!tableBody) return;
         tableBody.innerHTML = "";
-        for (const entry of entries) {
+        // The row index IS the match id: highlighting.matches was built in
+        // this same entry order, which is what data-match already encodes
+        // on every <mark>. Carrying it here makes a row a second way to
+        // locate the same fact, and the keyboard-reachable one.
+        for (const [matchIndex, entry] of entries.entries()) {
             const tr = document.createElement("tr");
-            if (entry.derivation === "inferred") tr.className = "crosswalk-inferred";
+            tr.dataset.match = String(matchIndex);
+            tr.classList.add("crosswalk-locatable");
+            // Focusable so the panes' marks are reachable without a mouse.
+            // The row carries it rather than each <mark>: a document has
+            // hundreds of marks, and hundreds of tab stops would wreck
+            // navigation for everything else on the page.
+            tr.tabIndex = 0;
+            if (entry.derivation === "inferred") tr.classList.add("crosswalk-inferred");
 
             const locationCell = document.createElement("td");
             if (entry.derivation === "inferred") {
@@ -805,6 +816,8 @@ function renderCrosswalkTable(entries) {
 
     function showCrosswalk(report, highlighting, dedupSummary) {
         if (!outputPane) return;
+        // A pin refers to marks about to be replaced wholesale.
+        clearPin();
         setPositions(highlighting);
         currentReportEntries = report.entries || [];
         // e.g. "ADT-A01", "CDA-CCD", "EDI-837P" - a filename that says
@@ -951,6 +964,104 @@ function renderCrosswalkTable(entries) {
         pane.addEventListener("mouseout", handlePaneMouseOut);
         pane.addEventListener("mousemove", handlePaneMouseMove);
     }
+
+    // ---- click to locate: pin a match and bring its counterpart into
+    // view in the other pane. Hover already correlates the two, but only
+    // for spans that happen to be on screen together, and only while the
+    // pointer stays put - clicking "Linda" in a given-name field should
+    // scroll the Bundle to the name it produced and keep it marked. ----
+
+    let pinnedMatchId = null;
+
+    function marksFor(matchId) {
+        return document.querySelectorAll(`.xwalk-mark[data-match="${matchId}"]`);
+    }
+
+    // Scrolls the pane, not the page: scrollIntoView would also move the
+    // document, dragging the element the reader just clicked in the other
+    // pane out from under the pointer.
+    function scrollWithinPane(pane, mark) {
+        const paneRect = pane.getBoundingClientRect();
+        const markRect = mark.getBoundingClientRect();
+        if (markRect.top >= paneRect.top && markRect.bottom <= paneRect.bottom) return;
+        const centred = markRect.top - paneRect.top - (pane.clientHeight - markRect.height) / 2;
+        pane.scrollTo({ top: pane.scrollTop + centred, behavior: "smooth" });
+    }
+
+    function clearPin() {
+        if (pinnedMatchId === null) return;
+        marksFor(pinnedMatchId).forEach((el) => el.classList.remove("is-pinned"));
+        if (tableBody) {
+            tableBody.querySelectorAll("tr.is-pinned").forEach((tr) => tr.classList.remove("is-pinned"));
+        }
+        pinnedMatchId = null;
+    }
+
+    // `origin` is the pane the click came from, if any - it keeps its
+    // scroll position, since the reader is already looking at it.
+    function pinMatch(matchId, origin) {
+        const alreadyPinned = pinnedMatchId === matchId;
+        clearPin();
+        if (alreadyPinned) return;
+
+        pinnedMatchId = matchId;
+        marksFor(matchId).forEach((el) => el.classList.add("is-pinned"));
+        // The table row is marked but deliberately not scrolled to: it
+        // sits below the panes, so reaching it means moving the page, and
+        // the reader's eye is on the two panes.
+        const row = tableBody && tableBody.querySelector(`tr[data-match="${matchId}"]`);
+        if (row) row.classList.add("is-pinned");
+
+        const entry = findEntryForMatchId(matchId);
+        const readouts = [
+            [sourcePre, sourceCaret, "Source location:", entry && entry.source_location],
+            [fhirPre, fhirCaret, "FHIR path:", entry && entry.fhir_path],
+        ];
+        for (const [pane, caretEl, label, path] of readouts) {
+            // The path is reported whether or not a span was highlightable
+            // - a fact with no drawable counterpart still has an address
+            // worth naming, and saying nothing reads as a dead click.
+            renderCaret(caretEl, label, path || null);
+            if (!pane || pane === origin) continue;
+            const mark = pane.querySelector(`.xwalk-mark[data-match="${matchId}"]`);
+            if (mark) scrollWithinPane(pane, mark);
+        }
+    }
+
+    function handlePaneClick(event) {
+        const mark = event.target.closest(".xwalk-mark");
+        if (!mark) {
+            clearPin();
+            return;
+        }
+        pinMatch(mark.dataset.match, event.currentTarget);
+    }
+
+    for (const pane of [sourcePre, fhirPre]) {
+        if (pane) pane.addEventListener("click", handlePaneClick);
+    }
+
+    if (tableBody) {
+        tableBody.addEventListener("click", (event) => {
+            // The Reject/Accept control lives in a row too, and re-runs the
+            // conversion - it must not double as a locate.
+            if (event.target.closest("button")) return;
+            const row = event.target.closest("tr[data-match]");
+            if (row) pinMatch(row.dataset.match, null);
+        });
+        tableBody.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            if (event.target.closest("button")) return;
+            const row = event.target.closest("tr[data-match]");
+            if (!row) return;
+            event.preventDefault(); // Space would otherwise page down.
+            pinMatch(row.dataset.match, null);
+        });
+    }
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") clearPin();
+    });
 
     if (generateBtn && messageTypeSelect && textarea) {
         generateBtn.addEventListener("click", async () => {
