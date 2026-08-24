@@ -85,6 +85,11 @@ class _ElementNode:
     text_span: Span | None = None
 
 
+def _is_namespace_declaration(name: str) -> bool:
+    """`xmlns` or `xmlns:<prefix>` - an XML namespace binding, not data."""
+    return name == "xmlns" or name.startswith("xmlns:")
+
+
 def _strip_prefix(name: str) -> str:
     """expat, used here without namespace processing, hands back a raw
     tag/attribute name including any literal namespace prefix (e.g.
@@ -137,7 +142,14 @@ def parse_with_positions(raw_xml: str) -> _ElementNode | None:
         end = _find_start_tag_end(raw_xml, start)
         node = _ElementNode(
             tag=_strip_prefix(name),
-            attrs={_strip_prefix(k): v for k, v in attrs.items()},
+            # A namespace declaration keeps its full name. Stripping the
+            # prefix off `xmlns:ns2` leaves `ns2`, which is the only thing
+            # identifying it as plumbing rather than a lost clinical value -
+            # and the prefix is arbitrary (a document round-tripped through
+            # ElementTree comes back as ns2, ns3, ...), so a list of known
+            # prefixes cannot hold. Real prefixed attributes like xsi:type
+            # still strip, since callers look them up unprefixed.
+            attrs={k if _is_namespace_declaration(k) else _strip_prefix(k): v for k, v in attrs.items()},
             start_tag_span=(start, end),
         )
         if stack:

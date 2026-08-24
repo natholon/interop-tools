@@ -177,14 +177,19 @@ def _build_reference_range(
         observation_reference_range = ObservationReferenceRange()
         range_path = f"referenceRange[{len(ranges)}]"
         range_base = xpath_location(member_base, f"referenceRange[{range_index}]", "observationRange", "value") if member_base else None
-        if low is not None:
-            observation_reference_range.low = low
-            if recorder and resource_id and range_base:
-                recorder.record(resource_id, f"{range_path}.low.value", f"{range_base}/low/@value", low_element.get("value"))
-        if high is not None:
-            observation_reference_range.high = high
-            if recorder and resource_id and range_base:
-                recorder.record(resource_id, f"{range_path}.high.value", f"{range_base}/high/@value", high_element.get("value"))
+        # Both halves of each bound get recorded. build_quantity_from_pq
+        # reads @value AND @unit, so recording only the value reported
+        # every range unit as dropped - data the mapper had carried. Same
+        # gap record_quantity exists to prevent for a plain PQ.
+        for bound, quantity, element in (("low", low, low_element), ("high", high, high_element)):
+            if quantity is None:
+                continue
+            setattr(observation_reference_range, bound, quantity)
+            if not (recorder and resource_id and range_base):
+                continue
+            recorder.record(resource_id, f"{range_path}.{bound}.value", f"{range_base}/{bound}/@value", element.get("value"))
+            if quantity.unit:
+                recorder.record(resource_id, f"{range_path}.{bound}.unit", f"{range_base}/{bound}/@unit", quantity.unit)
         ranges.append(observation_reference_range)
     return ranges
 
@@ -213,17 +218,33 @@ def _build_ivl_pq_value(value_element, resource_id: str | None = None, value_bas
             if range_value.high.unit:
                 recorder.record(resource_id, "valueRange.high.unit", f"{value_base}/high/@unit", range_value.high.unit)
         return {"valueRange": range_value}
-    if high is not None:
-        inclusive = high_element.get("inclusive", "true") != "false"
-        quantity = Quantity(value=high.value, unit=high.unit, comparator="<=" if inclusive else "<")
+    for bound, quantity_source, element, comparators in (
+        ("high", high, high_element, ("<=", "<")),
+        ("low", low, low_element, (">=", ">")),
+    ):
+        if quantity_source is None:
+            continue
+        raw_inclusive = element.get("inclusive")
+        inclusive = (raw_inclusive or "true") != "false"
+        comparator = comparators[0] if inclusive else comparators[1]
+        quantity = Quantity(value=quantity_source.value, unit=quantity_source.unit, comparator=comparator)
         if recorder and resource_id and value_base:
-            recorder.record(resource_id, "valueQuantity.value", f"{value_base}/high/@value", high_element.get("value"))
-        return {"valueQuantity": quantity}
-    if low is not None:
-        inclusive = low_element.get("inclusive", "true") != "false"
-        quantity = Quantity(value=low.value, unit=low.unit, comparator=">=" if inclusive else ">")
-        if recorder and resource_id and value_base:
-            recorder.record(resource_id, "valueQuantity.value", f"{value_base}/low/@value", low_element.get("value"))
+            recorder.record(resource_id, "valueQuantity.value", f"{value_base}/{bound}/@value", element.get("value"))
+            # The bound's own @unit, and the comparator @inclusive decides.
+            # Recording only the value left both looking dropped.
+            if quantity.unit:
+                recorder.record(resource_id, "valueQuantity.unit", f"{value_base}/{bound}/@unit", quantity.unit)
+            if raw_inclusive is not None:
+                recorder.record(
+                    resource_id, "valueQuantity.comparator", f"{value_base}/{bound}/@inclusive", comparator, source_value=raw_inclusive
+                )
+            else:
+                recorder.record_inferred(
+                    resource_id,
+                    "valueQuantity.comparator",
+                    "IVL_PQ @inclusive defaults to true when absent, so a one-sided bound is inclusive.",
+                    comparator,
+                )
         return {"valueQuantity": quantity}
     return {}
 

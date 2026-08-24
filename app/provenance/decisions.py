@@ -448,8 +448,6 @@ CDA_STRUCTURAL_ATTRS: dict[str, str] = {
     "contextControlCode": "RIM context propagation, structural",
     "inversionInd": "Relationship direction, consumed walking entryRelationship",
     "determinerCode": "RIM determiner, structural",
-    "xmlns": "Namespace declaration",
-    "xsi": "Namespace declaration",
     "type": "xsi:type, selects which datatype shape to read",
     "nullFlavor": "Says a value is absent - there is no value to lose",
     "mediaType": "Encoding of the narrative beside it",
@@ -471,10 +469,14 @@ CDA_STRUCTURAL_ELEMENTS: dict[str, str] = {
 # consumed only when that attribute was actually mapped.
 # xmlns declarations. The position-aware parser runs with namespace
 # processing off (it has to, to report real character offsets), so
-# `xmlns:sdtc="urn:hl7-org:sdtc"` arrives as an attribute named `sdtc`
+# `xmlns:sdtc="urn:hl7-org:sdtc"` arrives as an ordinary attribute
 # carrying the namespace URI - XML plumbing that says how to read the
 # document, reported as if the document had lost a clinical value.
-_XMLNS_ATTRS = {"sdtc", "xsi", "voc", "xmlns"}
+# Matched structurally rather than by prefix: the prefix is arbitrary, and
+# a document round-tripped through ElementTree comes back with `ns2`,
+# which a list of known prefixes silently misses.
+def _is_namespace_declaration(name: str) -> bool:
+    return name == "xmlns" or name.startswith("xmlns:")
 
 CDA_QUALIFIER_OF: dict[str, str] = {
     "codeSystem": "code",
@@ -900,7 +902,7 @@ def _dropped_cda_decisions(
             for leaf in element_leaves
             if not is_mapped(leaf)
             and leaf.name not in CDA_STRUCTURAL_ATTRS
-            and leaf.name not in _XMLNS_ATTRS
+            and not _is_namespace_declaration(leaf.name)
             and not _is_consumed_qualifier(leaf, element_leaves, is_mapped)
         ]
         if not reportable:

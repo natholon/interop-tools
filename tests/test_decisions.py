@@ -1072,3 +1072,47 @@ def test_decision_ids_are_unique(fixture):
     ids = [d.id for d in decisions]
     duplicates = sorted({i for i in ids if ids.count(i) > 1})
     assert duplicates == []
+
+
+def _cda_decisions_for_text(raw: str):
+    """The register for raw C-CDA text, the way the route computes it -
+    resolved source spans included, which only C-CDA needs."""
+    from app.provenance.highlighting import build_highlighting_payload
+
+    bundle, report, _ = convert_with_provenance(raw)
+    highlighting = build_highlighting_payload(bundle, report, raw, report.source_format)
+    spans = {tuple(m.source_span) for m in highlighting.matches if m.source_span}
+    return compute_decisions(report, raw, spans)
+
+
+def test_namespace_declarations_are_never_reported_as_dropped():
+    # xmlns:ns2="urn:hl7-org:sdtc" is an XML namespace binding, not a lost
+    # clinical value. The prefix is arbitrary - a document round-tripped
+    # through ElementTree comes back as ns2 - so the old list of known
+    # prefixes (sdtc, xsi, voc) silently missed it.
+    import random
+    import re
+
+    from app.cda.generator import generate_history_and_physical
+
+    raw = generate_history_and_physical(random.Random(6))
+    assert 'xmlns:ns2="urn:hl7-org:sdtc"' in raw, "fixture assumption: the generator emits a prefixed namespace"
+
+    locations = [d.source_location or "" for d in _cda_decisions_for_text(raw) if d.kind == "dropped"]
+    leaked = [loc for loc in locations if re.search(r"@(xmlns|ns\d+|xsi|sdtc|voc)", loc)]
+    assert leaked == [], leaked
+
+
+def test_range_bounds_record_their_units_not_just_their_values():
+    # build_quantity_from_pq reads @value AND @unit, so recording only the
+    # value reported every bound's unit as dropped - the register accusing
+    # the mapper of losing data it had carried.
+    raw = (_EDI_FIXTURES / "ccd_results_basic.xml").read_text(encoding="utf-8")
+    _, report, _ = convert_with_provenance(raw)
+    recorded = {e.fhir_path for e in report.entries}
+    assert any(p.endswith("referenceRange[0].low.unit") for p in recorded)
+    assert any(p.endswith("referenceRange[0].high.unit") for p in recorded)
+    assert any(p.endswith("valueRange.low.unit") for p in recorded)
+
+    dropped = [d.source_location or "" for d in _cda_decisions_for_text(raw) if d.kind == "dropped"]
+    assert not [loc for loc in dropped if loc.endswith("/@unit")], dropped
