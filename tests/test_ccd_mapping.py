@@ -740,6 +740,87 @@ def test_medication_author_becomes_a_requester_practitioner():
     assert practitioner.identifier[0].value == "9988776655"
 
 
+_DEVICE_AUTHOR = """<author><time value="20240102"/><assignedAuthor>
+  <id root="2.16.840.1.113883.19.5" extension="EHR-1"/>
+  <assignedAuthoringDevice>
+    <manufacturerModelName>Acme EHR 9000</manufacturerModelName>
+    <softwareName>Acme Charting Suite</softwareName>
+  </assignedAuthoringDevice>
+</assignedAuthor></author>"""
+
+
+def _document_with_section(section_template_id: str, entry: str) -> str:
+    return f"""<?xml version="1.0"?><ClinicalDocument xmlns="urn:hl7-org:v3">
+<templateId root="2.16.840.1.113883.10.20.22.1.2"/>
+<recordTarget><patientRole><id root="1.1" extension="P1"/>
+<patient><name><given>Test</given><family>Patient</family></name></patient>
+</patientRole></recordTarget>
+<component><structuredBody><component><section>
+<templateId root="{section_template_id}"/>
+{entry}
+</section></component></structuredBody></component></ClinicalDocument>"""
+
+
+def test_device_author_becomes_a_device_not_a_nameless_practitioner():
+    # CDA models the author as a choice - assignedPerson OR
+    # assignedAuthoringDevice - so an EHR that generated the entry is an
+    # ordinary author. Building a Practitioner for one asserts a software
+    # system is a person and drops its model/software names, which
+    # Practitioner has nowhere to put.
+    bundle = convert_cda_to_bundle(
+        _document_with_section(
+            "2.16.840.1.113883.10.20.22.2.1.1",
+            f"""<entry><substanceAdministration classCode="SBADM" moodCode="EVN">
+  <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+  <statusCode code="active"/>
+  {_DEVICE_AUTHOR}
+  <consumable><manufacturedProduct><manufacturedMaterial>
+    <code code="1049502" codeSystem="2.16.840.1.113883.6.88" displayName="Acetaminophen"/>
+  </manufacturedMaterial></manufacturedProduct></consumable>
+</substanceAdministration></entry>""",
+        )
+    )
+    entries = _entries_by_type(bundle)
+    assert "Practitioner" not in entries
+
+    request = entries["MedicationRequest"][0].resource
+    device_id = request.requester.reference.removeprefix("urn:uuid:")
+    device = next(e.resource for e in entries["Device"] if e.resource.id == device_id)
+    assert [n.name for n in device.deviceName] == ["Acme EHR 9000", "Acme Charting Suite"]
+    assert [n.type for n in device.deviceName] == ["model-name", "user-friendly-name"]
+    assert device.identifier[0].value == "EHR-1"
+
+
+def test_device_author_is_skipped_where_the_target_cannot_reference_one():
+    # Observation.performer's enum_reference_types has no Device (unlike
+    # MedicationRequest.requester, which does), so a device-authored vital
+    # is left without a performer rather than recorded as a person.
+    bundle = convert_cda_to_bundle(
+        _document_with_section(
+            "2.16.840.1.113883.10.20.22.2.4.1",
+            f"""<entry><organizer classCode="CLUSTER" moodCode="EVN">
+  <templateId root="2.16.840.1.113883.10.20.22.4.26"/>
+  <statusCode code="completed"/>
+  <effectiveTime value="20240102"/>
+  <component><observation classCode="OBS" moodCode="EVN">
+    <templateId root="2.16.840.1.113883.10.20.22.4.27"/>
+    <code code="8867-4" codeSystem="2.16.840.1.113883.6.1" displayName="Heart rate"/>
+    <statusCode code="completed"/>
+    <effectiveTime value="20240102"/>
+    {_DEVICE_AUTHOR}
+    <value xsi:type="PQ" value="72" unit="/min"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+  </observation></component>
+</organizer></entry>""",
+        )
+    )
+    entries = _entries_by_type(bundle)
+    assert "Device" not in entries
+    assert "Practitioner" not in entries
+    for entry in entries["Observation"]:
+        assert entry.resource.performer is None
+
+
 def test_sections_the_ig_routes_to_provenance_get_no_author_practitioner():
     # Problems maps Author Participation to Provenance and marks the rest
     # "not supported by target", so building a recorder Practitioner here

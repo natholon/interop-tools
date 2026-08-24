@@ -40,7 +40,7 @@ from fhir.resources.R4B.observation import Observation, ObservationComponent
 from fhir.resources.R4B.reference import Reference
 
 from app.cda.common import (
-    build_author_practitioner,
+    build_author_participant,
     build_codeable_concept_from_cd,
     build_identifiers,
     build_quantity_from_pq,
@@ -154,13 +154,23 @@ def _loinc_code(observation_element) -> str | None:
     return code_element.get("code")
 
 
-def _apply_common_observation_fields(observation: Observation, observation_element, member_base: str, recorder=None) -> None:
-    """effectiveDateTime/interpretation/method/bodySite - the fields every
-    Vital Sign Observation reads the same way regardless of whether it
-    ends up as an ordinary flat member or the base of a Pulse Oximetry
-    Panel. Extracted once _build_pulse_oximetry_panel became a second real
-    consumer of the identical extraction _build_vital_sign_observation
-    already had inline."""
+def _apply_common_observation_fields(
+    observation: Observation,
+    observation_element,
+    member_base: str,
+    recorder=None,
+    extra_resources: list | None = None,
+) -> None:
+    """effectiveDateTime/interpretation/method/bodySite/performer - the
+    fields every Vital Sign Observation reads the same way regardless of
+    whether it ends up as an ordinary flat member or the base of a Pulse
+    Oximetry Panel (whose primary O2-saturation reading IS the panel, so
+    it keeps its own author too). Extracted once _build_pulse_oximetry_panel
+    became a second real consumer of the identical extraction
+    _build_vital_sign_observation already had inline.
+
+    `extra_resources` collects the performer Practitioner; pass None where
+    there is nowhere to return one."""
     effective_time = find_child(observation_element, "effectiveTime")
     effective, _ = ivl_ts_bounds(effective_time)
     effective_dt = parse_partial_ts(effective)
@@ -193,6 +203,30 @@ def _apply_common_observation_fields(observation: Observation, observation_eleme
     if body_site:
         observation.bodySite = body_site
         record_coding(recorder, observation.id, "bodySite", f"{member_base}/targetSiteCode", body_site)
+
+    # CF-vitals maps a Vital Sign Observation's /author to .performer as
+    # well as to Provenance - one of the few author rows in the IG that
+    # names a plain attribute. A side folded into a Blood Pressure Panel
+    # keeps no Observation of its own to carry one, the same reason its
+    # id, status and effectiveTime are not carried either.
+    if extra_resources is None:
+        return
+    # allow_device=False: Observation.performer cannot reference a Device,
+    # so a device-authored vital is left without a performer rather than
+    # having its authoring system recorded as a person.
+    author = build_author_participant(observation_element, member_base, allow_device=False, recorder=recorder)
+    if author is None:
+        return
+    performer_reference, performer = author
+    observation.performer = [performer_reference]
+    extra_resources.append(performer)
+    if recorder:
+        recorder.record(
+            observation.id,
+            "performer[0].reference",
+            xpath_location(member_base, "author", "assignedAuthor"),
+            performer_reference.reference,
+        )
 
 
 def _build_vital_sign_observation(
@@ -247,26 +281,9 @@ def _build_vital_sign_observation(
             if value.unit:
                 recorder.record(observation_id, "valueQuantity.unit", f"{member_base}/value/@unit", value.unit)
 
-    _apply_common_observation_fields(observation, observation_element, member_base, recorder=recorder)
-
-    # CF-vitals maps a Vital Sign Observation's /author to .performer as
-    # well as to Provenance - one of the few author rows in the IG that
-    # names a plain attribute. A member folded into a blood-pressure or
-    # pulse-oximetry panel has no Observation of its own to carry one,
-    # the same reason its id, status and effectiveTime are not carried.
-    if extra_resources is not None:
-        author = build_author_practitioner(observation_element, member_base, recorder=recorder)
-        if author is not None:
-            performer_reference, performer = author
-            observation.performer = [performer_reference]
-            extra_resources.append(performer)
-            if recorder:
-                recorder.record(
-                    observation_id,
-                    "performer[0].reference",
-                    xpath_location(member_base, "author", "assignedAuthor"),
-                    performer_reference.reference,
-                )
+    _apply_common_observation_fields(
+        observation, observation_element, member_base, recorder=recorder, extra_resources=extra_resources
+    )
 
     return observation
 
@@ -322,7 +339,9 @@ def _build_blood_pressure_panel(systolic, diastolic, patient_id: str, recorder=N
     return panel
 
 
-def _build_pulse_oximetry_panel(primary, concentration, flow_rate, patient_id: str, recorder=None) -> Observation | None:
+def _build_pulse_oximetry_panel(
+    primary, concentration, flow_rate, patient_id: str, recorder=None, extra_resources: list | None = None
+) -> Observation | None:
     """`primary` is a (index, observation_element) pair (the O2 saturation
     reading) - the base of the panel itself, not a separate member;
     `concentration`/`flow_rate` are the same shape or None when their own
@@ -364,7 +383,11 @@ def _build_pulse_oximetry_panel(primary, concentration, flow_rate, patient_id: s
         if value.unit:
             recorder.record(panel_id, "valueQuantity.unit", f"{member_base}/value/@unit", value.unit)
 
-    _apply_common_observation_fields(panel, primary_element, member_base, recorder=recorder)
+    # The primary O2-saturation reading IS the panel, so its own author
+    # maps to .performer exactly as it would on a flat vital.
+    _apply_common_observation_fields(
+        panel, primary_element, member_base, recorder=recorder, extra_resources=extra_resources
+    )
 
     components = []
     for entry in (concentration, flow_rate):
@@ -499,7 +522,12 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
 
         if pulse_ox_primary:
             pulse_ox_panel = _build_pulse_oximetry_panel(
-                pulse_ox_primary, pulse_ox_concentration, pulse_ox_flow_rate, patient_id, recorder=recorder
+                pulse_ox_primary,
+                pulse_ox_concentration,
+                pulse_ox_flow_rate,
+                patient_id,
+                recorder=recorder,
+                extra_resources=extra_resources,
             )
             if pulse_ox_panel is not None:
                 member_observations.append(pulse_ox_panel)

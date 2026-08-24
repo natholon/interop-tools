@@ -12,7 +12,7 @@ from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.timing import Timing, TimingRepeat
 
 from app.cda.common import (
-    build_author_practitioner,
+    build_author_participant,
     build_codeable_concept_from_cd,
     build_identifiers,
     build_quantity_from_pq,
@@ -274,7 +274,7 @@ def build_medication_request(
     # The IG's MedicationRequest table maps ".author Participation" to
     # .requester alongside its Provenance row, so the author is a real
     # Practitioner here rather than only an audit-trail entry.
-    author = build_author_practitioner(substance_administration, _ENTRY_BASE, recorder=recorder)
+    author = build_author_participant(substance_administration, _ENTRY_BASE, recorder=recorder)
     if author is not None:
         requester_reference, requester = author
         request.requester = requester_reference

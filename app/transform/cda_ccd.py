@@ -455,7 +455,7 @@ def _build_dosage_elements(request) -> str:
     return f"{effective_time}{route}{dose_quantity}{rate_quantity}{free_text_sig}"
 
 
-def _build_medication_entry(request, wrap_in_discharge_act: bool = False) -> str:
+def _build_medication_entry(request, authors_by_id: dict, wrap_in_discharge_act: bool = False) -> str:
     consumable_code = _build_cd_element("code", request.medicationCodeableConcept) or '<code nullFlavor="UNK"/>'
     status_code = _MEDICATION_STATUS_TO_ACT_STATUS.get(request.status, _DEFAULT_MEDICATION_ACT_STATUS)
     mood_code = _INTENT_TO_MOOD_CODE.get(request.intent, _DEFAULT_MOOD_CODE)
@@ -464,6 +464,7 @@ def _build_medication_entry(request, wrap_in_discharge_act: bool = False) -> str
         f'<substanceAdministration classCode="SBADM" moodCode="{mood_code}">'
         f'<templateId root="{MEDICATION_ACTIVITY_TEMPLATE_ID}"/>'
         f'<statusCode code="{status_code}"/>'
+        f"{_reverse_author_element(request.requester, authors_by_id)}"
         f"{_build_dosage_elements(request)}"
         "<consumable><manufacturedProduct><manufacturedMaterial>"
         f"{consumable_code}"
@@ -506,10 +507,10 @@ def _is_discharge_medication(request) -> bool:
     )
 
 
-def _build_medications_section(requests) -> str:
+def _build_medications_section(requests, authors_by_id: dict) -> str:
     if not requests:
         return ""
-    entries = "".join(_build_medication_entry(r) for r in requests)
+    entries = "".join(_build_medication_entry(r, authors_by_id) for r in requests)
     return (
         f'<component><section><templateId root="{MEDICATIONS_SECTION_TEMPLATE_ID}"/>'
         '<code code="10160-0" codeSystem="2.16.840.1.113883.6.1" displayName="History of medication use"/>'
@@ -517,10 +518,10 @@ def _build_medications_section(requests) -> str:
     )
 
 
-def _build_discharge_medications_section(requests) -> str:
+def _build_discharge_medications_section(requests, authors_by_id: dict) -> str:
     if not requests:
         return ""
-    entries = "".join(_build_medication_entry(r, wrap_in_discharge_act=True) for r in requests)
+    entries = "".join(_build_medication_entry(r, authors_by_id, wrap_in_discharge_act=True) for r in requests)
     return (
         f'<component><section><templateId root="{DISCHARGE_MEDICATIONS_SECTION_TEMPLATE_ID}"/>'
         '<code code="10183-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital discharge medications"/>'
@@ -731,7 +732,7 @@ def _is_vital_signs_panel(observation) -> bool:
     return bool(observation.code and observation.code.coding and observation.code.coding[0].code == VITALS_PANEL_CODE)
 
 
-def _build_vital_sign_observation_element(observation) -> str:
+def _build_vital_sign_observation_element(observation, authors_by_id: dict | None = None) -> str:
     code_element = _build_cd_element("code", observation.code) or '<code nullFlavor="UNK"/>'
     effective_time = (
         f'<effectiveTime value="{format_hl7_ts(observation.effectiveDateTime)}"/>'
@@ -756,12 +757,14 @@ def _build_vital_sign_observation_element(observation) -> str:
         '<component><observation classCode="OBS" moodCode="EVN">'
         f'<templateId root="{VITALS_OBSERVATION_TEMPLATE_ID}"/>'
         '<statusCode code="completed"/>'
-        f"{code_element}{effective_time}{value}{interpretation}{method}{body_site}"
+        f"{code_element}{effective_time}"
+        f"{_reverse_author_element(observation.performer[0] if observation.performer else None, authors_by_id or {})}"
+        f"{value}{interpretation}{method}{body_site}"
         "</observation></component>"
     )
 
 
-def _reverse_bp_panel_elements(panel) -> str:
+def _reverse_bp_panel_elements(panel, authors_by_id: dict) -> str:
     """Reverse of app.cda.vitals._build_blood_pressure_panel - a Blood
     Pressure Panel Observation has no independent existence on the CDA
     side (it's a grouping of two ordinary Vital Sign Observations, not a
@@ -792,7 +795,7 @@ def _reverse_bp_panel_elements(panel) -> str:
     return "".join(elements)
 
 
-def _reverse_pulse_ox_panel_elements(panel) -> str:
+def _reverse_pulse_ox_panel_elements(panel, authors_by_id: dict) -> str:
     """Reverse of app.cda.vitals._build_pulse_oximetry_panel - the O2
     saturation reading itself becomes the panel on the forward side, so
     this reverses it back into one flat `<observation>` (reusing
@@ -814,7 +817,7 @@ def _reverse_pulse_ox_panel_elements(panel) -> str:
     )
     primary_code = CodeableConcept(coding=[primary_coding]) if primary_coding else None
     primary_as_flat = panel.model_copy(update={"code": primary_code, "component": None})
-    elements = [_build_vital_sign_observation_element(primary_as_flat)]
+    elements = [_build_vital_sign_observation_element(primary_as_flat, authors_by_id)]
     for component in panel.component or []:
         component_as_flat = panel.model_copy(
             update={
@@ -824,13 +827,18 @@ def _reverse_pulse_ox_panel_elements(panel) -> str:
                 "interpretation": None,
                 "method": None,
                 "bodySite": None,
+                # The panel's performer belongs to its primary O2-saturation
+                # reading, not to these sibling readings - inheriting it
+                # would regenerate an <author> the forward side never read
+                # from, materialising a spurious extra Practitioner.
+                "performer": None,
             }
         )
-        elements.append(_build_vital_sign_observation_element(component_as_flat))
+        elements.append(_build_vital_sign_observation_element(component_as_flat, authors_by_id))
     return "".join(elements)
 
 
-def _build_vital_signs_member_elements(member) -> str:
+def _build_vital_signs_member_elements(member, authors_by_id: dict) -> str:
     """Dispatches a Vital Signs Panel's own `.hasMember` entry to the
     right reverse builder - a plain flat Vital Sign Observation, a Blood
     Pressure Panel (own `.component`, no top-level value - reverses to
@@ -839,16 +847,16 @@ def _build_vital_signs_member_elements(member) -> str:
     observations). Detection mirrors the forward side's own detection
     exactly (fixed codes, not structural guessing)."""
     if member.code and member.code.coding and member.code.coding[0].code == BP_PANEL_CODE:
-        return _reverse_bp_panel_elements(member)
+        return _reverse_bp_panel_elements(member, authors_by_id)
     if member.code and any(c.code in PULSE_OX_PRIMARY_CODES for c in (member.code.coding or [])):
-        return _reverse_pulse_ox_panel_elements(member)
-    return _build_vital_sign_observation_element(member)
+        return _reverse_pulse_ox_panel_elements(member, authors_by_id)
+    return _build_vital_sign_observation_element(member, authors_by_id)
 
 
-def _build_vital_signs_organizer(panel, members_by_id: dict) -> str:
+def _build_vital_signs_organizer(panel, members_by_id: dict, authors_by_id: dict) -> str:
     member_ids = [ref.reference.removeprefix("urn:uuid:") for ref in (panel.hasMember or [])]
     member_elements = "".join(
-        _build_vital_signs_member_elements(members_by_id[member_id])
+        _build_vital_signs_member_elements(members_by_id[member_id], authors_by_id)
         for member_id in member_ids
         if member_id in members_by_id
     )
@@ -866,12 +874,12 @@ def _build_vital_signs_organizer(panel, members_by_id: dict) -> str:
     )
 
 
-def _build_vitals_section(observations) -> str:
+def _build_vitals_section(observations, authors_by_id: dict) -> str:
     panels = [o for o in observations if _is_vital_signs_panel(o)]
     if not panels:
         return ""
     members_by_id = {o.id: o for o in observations if not _is_vital_signs_panel(o)}
-    entries = "".join(entry for panel in panels if (entry := _build_vital_signs_organizer(panel, members_by_id)))
+    entries = "".join(entry for panel in panels if (entry := _build_vital_signs_organizer(panel, members_by_id, authors_by_id)))
     if not entries:
         return ""
     return (
@@ -1176,6 +1184,48 @@ def _reverse_practitioner_id_and_name(practitioner) -> str:
         given = "".join(f"<given>{_esc(g)}</given>" for g in (name.given or []))
         assigned_person = f"<assignedPerson><name>{given}{family}</name></assignedPerson>"
     return f"{ids}{assigned_person}"
+
+
+def _reverse_authoring_device(device) -> str:
+    """Reverse of app.cda.common.build_authoring_device - a Device's own
+    identifier/deviceName -> <id>/<assignedAuthoringDevice>. The forward
+    side writes manufacturerModelName first and softwareName second, so
+    the names reverse by their recorded type rather than by position."""
+    ids = "".join(
+        f'<id root="{_reverse_identifier_root(identifier)}" extension="{_esc(identifier.value)}"/>'
+        for identifier in (device.identifier or [])
+    )
+    by_type = {n.type: n.name for n in (device.deviceName or [])}
+    parts = "".join(
+        f"<{tag}>{_esc(by_type[name_type])}</{tag}>"
+        for tag, name_type in (
+            ("manufacturerModelName", "model-name"),
+            ("softwareName", "user-friendly-name"),
+        )
+        if by_type.get(name_type)
+    )
+    return f"{ids}<assignedAuthoringDevice>{parts}</assignedAuthoringDevice>"
+
+
+def _reverse_author_element(reference, authors_by_id: dict) -> str:
+    """Reverse of app.cda.common.build_author_participant - a Reference to
+    the author resource -> a full <author><assignedAuthor>...</> element.
+
+    The referenced resource is a Practitioner or a Device, mirroring CDA's
+    own assignedPerson/assignedAuthoringDevice choice, so which one it is
+    decides which shape is regenerated. `<time>` is not emitted: the
+    forward side reads no source element into any FHIR field, so there is
+    nothing to reverse it from."""
+    if reference is None or not reference.reference:
+        return ""
+    author = authors_by_id.get(reference.reference.removeprefix("urn:uuid:"))
+    if author is None:
+        return ""
+    if author.get_resource_type() == "Device":
+        inner = _reverse_authoring_device(author)
+    else:
+        inner = _reverse_practitioner_id_and_name(author)
+    return f"<author><assignedAuthor>{inner}</assignedAuthor></author>"
 
 
 def _reverse_performer_element(
@@ -1709,6 +1759,11 @@ def build_sectioned_document(
     procedures = find_resources(bundle, "Procedure")
     practitioner_roles_by_id = {r.id: r for r in find_resources(bundle, "PractitionerRole")}
     practitioners_by_id = {p.id: p for p in find_resources(bundle, "Practitioner")}
+    # An author is a Practitioner or a Device (CDA's own assignedPerson /
+    # assignedAuthoringDevice choice), so one map covers both and
+    # _reverse_author_element branches on the resource type.
+    authors_by_id = dict(practitioners_by_id)
+    authors_by_id.update({d.id: d for d in find_resources(bundle, "Device")})
     organizations_by_id = {o.id: o for o in find_resources(bundle, "Organization")}
     locations_by_id = {loc.id: loc for loc in find_resources(bundle, "Location")}
     document_references = find_resources(bundle, "DocumentReference")
@@ -1730,14 +1785,14 @@ def build_sectioned_document(
 
         discharge_medications = [r for r in medication_requests if _is_discharge_medication(r)]
         plain_medications = [r for r in medication_requests if not _is_discharge_medication(r)]
-        discharge_medications_section = _build_discharge_medications_section(discharge_medications)
-        medications_section = _build_medications_section(plain_medications)
+        discharge_medications_section = _build_discharge_medications_section(discharge_medications, authors_by_id)
+        medications_section = _build_medications_section(plain_medications, authors_by_id)
     else:
         problems_section = _build_problems_section(conditions)
-        medications_section = _build_medications_section(medication_requests)
+        medications_section = _build_medications_section(medication_requests, authors_by_id)
     allergies_section = _build_allergies_section(allergies)
     immunizations_section = _build_immunizations_section(immunizations)
-    vitals_section = _build_vitals_section(observations)
+    vitals_section = _build_vitals_section(observations, authors_by_id)
     observations_by_id = {o.id: o for o in observations}
     results_section = _build_results_section(diagnostic_reports, observations_by_id, specimens_by_id)
     procedures_section = _build_procedures_section(

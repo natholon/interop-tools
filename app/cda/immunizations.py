@@ -57,7 +57,7 @@ from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.timing import Timing, TimingRepeat
 
 from app.cda.common import (
-    build_author_practitioner,
+    build_author_participant,
     build_codeable_concept_from_cd,
     build_identifiers,
     build_quantity_from_pq,
@@ -338,7 +338,7 @@ def _build_immunization_request(
     # The IG maps INT-mood ".author" to MedicationRequest.requester -
     # the one Immunization row that names a plain attribute rather than
     # only Provenance.
-    author = build_author_practitioner(substance_administration, _ENTRY_BASE, recorder=recorder)
+    author = build_author_participant(substance_administration, _ENTRY_BASE, recorder=recorder)
     if author is not None:
         requester_reference, requester = author
         request.requester = requester_reference

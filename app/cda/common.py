@@ -14,6 +14,7 @@ from fhir.resources.R4B.bundle import Bundle, BundleEntry
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.contactpoint import ContactPoint
+from fhir.resources.R4B.device import Device, DeviceDeviceName
 from fhir.resources.R4B.encounter import Encounter
 from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.identifier import Identifier
@@ -885,9 +886,72 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
 # carries no recognisable authority of its own.
 _PRACTITIONER_ID_FALLBACK_SYSTEM = "urn:interop-tools:cda-practitioner-id"
 
-def build_author_practitioner(element, base_location: str, recorder=None):
-    """An element's own `<author><assignedAuthor>` -> (Reference, Practitioner),
+# An authoring device's own <id> gets its own fallback system rather than
+# borrowing the practitioner one - the two identify different kinds of thing.
+_DEVICE_ID_FALLBACK_SYSTEM = "urn:interop-tools:cda-device-id"
+
+
+def build_authoring_device(assigned_author, author_base: str, recorder=None) -> Device | None:
+    """`<assignedAuthor><assignedAuthoringDevice>` -> Device.
+
+    CDA models the author as a choice - `assignedPerson` OR
+    `assignedAuthoringDevice` - so an EHR that generated the content is a
+    perfectly ordinary author. Building a Practitioner for one would
+    assert a software system is a person, and would drop its model and
+    software names on the way, since Practitioner has nowhere to put them.
+    """
+    device_element = find_child(assigned_author, "assignedAuthoringDevice")
+    if device_element is None:
+        return None
+
+    device_id = str(uuid.uuid4())
+    device = Device(id=device_id)
+    device_base = xpath_location(author_base, "assignedAuthoringDevice")
+    names = []
+    for tag, name_type in (
+        ("manufacturerModelName", "model-name"),
+        ("softwareName", "user-friendly-name"),
+    ):
+        element = find_child(device_element, tag)
+        text = (element.text or "").strip() if element is not None else ""
+        if not text:
+            continue
+        names.append(DeviceDeviceName(name=text, type=name_type))
+        if recorder:
+            recorder.record(
+                device_id,
+                f"deviceName[{len(names) - 1}].name",
+                xpath_location(device_base, tag),
+                text,
+            )
+    if names:
+        device.deviceName = names
+
+    id_element = find_child(assigned_author, "id")
+    identifier = build_identifier(id_element, _DEVICE_ID_FALLBACK_SYSTEM) if id_element is not None else None
+    if identifier:
+        device.identifier = [identifier]
+        if recorder:
+            recorder.record(
+                device_id, "identifier[0].value", xpath_location(author_base, "id"), identifier.value
+            )
+
+    if not names and identifier is None:
+        return None
+    return device
+
+
+def build_author_participant(element, base_location: str, allow_device: bool = True, recorder=None):
+    """An element's own `<author><assignedAuthor>` -> (Reference, resource),
     or None when there is no author or nothing identifying in it.
+
+    **The resource is a Practitioner or a Device**, mirroring the choice
+    CDA itself models - `assignedPerson` or `assignedAuthoringDevice`,
+    with `<id>` required either way. Callers pass `allow_device=False`
+    when their own target cannot reference one: `MedicationRequest.requester`
+    accepts Device, while `Observation.performer` and `Procedure.recorder`
+    do not, so a device-authored entry there is left unmapped rather than
+    recorded as a person.
 
     **Only for sections the IG gives author a resource attribute.** Its
     tables route `author` to a Provenance resource in most sections and
@@ -906,9 +970,16 @@ def build_author_practitioner(element, base_location: str, recorder=None):
     assigned_author = find_child(author_element, "assignedAuthor")
     if assigned_author is None:
         return None
-    practitioner = build_practitioner_from_assigned_entity(
-        assigned_author, xpath_location(base_location, "author", "assignedAuthor"), recorder=recorder
-    )
+    author_base = xpath_location(base_location, "author", "assignedAuthor")
+    if find_child(assigned_author, "assignedAuthoringDevice") is not None:
+        if not allow_device:
+            return None
+        device = build_authoring_device(assigned_author, author_base, recorder=recorder)
+        if device is None:
+            return None
+        return Reference(reference=f"urn:uuid:{device.id}"), device
+
+    practitioner = build_practitioner_from_assigned_entity(assigned_author, author_base, recorder=recorder)
     if practitioner is None:
         return None
     return Reference(reference=f"urn:uuid:{practitioner.id}"), practitioner

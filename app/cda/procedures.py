@@ -68,6 +68,7 @@ from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.resource import Resource
 
 from app.cda.common import (
+    build_author_participant,
     build_codeable_concept_from_cd,
     build_contact_point_from_telecom,
     build_identifier,
@@ -573,18 +574,18 @@ def _build_procedure_recorder(procedure_element, recorder=None, procedure_id: st
     why this is a plain Practitioner, not the PractitionerRole performer's
     own slice builds. Only the first <author> is used - Procedure.recorder
     is a singular Reference, the same "first-only, disclosed" precedent
-    Procedure.location's own participant handling already established."""
-    author_element = find_child(procedure_element, "author")
-    if author_element is None:
+    Procedure.location's own participant handling already established.
+
+    allow_device=False: Procedure.recorder cannot reference a Device, so a
+    device-authored procedure is left without a recorder rather than
+    having its authoring system recorded as a person."""
+    author = build_author_participant(
+        procedure_element, _ENTRY_BASE, allow_device=False, recorder=recorder
+    )
+    if author is None:
         return None
-    assigned_author = find_child(author_element, "assignedAuthor")
-    if assigned_author is None:
-        return None
-    location = xpath_location(_ENTRY_BASE, "author", "assignedAuthor")
-    practitioner = build_practitioner_from_assigned_entity(assigned_author, location, recorder=recorder)
-    if practitioner is None:
-        return None
-    return Reference(reference=f"urn:uuid:{practitioner.id}"), [practitioner]
+    reference, practitioner = author
+    return reference, [practitioner]
 
 
 def _build_procedure(procedure_element, patient_id: str, recorder=None) -> tuple[Procedure, list[Resource]]:

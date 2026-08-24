@@ -2,7 +2,12 @@ import random
 
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
-from app.cda.generator import generate_ccd, generate_discharge_summary, generate_history_and_physical
+from app.cda.generator import (
+    _VITAL_SIGN_CODES,
+    generate_ccd,
+    generate_discharge_summary,
+    generate_history_and_physical,
+)
 from app.cda.history_and_physical import HISTORY_AND_PHYSICAL_TEMPLATE_ID
 from app.cda.narrative_sections import (
     ASSESSMENT_TEMPLATE_ID,
@@ -18,6 +23,11 @@ from app.cda.narrative_sections import (
 )
 from app.cda.parser import find_all, find_child, has_template_id, parse_document
 from app.cda.pipeline import convert_cda_to_bundle, validate_cda
+from app.cda.vitals import BP_DIASTOLIC_CODE, BP_SYSTOLIC_CODE, PULSE_OX_PRIMARY_CODES
+from app.cda.vitals import SECTION_TEMPLATE_ID as VITALS_SECTION_TEMPLATE_ID
+from app.cda.vitals import (
+    SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL as VITALS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL,
+)
 
 
 def _document(seed: int):
@@ -310,6 +320,61 @@ def test_medication_dosing_shape_varies_across_seeds():
             else:
                 neither += 1
     assert structured > 0 and free_text > 0 and neither > 0
+
+
+def test_medication_author_varies_across_person_device_and_absent():
+    # CDA models the author as a choice - assignedPerson or
+    # assignedAuthoringDevice - and MedicationRequest.requester can
+    # reference either, so all three shapes have to occur or the round
+    # trip for one of them goes untested.
+    person = device = absent = 0
+    for seed in range(60):
+        for entry in _medication_entries(_document(seed)):
+            author = find_child(find_child(entry, "substanceAdministration"), "author")
+            if author is None:
+                absent += 1
+                continue
+            assigned = find_child(author, "assignedAuthor")
+            if find_child(assigned, "assignedAuthoringDevice") is not None:
+                device += 1
+            else:
+                person += 1
+    assert person > 0 and device > 0 and absent > 0
+
+
+def test_vital_sign_author_is_never_a_device():
+    # Observation.performer's enum_reference_types has no Device, so a
+    # device-authored vital would be dropped rather than mapped - the
+    # generator must not emit one, or the fuzz sweep silently stops
+    # covering the performer path for those seeds.
+    seen_author = 0
+    for seed in range(60):
+        document = _document(seed)
+        for section in find_all(document, "component/structuredBody/component/section"):
+            if not has_template_id(section, VITALS_SECTION_TEMPLATE_ID) and not has_template_id(
+                section, VITALS_SECTION_TEMPLATE_ID_ENTRIES_OPTIONAL
+            ):
+                continue
+            for entry in find_all(section, "entry"):
+                organizer = find_child(entry, "organizer")
+                for component in find_all(organizer, "component"):
+                    author = find_child(find_child(component, "observation"), "author")
+                    if author is None:
+                        continue
+                    seen_author += 1
+                    assigned = find_child(author, "assignedAuthor")
+                    assert find_child(assigned, "assignedAuthoringDevice") is None
+                    assert find_child(assigned, "assignedPerson") is not None
+    assert seen_author > 0
+
+
+def test_vital_sign_codes_pool_excludes_the_panel_grouping_codes():
+    # Panel membership is decided by first-match-wins on the LOINC code,
+    # so a second reading sharing a panel code makes which one becomes the
+    # panel unstable across a round trip. The organizer generator adds
+    # those codes deliberately; the random pool must not also draw them.
+    pool = {code for code, *_ in _VITAL_SIGN_CODES}
+    assert pool.isdisjoint({BP_SYSTOLIC_CODE, BP_DIASTOLIC_CODE} | PULSE_OX_PRIMARY_CODES)
 
 
 def test_medication_negation_occurs_across_seeds():

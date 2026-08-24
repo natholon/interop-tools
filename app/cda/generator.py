@@ -154,6 +154,14 @@ _MEDICATION_CODES = [
     ("197806", "Levothyroxine 50 MCG Oral Tablet"),
     ("745679", "Albuterol 90 MCG Inhalant Solution"),
 ]
+# Obviously-synthetic authoring systems, for the assignedAuthoringDevice
+# half of _random_entry_author's own choice.
+_AUTHORING_DEVICES = [
+    ("Meridian Care Platform 7", "Meridian Charting"),
+    ("Northwind EHR 4200", "Northwind Clinical Suite"),
+    ("Cascade Health System X", "Cascade Documentation"),
+]
+
 _MEDICATION_ROUTES = [("C38288", "ORAL"), ("C38276", "INTRAVENOUS"), ("C38299", "TOPICAL")]
 _SIG_TEXTS = [
     "Take one tablet by mouth once daily",
@@ -198,15 +206,20 @@ _IMMUNIZATION_ROUTES = [("C28161", "INTRAMUSCULAR"), ("C38299", "TOPICAL"), ("C3
 # Vital Sign Observation codes (LOINC), each with a realistic unit and
 # value range - overlaps with the codes a real C-CDA-Examples CCD used
 # while researching this section, plus a few more for fuzz variety.
+# Deliberately excludes the Blood Pressure and Pulse Oximetry codes
+# (8480-6/8462-4/2708-6): _random_vital_signs_organizer adds those
+# separately to exercise the panel-grouping branches, and a real organizer
+# does not repeat one vital's code. Leaving them in the random pool put two
+# systolics (or two O2 saturations) in one organizer, where panel
+# membership is decided by first-match-wins on the LOINC code - so which
+# reading became the panel could shift across a round trip, taking its
+# author's Practitioner with it.
 _VITAL_SIGN_CODES = [
     ("8302-2", "Body height", "cm", (150.0, 200.0)),
     ("3141-9", "Body weight", "kg", (45.0, 120.0)),
-    ("8480-6", "Systolic blood pressure", "mm[Hg]", (95.0, 160.0)),
-    ("8462-4", "Diastolic blood pressure", "mm[Hg]", (55.0, 100.0)),
     ("8867-4", "Heart rate", "/min", (55.0, 110.0)),
     ("8310-5", "Body temperature", "Cel", (36.0, 39.0)),
     ("9279-1", "Respiratory rate", "/min", (12.0, 22.0)),
-    ("2708-6", "Oxygen saturation", "%", (90.0, 100.0)),
 ]
 _INTERPRETATION_CODES = ["N", "H", "L"]
 
@@ -492,6 +505,10 @@ def _random_medication_entry(rng: random.Random) -> str:
     # ~45/35/20 across structured-only, free-text-only, and neither, direct
     # fuzz coverage of _build_dosage's "no dosage info at all -> None"
     # branch alongside its two populated branches.
+    # <author> -> MedicationRequest.requester, the one Medications row the
+    # IG maps to a plain attribute rather than only Provenance.
+    author = _random_entry_author(rng) if maybe(rng, 0.5) else ""
+
     dosing_choice = rng.random()
     dosing = ""
     if dosing_choice < 0.45:
@@ -521,7 +538,7 @@ def _random_medication_entry(rng: random.Random) -> str:
         f'<entry typeCode="DRIV"><substanceAdministration classCode="SBADM" moodCode="{mood_code}"{negation_attr}>'
         f'<templateId root="{MEDICATION_ACTIVITY_TEMPLATE_ID}"/><id root="{subad_id}"/>'
         f'<statusCode code="{status_code}"/>'
-        f"{dosing}"
+        f"{author}{dosing}"
         '<consumable><manufacturedProduct classCode="MANU">'
         f'<templateId root="2.16.840.1.113883.10.20.22.4.23"/>'
         f'<manufacturedMaterial><code code="{code}" codeSystem="2.16.840.1.113883.6.88" displayName="{display}"/></manufacturedMaterial>'
@@ -556,6 +573,7 @@ def _random_discharge_medication_entry(rng: random.Random) -> str:
             f'<routeCode code="{route_code}" codeSystem="2.16.840.1.113883.3.26.1.1" displayName="{route_display}"/>'
             f'<doseQuantity value="{dose_value}" unit="mg"/>'
         )
+    author = _random_entry_author(rng) if maybe(rng, 0.5) else ""
     return (
         f'<entry typeCode="DRIV"><act classCode="ACT" moodCode="EVN">'
         f'<templateId root="{DISCHARGE_MEDICATION_ACT_TEMPLATE_ID}"/>'
@@ -564,7 +582,7 @@ def _random_discharge_medication_entry(rng: random.Random) -> str:
         f'<entryRelationship typeCode="SUBJ"><substanceAdministration classCode="SBADM" moodCode="EVN">'
         f'<templateId root="{MEDICATION_ACTIVITY_TEMPLATE_ID}"/><id root="{subad_id}"/>'
         f'<statusCode code="{status_code}"/>'
-        f"{dosing}"
+        f"{author}{dosing}"
         '<consumable><manufacturedProduct classCode="MANU">'
         f'<manufacturedMaterial><code code="{code}" codeSystem="2.16.840.1.113883.6.88" displayName="{display}"/></manufacturedMaterial>'
         "</manufacturedProduct></consumable>"
@@ -775,6 +793,7 @@ def _random_vital_sign_observation_from_code(rng: random.Random, start, code: st
         f'<code code="{code}" codeSystem="2.16.840.1.113883.6.1" displayName="{display}"/>'
         '<statusCode code="completed"/>'
         f'<effectiveTime value="{format_hl7_datetime(start)}"/>'
+        f'{_random_entry_author(rng, allow_device=False) if maybe(rng, 0.4) else ""}'
         f'<value xsi:type="PQ" value="{value}" unit="{unit}"/>{interpretation}'
         "</observation></component>"
     )
@@ -1004,6 +1023,34 @@ def _random_participant_location(rng: random.Random) -> str:
         f'<playingEntity classCode="PLC"><name>{location_name}</name></playingEntity>'
         "</participantRole></participant>"
     )
+
+
+def _random_entry_author(rng: random.Random, allow_device: bool = True) -> str:
+    """An <author> on a clinical statement, splitting between CDA's own
+    assignedPerson and assignedAuthoringDevice choices - direct fuzz
+    coverage of app/cda/common.py::build_author_participant's two
+    branches, and of the reverse builder regenerating each shape.
+
+    `allow_device=False` for targets that cannot reference a Device
+    (Observation.performer, Procedure.recorder), matching what the
+    forward mapper will actually accept there."""
+    author_id = _random_uuid_like(rng)[:9]
+    if allow_device and maybe(rng, 0.3):
+        model, software = rng.choice(_AUTHORING_DEVICES)
+        inner = (
+            f'<id root="2.16.840.1.113883.19.5" extension="{author_id}"/>'
+            "<assignedAuthoringDevice>"
+            f"<manufacturerModelName>{model}</manufacturerModelName>"
+            f"<softwareName>{software}</softwareName>"
+            "</assignedAuthoringDevice>"
+        )
+    else:
+        given, family = random_person_name(rng)
+        inner = (
+            f'<id root="2.16.840.1.113883.19.5" extension="{author_id}"/>'
+            f"<assignedPerson><name><given>{given}</given><family>{family}</family></name></assignedPerson>"
+        )
+    return f'<author><time value="20260615113000-0500"/><assignedAuthor>{inner}</assignedAuthor></author>'
 
 
 def _random_procedure_author(rng: random.Random) -> str:

@@ -487,6 +487,47 @@ def test_ccd_round_trip_preserves_immunization_fields():
             assert immunization.doseQuantity.unit == original.doseQuantity.unit
 
 
+def test_ccd_round_trip_preserves_a_medication_requester():
+    # The requester Practitioner was silently lost on the reverse trip
+    # until _reverse_author_element existed - and the parametrized
+    # resource-type-count test could not catch it, because the generator
+    # emitted no medication author for it to lose.
+    forward_xml = (FIXTURES / "ccd_medications_basic.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    round_tripped = convert_cda_to_bundle(build_message_from_bundle(bundle, "CDA", "CCD", ""))
+
+    practitioners = [
+        e.resource for e in round_tripped.entry if e.resource.get_resource_type() == "Practitioner"
+    ]
+    assert [str(p.name[0].family) for p in practitioners] == ["Prescriber"]
+    assert practitioners[0].identifier[0].value == "9988776655"
+
+    requester = next(
+        e.resource.requester
+        for e in round_tripped.entry
+        if e.resource.get_resource_type() == "MedicationRequest" and e.resource.requester
+    )
+    assert requester.reference == f"urn:uuid:{practitioners[0].id}"
+
+
+def test_ccd_round_trip_preserves_a_device_author():
+    # An assignedAuthoringDevice reverses back to assignedAuthoringDevice,
+    # not to an assignedPerson - the Device is the author, and its model
+    # and software names have nowhere to live on a Practitioner.
+    forward_xml = (FIXTURES / "ccd_medications_device_author.xml").read_text()
+    bundle = convert_cda_to_bundle(forward_xml)
+    message = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    assert "<assignedAuthoringDevice>" in message
+    assert "<assignedPerson>" not in message
+
+    round_tripped = convert_cda_to_bundle(message)
+    devices = [e.resource for e in round_tripped.entry if e.resource.get_resource_type() == "Device"]
+    assert len(devices) == 1
+    assert [n.name for n in devices[0].deviceName] == ["Acme EHR 9000", "Acme Charting Suite"]
+    assert devices[0].identifier[0].value == "EHR-1"
+    assert not [e for e in round_tripped.entry if e.resource.get_resource_type() == "Practitioner"]
+
+
 def test_ccd_round_trip_preserves_vital_signs_panel_and_members():
     forward_xml = (FIXTURES / "ccd_vitals_basic.xml").read_text()
     bundle = convert_cda_to_bundle(forward_xml)
