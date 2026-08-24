@@ -12,6 +12,7 @@ from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.timing import Timing, TimingRepeat
 
 from app.cda.common import (
+    build_author_practitioner,
     build_codeable_concept_from_cd,
     build_identifiers,
     build_quantity_from_pq,
@@ -177,7 +178,15 @@ def _build_dosage(
 # differs, so the per-entry builder itself is reused as-is, including its
 # own recorder instrumentation (see _ENTRY_BASE's own docstring above for
 # the one disclosed location-string simplification this reuse carries).
-def build_medication_request(substance_administration, patient_id: str, recorder=None) -> MedicationRequest | None:
+def build_medication_request(
+    substance_administration, patient_id: str, recorder=None
+) -> tuple[MedicationRequest, list] | None:
+    """The MedicationRequest, plus any resources materialised for it - a
+    requester Practitioner when the entry carries an author.
+
+    The tuple mirrors procedures.py::_build_procedure, which widened for
+    the same reason: a section builder has to return the extra resources
+    too, and there is nowhere else to hand them back."""
     if substance_administration.get("negationInd") == "true":
         # This specific administration/order did NOT happen - disclosed
         # limitation, not modeled as its own resource this slice, same
@@ -202,6 +211,7 @@ def build_medication_request(substance_administration, patient_id: str, recorder
     medication_request_id = str(uuid.uuid4())
     status = _resolve_status(substance_administration)
     intent = _resolve_intent(substance_administration)
+    extra_resources: list = []
     request = MedicationRequest(
         id=medication_request_id,
         status=status,
@@ -261,11 +271,27 @@ def build_medication_request(substance_administration, patient_id: str, recorder
                 intent,
             )
 
+    # The IG's MedicationRequest table maps ".author Participation" to
+    # .requester alongside its Provenance row, so the author is a real
+    # Practitioner here rather than only an audit-trail entry.
+    author = build_author_practitioner(substance_administration, _ENTRY_BASE, recorder=recorder)
+    if author is not None:
+        requester_reference, requester = author
+        request.requester = requester_reference
+        extra_resources.append(requester)
+        if recorder:
+            recorder.record(
+                medication_request_id,
+                "requester.reference",
+                xpath_location(_ENTRY_BASE, "author", "assignedAuthor"),
+                requester_reference.reference,
+            )
+
     dosage = _build_dosage(substance_administration, resource_id=medication_request_id, relative_path="dosageInstruction[0]", recorder=recorder)
     if dosage:
         request.dosageInstruction = [dosage]
 
-    return request
+    return request, extra_resources
 
 
 def build_medication_requests(section, patient_id: str, recorder=None) -> list[MedicationRequest]:
@@ -278,7 +304,9 @@ def build_medication_requests(section, patient_id: str, recorder=None) -> list[M
             substance_administration, MEDICATION_ACTIVITY_TEMPLATE_ID
         ):
             continue
-        request = build_medication_request(substance_administration, patient_id, recorder=recorder)
-        if request is not None:
+        built = build_medication_request(substance_administration, patient_id, recorder=recorder)
+        if built is not None:
+            request, extra = built
             requests.append(request)
+            requests.extend(extra)
     return requests

@@ -717,3 +717,34 @@ def test_social_history_patient_extensions_replace_observations():
         if e.resource.category and e.resource.category[0].coding[0].code == "social-history"
     ]
     assert [o.code.coding[0].code for o in social] == ["72166-2"]
+
+
+def test_medication_author_becomes_a_requester_practitioner():
+    # The IG's MedicationRequest table maps ".author Participation" to
+    # .requester as well as to Provenance, so the author is a real
+    # Practitioner rather than only an audit-trail entry. Sections whose
+    # table names Provenance alone - Problems, Allergies, Results -
+    # deliberately do not do this.
+    bundle = convert_cda_to_bundle(read_fixture("ccd_medications_basic.xml"))
+    entries = _entries_by_type(bundle)
+
+    requester_id = next(
+        r.resource.requester.reference.removeprefix("urn:uuid:")
+        for r in entries["MedicationRequest"]
+        if r.resource.requester
+    )
+    practitioner = next(
+        r.resource for r in entries["Practitioner"] if r.resource.id == requester_id
+    )
+    assert practitioner.name[0].family == "Prescriber"
+    assert practitioner.identifier[0].value == "9988776655"
+
+
+def test_sections_the_ig_routes_to_provenance_get_no_author_practitioner():
+    # Problems maps Author Participation to Provenance and marks the rest
+    # "not supported by target", so building a recorder Practitioner here
+    # would invent a target the IG declines to name.
+    bundle = convert_cda_to_bundle(read_fixture("ccd_basic.xml"))
+    entries = _entries_by_type(bundle)
+    for condition in entries.get("Condition", []):
+        assert condition.resource.recorder is None

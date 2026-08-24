@@ -57,6 +57,7 @@ from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.timing import Timing, TimingRepeat
 
 from app.cda.common import (
+    build_author_practitioner,
     build_codeable_concept_from_cd,
     build_identifiers,
     build_quantity_from_pq,
@@ -260,7 +261,7 @@ _INT_INTENT = "order"
 
 def _build_immunization_request(
     substance_administration, patient_id: str, recorder=None
-) -> MedicationRequest | None:
+) -> tuple[MedicationRequest, list] | None:
     """An INT-mood (planned/ordered) Immunization Activity -> MedicationRequest."""
     consumable = find_child(substance_administration, "consumable")
     manufactured_product = find_child(consumable, "manufacturedProduct") if consumable is not None else None
@@ -275,6 +276,7 @@ def _build_immunization_request(
         return None
 
     request_id = str(uuid.uuid4())
+    extra_resources: list = []
     status_element = find_child(substance_administration, "statusCode")
     raw_status = (status_element.get("code") or "").strip().lower() if status_element is not None else ""
     status = MEDICATION_STATUS_MAP.get(raw_status, _DEFAULT_REQUEST_STATUS)
@@ -333,11 +335,27 @@ def _build_immunization_request(
                 source_value=substance_administration.get("negationInd"),
             )
 
+    # The IG maps INT-mood ".author" to MedicationRequest.requester -
+    # the one Immunization row that names a plain attribute rather than
+    # only Provenance.
+    author = build_author_practitioner(substance_administration, _ENTRY_BASE, recorder=recorder)
+    if author is not None:
+        requester_reference, requester = author
+        request.requester = requester_reference
+        extra_resources.append(requester)
+        if recorder:
+            recorder.record(
+                request_id,
+                "requester.reference",
+                xpath_location(_ENTRY_BASE, "author", "assignedAuthor"),
+                requester_reference.reference,
+            )
+
     dosage = _build_request_dosage(substance_administration, request_id, recorder)
     if dosage is not None:
         request.dosageInstruction = [dosage]
 
-    return request
+    return request, extra_resources
 
 
 def _build_request_dosage(substance_administration, request_id: str, recorder=None) -> Dosage | None:
@@ -401,7 +419,12 @@ def build_immunizations(
         if mood == "EVN":
             resource = _build_immunization(substance_administration, patient_id, recorder=recorder)
         elif mood == "INT":
-            resource = _build_immunization_request(substance_administration, patient_id, recorder=recorder)
+            built = _build_immunization_request(substance_administration, patient_id, recorder=recorder)
+            if built is not None:
+                request, extra = built
+                resources.append(request)
+                resources.extend(extra)
+            continue
         else:
             continue
         if resource is not None:

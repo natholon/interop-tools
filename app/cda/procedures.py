@@ -59,11 +59,9 @@ import uuid
 from fhir.resources.R4B.address import Address
 from fhir.resources.R4B.annotation import Annotation
 from fhir.resources.R4B.codeableconcept import CodeableConcept
-from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.location import Location
 from fhir.resources.R4B.organization import Organization
 from fhir.resources.R4B.period import Period
-from fhir.resources.R4B.practitioner import Practitioner
 from fhir.resources.R4B.practitionerrole import PractitionerRole
 from fhir.resources.R4B.procedure import Procedure, ProcedurePerformer
 from fhir.resources.R4B.reference import Reference
@@ -71,12 +69,13 @@ from fhir.resources.R4B.resource import Resource
 
 from app.cda.common import (
     build_codeable_concept_from_cd,
-    record_coding,
     build_contact_point_from_telecom,
     build_identifier,
     build_identifiers,
+    build_practitioner_from_assigned_entity,
     effective_time_location,
     parse_partial_ts,
+    record_coding,
 )
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
 from app.provenance.location import xpath_location
@@ -222,83 +221,6 @@ def _build_address(
     return address
 
 
-def _build_practitioner_from_assigned_entity(assigned_entity, location: str, recorder=None) -> Practitioner | None:
-    """assignedEntity/id -> identifier, assignedEntity/assignedPerson/name
-    (family/given) -> name. Genuinely optional per a real fetched example
-    (one real performer carried only an id, no name at all) - mirrors
-    app/mappings/common.py::build_practitioner_from_xcn's own HL7v2-side
-    "id or family or given" presence rule: skip the whole performer only
-    when NEITHER an id nor a name resolves."""
-    id_element = find_child(assigned_entity, "id")
-    identifier = build_identifier(id_element, _PRACTITIONER_ID_FALLBACK_SYSTEM) if id_element is not None else None
-
-    name = None
-    assigned_person = find_child(assigned_entity, "assignedPerson")
-    if assigned_person is not None:
-        name_element = find_child(assigned_person, "name")
-        if name_element is not None:
-            family_element = find_child(name_element, "family")
-            family = (family_element.text or "").strip() if family_element is not None else ""
-            # (source_index, value) pairs, not just values - mirrors
-            # app/cda/common.py::_build_patient_names' own discipline so a
-            # kept given-name index never desyncs from which XML element
-            # it actually came from when an earlier one is empty.
-            given_pairs = [
-                (gi, g.text.strip()) for gi, g in enumerate(find_all(name_element, "given")) if g.text and g.text.strip()
-            ]
-            if family or given_pairs:
-                name = HumanName()
-                if family:
-                    name.family = family
-                if given_pairs:
-                    name.given = [v for _, v in given_pairs]
-
-    if identifier is None and name is None:
-        return None
-
-    practitioner_id = str(uuid.uuid4())
-    practitioner = Practitioner(id=practitioner_id)
-    if identifier:
-        practitioner.identifier = [identifier]
-        if recorder:
-            # Point at the attribute that actually supplied the value, the
-            # way build_identifiers already does: an <id> carries its value
-            # in @extension (or @root when that is all it has), never as
-            # element text, so a bare `.../id` location resolves to nothing.
-            value_attribute = "@extension" if id_element.get("extension") else "@root"
-            recorder.record(
-                practitioner_id,
-                "identifier[0].value",
-                xpath_location(location, "id", value_attribute),
-                identifier.value,
-            )
-            if identifier.system:
-                # @root becomes Identifier.system (translated where FHIR
-                # names the OID, kept as urn:oid: otherwise). Recording only
-                # the value left @root looking dropped.
-                recorder.record(
-                    practitioner_id,
-                    "identifier[0].system",
-                    xpath_location(location, "id", "@root"),
-                    identifier.system,
-                )
-    if name:
-        practitioner.name = [name]
-        if recorder:
-            if name.family:
-                recorder.record(
-                    practitioner_id, "name[0].family", xpath_location(location, "assignedPerson", "name", "family"), name.family
-                )
-            if name.given:
-                for i, (src_i, given) in enumerate(given_pairs):
-                    recorder.record(
-                        practitioner_id,
-                        f"name[0].given[{i}]",
-                        xpath_location(location, "assignedPerson", "name", f"given[{src_i}]"),
-                        given,
-                    )
-    return practitioner
-
 
 def _build_organization_from_represented_org(represented_org_element, location: str, recorder=None) -> Organization | None:
     """assignedEntity/representedOrganization/name -> Organization.name -
@@ -392,7 +314,7 @@ def _build_performer(performer_element, index: int, recorder=None) -> tuple[Proc
         return None
 
     location_base = xpath_location(_ENTRY_BASE, f"performer[{index}]", "assignedEntity")
-    practitioner = _build_practitioner_from_assigned_entity(assigned_entity, location_base, recorder=recorder)
+    practitioner = build_practitioner_from_assigned_entity(assigned_entity, location_base, recorder=recorder)
     if practitioner is None:
         return None
 
@@ -626,7 +548,7 @@ def _build_notes(procedure_element, recorder=None, procedure_id: str = "") -> tu
             assigned_author = find_child(author_element, "assignedAuthor")
             if assigned_author is not None:
                 author_location = xpath_location(act_location, "author", "assignedAuthor")
-                practitioner = _build_practitioner_from_assigned_entity(assigned_author, author_location, recorder=recorder)
+                practitioner = build_practitioner_from_assigned_entity(assigned_author, author_location, recorder=recorder)
                 if practitioner is not None:
                     extra_resources.append(practitioner)
                     annotation.authorReference = Reference(reference=f"urn:uuid:{practitioner.id}")
@@ -659,7 +581,7 @@ def _build_procedure_recorder(procedure_element, recorder=None, procedure_id: st
     if assigned_author is None:
         return None
     location = xpath_location(_ENTRY_BASE, "author", "assignedAuthor")
-    practitioner = _build_practitioner_from_assigned_entity(assigned_author, location, recorder=recorder)
+    practitioner = build_practitioner_from_assigned_entity(assigned_author, location, recorder=recorder)
     if practitioner is None:
         return None
     return Reference(reference=f"urn:uuid:{practitioner.id}"), [practitioner]

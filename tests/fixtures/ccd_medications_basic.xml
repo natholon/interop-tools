@@ -43,6 +43,13 @@
               <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
               <id root="a1b2c3d4-0001-4a1a-8a1a-000000000001"/>
               <statusCode code="active"/>
+              <author>
+                <time value="20260812"/>
+                <assignedAuthor>
+                  <id root="2.16.840.1.113883.4.6" extension="9988776655"/>
+                  <assignedPerson><name><given>Ada</given><family>Prescriber</family></name></assignedPerson>
+                </assignedAuthor>
+              </author>
               <effectiveTime xsi:type="IVL_TS">
                 <low value="20260701"/>
                 <high value="20261001"/>

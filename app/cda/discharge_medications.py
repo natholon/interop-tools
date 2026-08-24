@@ -68,8 +68,10 @@ def build_discharge_medication_requests(section, patient_id: str, recorder=None)
                 substance_administration, MEDICATION_ACTIVITY_TEMPLATE_ID
             ):
                 continue
-            request = build_medication_request(substance_administration, patient_id, recorder=recorder)
-            if request is not None:
+            built = build_medication_request(substance_administration, patient_id, recorder=recorder)
+            if built is not None:
+                request, extra = built
+                requests.extend(extra)
                 request.category = [CodeableConcept(coding=[Coding(system=CATEGORY_SYSTEM, code=CATEGORY_CODE)])]
                 if recorder:
                     # Inferred, not direct: no source element carries this -

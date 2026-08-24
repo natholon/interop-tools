@@ -213,6 +213,15 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
         "The reference is consumed resolving <originalText> against the section narrative; the text "
         "it points at is what lands in CodeableConcept.text.",
     ),
+    # Medication Activity's author time. The MedicationRequest table maps
+    # ".author Participation" twice - to Provenance and to .requester -
+    # and names no target for the time itself, unlike the Allergy table,
+    # which does map its author time to .recorded.
+    "2.16.840.1.113883.10.20.22.4.16|substanceAdministration/author/time": (
+        NO_MAP,
+        "The MedicationRequest table maps the author Participation to .requester and to Provenance, "
+        "but lists no row for the author's own time.",
+    ),
     # --- Scoped by templateId ------------------------------------------
     # Everything below names the template it read, because the bare shape
     # is ambiguous: an Allergy Reaction Observation and a Problem

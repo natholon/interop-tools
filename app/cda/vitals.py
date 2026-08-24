@@ -40,6 +40,7 @@ from fhir.resources.R4B.observation import Observation, ObservationComponent
 from fhir.resources.R4B.reference import Reference
 
 from app.cda.common import (
+    build_author_practitioner,
     build_codeable_concept_from_cd,
     build_identifiers,
     build_quantity_from_pq,
@@ -195,7 +196,8 @@ def _apply_common_observation_fields(observation: Observation, observation_eleme
 
 
 def _build_vital_sign_observation(
-    observation_element, patient_id: str, index: int, recorder=None
+    observation_element, patient_id: str, index: int, recorder=None,
+    extra_resources: list | None = None
 ) -> Observation | None:
     code_element = find_child(observation_element, "code")
     code = build_codeable_concept_from_cd(code_element)
@@ -246,6 +248,25 @@ def _build_vital_sign_observation(
                 recorder.record(observation_id, "valueQuantity.unit", f"{member_base}/value/@unit", value.unit)
 
     _apply_common_observation_fields(observation, observation_element, member_base, recorder=recorder)
+
+    # CF-vitals maps a Vital Sign Observation's /author to .performer as
+    # well as to Provenance - one of the few author rows in the IG that
+    # names a plain attribute. A member folded into a blood-pressure or
+    # pulse-oximetry panel has no Observation of its own to carry one,
+    # the same reason its id, status and effectiveTime are not carried.
+    if extra_resources is not None:
+        author = build_author_practitioner(observation_element, member_base, recorder=recorder)
+        if author is not None:
+            performer_reference, performer = author
+            observation.performer = [performer_reference]
+            extra_resources.append(performer)
+            if recorder:
+                recorder.record(
+                    observation_id,
+                    "performer[0].reference",
+                    xpath_location(member_base, "author", "assignedAuthor"),
+                    performer_reference.reference,
+                )
 
     return observation
 
@@ -395,6 +416,9 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
     panel either (nothing to group), matching the "no resolvable code ->
     skip" convention at the organizer level too, not just the leaf level."""
     observations: list[Observation] = []
+    # Practitioners materialised from a member observation's own <author>,
+    # appended to the returned list once every organizer has been walked.
+    extra_resources: list = []
     for entry in find_all(section, "entry"):
         organizer = find_child(entry, "organizer")
         if organizer is None or not has_template_id(organizer, ORGANIZER_TEMPLATE_ID):
@@ -451,7 +475,10 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
 
         member_observations = []
         for index, observation_element in plain:
-            observation = _build_vital_sign_observation(observation_element, patient_id, index, recorder=recorder)
+            observation = _build_vital_sign_observation(
+                    observation_element, patient_id, index, recorder=recorder,
+                    extra_resources=extra_resources,
+                )
             if observation is not None:
                 member_observations.append(observation)
 
@@ -463,7 +490,10 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
                 # Either side's own value failed to resolve - fall back to
                 # plain rather than silently dropping the data.
                 for index, observation_element in (systolic, diastolic):
-                    observation = _build_vital_sign_observation(observation_element, patient_id, index, recorder=recorder)
+                    observation = _build_vital_sign_observation(
+                    observation_element, patient_id, index, recorder=recorder,
+                    extra_resources=extra_resources,
+                )
                     if observation is not None:
                         member_observations.append(observation)
 
@@ -475,7 +505,10 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
                 member_observations.append(pulse_ox_panel)
             else:
                 index, observation_element = pulse_ox_primary
-                observation = _build_vital_sign_observation(observation_element, patient_id, index, recorder=recorder)
+                observation = _build_vital_sign_observation(
+                    observation_element, patient_id, index, recorder=recorder,
+                    extra_resources=extra_resources,
+                )
                 if observation is not None:
                     member_observations.append(observation)
                 # A concentration/flow-rate sibling with no resolvable
@@ -538,4 +571,5 @@ def build_vital_signs(section, patient_id: str, recorder=None) -> list[Observati
         observations.append(panel)
         observations.extend(member_observations)
 
+    observations.extend(extra_resources)
     return observations
