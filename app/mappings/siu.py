@@ -18,6 +18,7 @@ from app.hl7.errors import MappingError
 from app.hl7.parser import field_str, optional_segments, raw_field_str, require_segment
 from app.mappings.base import MessageMapper
 from app.mappings.common import (
+    PARTICIPATION_TYPE_SYSTEM,
     assemble_bundle,
     build_location_chain_from_pl,
     build_patient,
@@ -28,7 +29,6 @@ from app.mappings.common import (
 )
 from app.provenance.location import hl7_location
 
-_PARTICIPATION_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"
 _TRIGGER_EVENT_EXTENSION_URL = "urn:interop-tools:siu-trigger-event"
 
 
@@ -209,7 +209,7 @@ def _build_participants(
             build_practitioner_from_xcn(aip, 3, recorder=recorder),
             person_display(aip, 3),
             hl7_location("AIP", 3),
-            Coding(system=_PARTICIPATION_TYPE_SYSTEM, code="ATND"),
+            Coding(system=PARTICIPATION_TYPE_SYSTEM, code="ATND"),
         )
     for ail in ail_segments:
         # AIL-3 is PL-shaped, so it yields a chain of Locations (one per

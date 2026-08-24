@@ -3,7 +3,7 @@ import uuid
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
-from fhir.resources.R4B.encounter import Encounter, EncounterLocation
+from fhir.resources.R4B.encounter import Encounter, EncounterLocation, EncounterParticipant
 from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.identifier import Identifier
 from fhir.resources.R4B.location import Location
@@ -337,6 +337,12 @@ def build_visit_identifier(pv1) -> Identifier | None:
     return Identifier(system="urn:interop-tools:visit-number", value=visit_number)
 
 
+# v3 ParticipationType, the system PV1-7's own ATND code comes from.
+# adt.py and siu.py each had their own copy before this became a third
+# consumer.
+PARTICIPATION_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"
+
+
 def build_minimal_encounter(pv1, patient_id: str, recorder=None, extra_resources=None) -> Encounter:
     """A minimal Encounter for message types whose PV1 (when present) gives
     context rather than an admit/discharge lifecycle event - ORU's optional
@@ -384,6 +390,27 @@ def build_minimal_encounter(pv1, patient_id: str, recorder=None, extra_resources
                     location=build_reference_with_optional_display(locations[0].id, location_display(pv1, 3))
                 )
             ]
+
+        # PV1-7 -> participant.individual(Practitioner), the same
+        # PV1[Encounter] row ADT already follows. Dropped here for the same
+        # reason PV1-3 was: "minimal" means no lifecycle to infer, not
+        # ignore what the PV1 carried. XCN's id and its XCN.7 degree only
+        # have somewhere to go on a real Practitioner, which is why this
+        # materialises one rather than building a display string.
+        attending = build_practitioner_from_xcn(pv1, 7, recorder=recorder)
+        if attending is not None:
+            extra_resources.append(attending)
+            attending_display = person_display(pv1, 7)
+            encounter.participant = [
+                EncounterParticipant(
+                    type=[CodeableConcept(coding=[Coding(system=PARTICIPATION_TYPE_SYSTEM, code="ATND")])],
+                    individual=build_reference_with_optional_display(attending.id, attending_display),
+                )
+            ]
+            if recorder and attending_display:
+                recorder.record(
+                    encounter_id, "participant[0].individual.display", hl7_location("PV1", 7), attending_display
+                )
     return encounter
 
 

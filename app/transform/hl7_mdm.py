@@ -30,7 +30,13 @@ from app.hl7.errors import MappingError
 from app.mappings.mdm import ALTERNATE_CODES_EXTENSION
 from app.transform.base import MessageBuilder
 from app.transform.common import find_resource, find_resources, format_hl7_ts
-from app.transform.hl7_common import build_minimal_pv1, build_msh, build_pid, reverse_cwe
+from app.transform.hl7_common import (
+    build_minimal_pv1,
+    build_msh,
+    build_pid,
+    build_xcn_from_practitioner,
+    reverse_cwe,
+)
 
 # Reverse of app/mappings/mdm.py::_CONTENT_PRESENTATION_TO_MIME_TYPE -
 # "TEXT" is the disclosed representative for text/plain (that MIME type
@@ -55,14 +61,6 @@ def _reverse_content_presentation(document_reference) -> str:
         return _DEFAULT_CONTENT_PRESENTATION
     content_type = document_reference.content[0].attachment.contentType
     return _MIME_TYPE_TO_CONTENT_PRESENTATION.get(content_type, _DEFAULT_CONTENT_PRESENTATION)
-
-
-def _build_xcn_from_practitioner(practitioner) -> str:
-    identifier = practitioner.identifier[0].value if practitioner.identifier else ""
-    name = practitioner.name[0] if practitioner.name else None
-    family = (name.family or "") if name else ""
-    given = name.given[0] if name and name.given else ""
-    return f"{identifier}^{family}^{given}"
 
 
 def _resolve_practitioner(reference, practitioners_by_id: dict):
@@ -103,11 +101,11 @@ def _build_txa(document_reference, practitioners_by_id: dict) -> str:
 
     originator = _resolve_practitioner(document_reference.author[0] if document_reference.author else None, practitioners_by_id)
     if originator is not None:
-        fields[9] = _build_xcn_from_practitioner(originator)
+        fields[9] = build_xcn_from_practitioner(originator)
 
     authenticator = _resolve_practitioner(document_reference.authenticator, practitioners_by_id)
     if authenticator is not None:
-        fields[10] = _build_xcn_from_practitioner(authenticator)
+        fields[10] = build_xcn_from_practitioner(authenticator)
 
     if document_reference.masterIdentifier and document_reference.masterIdentifier.value:
         fields[12] = document_reference.masterIdentifier.value
@@ -165,7 +163,7 @@ class _BaseMdmBuilder(MessageBuilder):
 
         msh, msh_dt = build_msh(bundle, "MDM", self.trigger_event)
         evn = segment("EVN", {1: self.trigger_event, 2: msh_dt}, 2)
-        pv1 = build_minimal_pv1(encounter)
+        pv1 = build_minimal_pv1(encounter, practitioners_by_id)
         pid = build_pid(patient)
         txa = _build_txa(document_reference, practitioners_by_id)
         obx_segments = _build_obx_segments(_resolve_binary(document_reference, binaries_by_id))

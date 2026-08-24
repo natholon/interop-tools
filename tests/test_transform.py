@@ -2364,3 +2364,31 @@ def test_mdm_round_trip_preserves_unverified_availability_status():
     )
     extension = document_reference.status__ext.extension[0]
     assert extension.valueCodeableConcept.coding[0].code == "CA"
+
+
+def test_oru_round_trip_preserves_the_attending_practitioner_with_its_degree():
+    # PV1-7 was mapped for ADT and ignored by ORU/MDM's minimal Encounter,
+    # so the attending physician was dropped. "Minimal" means no lifecycle
+    # to infer, not ignore what the PV1 carried - the same argument that
+    # closed PV1-3 for this builder. XCN.7's degree only has somewhere to
+    # go on a real Practitioner, which is why one is materialised.
+    from app.generators.registry import generate
+
+    source = generate("ORU", "R01", seed=4)
+    bundle = convert_to_bundle(source)
+    encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
+    attending_id = encounter.participant[0].individual.reference.removeprefix("urn:uuid:")
+    attending = next(e.resource for e in bundle.entry if e.resource.id == attending_id)
+    assert attending.identifier[0].value == "5452"
+    assert attending.name[0].family == "Reyes"
+    assert attending.qualification[0].code.coding[0].code == "MD"
+
+    message = build_message_from_bundle(bundle, "HL7", "ORU", "R01")
+    pv1 = next(line for line in message.split("\r") if line.startswith("PV1"))
+    assert pv1.split("|")[7] == "5452^Reyes^Betty^^^^MD"
+
+    round_tripped = convert_to_bundle(message)
+    encounter = next(e.resource for e in round_tripped.entry if e.resource.get_resource_type() == "Encounter")
+    attending_id = encounter.participant[0].individual.reference.removeprefix("urn:uuid:")
+    attending = next(e.resource for e in round_tripped.entry if e.resource.id == attending_id)
+    assert attending.qualification[0].code.coding[0].code == "MD"

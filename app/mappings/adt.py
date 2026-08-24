@@ -19,6 +19,7 @@ from app.hl7.errors import MappingError, MissingSegmentError
 from app.hl7.parser import field_str, require_segment
 from app.mappings.base import MessageMapper
 from app.mappings.common import (
+    PARTICIPATION_TYPE_SYSTEM,
     assemble_bundle,
     build_location_chain_from_pl,
     build_patient,
@@ -31,7 +32,6 @@ from app.mappings.common import (
 )
 from app.provenance.location import hl7_location
 
-_PARTICIPATION_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"
 _DISCHARGE_DISPOSITION_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0112"
 
 
@@ -135,7 +135,7 @@ def build_encounter_core(
             extra_resources.append(attending)
         encounter.participant = [
             EncounterParticipant(
-                type=[CodeableConcept(coding=[Coding(system=_PARTICIPATION_TYPE_SYSTEM, code="ATND")])],
+                type=[CodeableConcept(coding=[Coding(system=PARTICIPATION_TYPE_SYSTEM, code="ATND")])],
                 individual=build_reference_with_optional_display(attending.id, attending_display),
             )
         ]

@@ -122,16 +122,49 @@ def build_pid(patient) -> str:
     return segment("PID", fields, 13)
 
 
-def build_minimal_pv1(encounter) -> str | None:
+def build_xcn_from_practitioner(practitioner) -> str:
+    """A Practitioner back into an XCN: id^family^given^^^^degree.
+
+    Component 7 is the degree, which `build_practitioner_from_xcn` reads
+    into `qualification` - carrying it means an XCN-sourced Practitioner
+    round-trips whole rather than losing its trailing `^^^^MD`. Promoted
+    from hl7_mdm.py once the minimal PV1 became a third consumer.
+    """
+    identifier = practitioner.identifier[0].value if practitioner.identifier else ""
+    name = practitioner.name[0] if practitioner.name else None
+    family = (name.family or "") if name else ""
+    given = name.given[0] if name and name.given else ""
+    degree = ""
+    qualification = getattr(practitioner, "qualification", None)
+    if qualification and qualification[0].code and qualification[0].code.coding:
+        degree = qualification[0].code.coding[0].code or ""
+    if degree:
+        return f"{identifier}^{family}^{given}^^^^{degree}"
+    return f"{identifier}^{family}^{given}"
+
+
+def build_minimal_pv1(encounter, practitioners_by_id: dict | None = None) -> str | None:
     """The minimal PV1 shape app.mappings.common.build_minimal_encounter
-    itself reads: class code + visit identifier only, not the full ADT-
-    shaped PV1 app/transform/hl7_adt.py's own PV1 builder reverses."""
+    itself reads: class code, visit identifier, the PL location chain and
+    the PV1-7 attending practitioner - not the full ADT-shaped PV1
+    app/transform/hl7_adt.py's own PV1 builder reverses.
+
+    `practitioners_by_id` is what lets PV1-7 come back as a real XCN
+    rather than a display string; without it the participant is skipped,
+    since a Practitioner reference alone cannot be resolved here.
+    """
     if encounter is None:
         return None
     fields: dict[int, str] = {1: "1"}
     class_code = encounter.class_fhir.code if encounter.class_fhir else None
     if class_code:
         fields[2] = CLASS_TO_PATIENT_CLASS.get(class_code, "O")
+    if encounter.participant and practitioners_by_id:
+        individual = encounter.participant[0].individual
+        if individual is not None and individual.reference:
+            practitioner = practitioners_by_id.get(individual.reference.removeprefix("urn:uuid:"))
+            if practitioner is not None:
+                fields[7] = build_xcn_from_practitioner(practitioner)
     if encounter.identifier:
         visit_number = encounter.identifier[0].value
         if visit_number:

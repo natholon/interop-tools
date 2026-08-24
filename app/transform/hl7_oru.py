@@ -138,7 +138,7 @@ class _BaseOruBuilder(MessageBuilder):
         practitioners_by_id = {p.id: p for p in find_resources(bundle, "Practitioner")}
 
         msh, _msh_dt = build_msh(bundle, "ORU", self.trigger_event)
-        pv1 = build_minimal_pv1(encounter)
+        pv1 = build_minimal_pv1(encounter, practitioners_by_id)
         pid = build_pid(patient)
 
         segments = [msh]
