@@ -645,7 +645,11 @@ function renderCrosswalkTable(entries) {
                 // ConceptMap, a code table, a datatype's own format rules,
                 // or a disclosed local decision. Cite it, so the row says
                 // why the value changed rather than only that it did.
-                if (transformed && entry.transform_citation) {
+                // Shown whenever there is one: a value copied unchanged can
+                // still carry a caveat (Composition.confidentiality is
+                // correct per the base mapping and prohibited by US Realm
+                // Header), and that belongs in the Mapping Decision column.
+                if (entry.transform_citation) {
                     decisionCell.appendChild(citationNode(entry.transform_citation));
                 }
             }

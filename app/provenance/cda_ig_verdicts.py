@@ -95,6 +95,31 @@ _CITATION_BY_VERDICT = {
 IG_VERDICTS: dict[str, tuple[str, str]] = {
     # --- Document header: the IG publishes no header mapping at all -----
     "ClinicalDocument/code": (NO_MAP, "No header mapping is published; document type has no specified FHIR target."),
+    # Header participations the base R4 Composition mapping names no
+    # target for. Composition has fields for author, attester and
+    # custodian and nothing else of this kind, and no header table is
+    # published to name one.
+    "ClinicalDocument/informant": (NO_MAP, "Composition has no informant field and no header mapping is published."),
+    "ClinicalDocument/dataEnterer": (NO_MAP, "Composition has no dataEnterer field and no header mapping is published."),
+    "ClinicalDocument/informationRecipient": (
+        NO_MAP,
+        "Composition has no recipient field and no header mapping is published.",
+    ),
+    "ClinicalDocument/relatedDocument": (
+        NO_MAP,
+        "The base mapping routes .relatedDocument to Composition.relatesTo, which points at another document - "
+        "a single-document conversion has nothing to resolve it to.",
+    ),
+    # The document author's own <time>. The base R4 Composition mapping
+    # routes ".author.assignedAuthor" to Composition.author and names no
+    # target for when they authored it - Composition.date is the
+    # document's effectiveTime, a different fact. Provenance.recorded
+    # would carry it, on a resource this app never builds.
+    "ClinicalDocument/author/time": (
+        NO_MAP,
+        "The base Composition mapping routes .author.assignedAuthor to Composition.author and names no "
+        "target for the author's own time; only .attester (authenticators) has a time.",
+    ),
     # author (1..*) and custodian (1..1) are required of every C-CDA
     # document, so these two are dropped by every real conversion - worth
     # stating precisely rather than leaving to the generic header note.

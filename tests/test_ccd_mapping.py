@@ -33,7 +33,10 @@ def _resolve_reference(bundle, reference: str):
 def test_basic_fixture_maps_patient_encounter_and_conditions():
     bundle = convert_cda_to_bundle(read_fixture("ccd_basic.xml"))
 
-    assert bundle.type == "collection"
+    # A C-CDA ClinicalDocument is a document, so the Bundle is one -
+    # Composition first, per R4's bdl-11.
+    assert bundle.type == "document"
+    assert bundle.entry[0].resource.get_resource_type() == "Composition"
     entries = _entries_by_type(bundle)
     patient = entries["Patient"][0].resource
     encounter = entries["Encounter"][0].resource
@@ -829,3 +832,69 @@ def test_sections_the_ig_routes_to_provenance_get_no_author_practitioner():
     entries = _entries_by_type(bundle)
     for condition in entries.get("Condition", []):
         assert condition.resource.recorder is None
+
+
+def test_composition_maps_every_header_field_the_base_cda_mapping_names():
+    # Field-for-field against the base R4 Composition StructureDefinition's
+    # own `cda` mapping (identity "cda", http://hl7.org/v3/cda), which is
+    # the authoritative statement of this correspondence - C-CDA on FHIR
+    # publishes no header table at all.
+    bundle = convert_cda_to_bundle(read_fixture("ccd_basic.xml"))
+    composition = bundle.entry[0].resource
+    assert composition.get_resource_type() == "Composition"
+
+    patient = _entries_by_type(bundle)["Patient"][0].resource
+    encounter = _entries_by_type(bundle)["Encounter"][0].resource
+
+    assert composition.type.coding[0].code == "34133-9"           # <- .code
+    assert composition.title == "Continuity of Care Document"     # <- .title
+    assert composition.subject.reference == f"urn:uuid:{patient.id}"        # <- .recordTarget
+    assert composition.encounter.reference == f"urn:uuid:{encounter.id}"    # <- .componentOf
+    assert composition.date is not None                          # <- .effectiveTime
+    assert composition.confidentiality == "N"                    # <- .confidentialityCode
+    assert composition.status == "final"                         # no CDA source
+
+    author = _resolve_reference(bundle, composition.author[0].reference)
+    assert author.get_resource_type() == "Practitioner"
+    assert author.name[0].family == "Raman"
+
+    custodian = _resolve_reference(bundle, composition.custodian.reference)
+    assert custodian.get_resource_type() == "Organization"
+    assert custodian.name == "Fieldstone Health Network"
+
+    # .section carries the section's own title, code and narrative, and
+    # references exactly the resources that section produced.
+    problems = next(s for s in composition.section if s.code.coding[0].code == "11450-4")
+    assert problems.title == "Problems"
+    assert problems.text.status == "generated"
+    assert "Hypertension" in problems.text.div
+    condition_ids = {e.resource.id for e in _entries_by_type(bundle)["Condition"]}
+    assert {e.reference.removeprefix("urn:uuid:") for e in problems.entry} == condition_ids
+
+
+def test_composition_maps_set_id_not_document_id():
+    # .identifier is setId, not id: id identifies this instance and is
+    # already Bundle.identifier, while setId identifies the series.
+    bundle = convert_cda_to_bundle(read_fixture("ccd_basic.xml"))
+    composition = bundle.entry[0].resource
+    assert bundle.identifier.value == "TT988"
+    # ccd_basic carries no setId, so there is nothing to claim.
+    assert composition.identifier is None
+
+
+def test_composition_maps_documentation_of_to_event():
+    bundle = convert_cda_to_bundle(read_fixture("ccd_header_multiplicities.xml"))
+    composition = bundle.entry[0].resource
+    event = composition.event[0]
+    assert event.code[0].coding[0].code == "428191000124101"
+    assert event.period.start.isoformat().startswith("2026-04-01")
+    assert event.period.end.isoformat().startswith("2026-04-02")
+
+
+def test_document_without_an_author_stays_a_collection():
+    # Composition requires an author at construction and there is no
+    # honest default, so a document that carries none is left as a
+    # collection Bundle rather than given an invented one.
+    bundle = convert_cda_to_bundle(read_fixture("ccd_minimal.xml"))
+    assert bundle.type == "collection"
+    assert "Composition" not in _entries_by_type(bundle)

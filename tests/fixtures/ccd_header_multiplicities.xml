@@ -71,6 +71,16 @@
       </assignedAuthoringDevice>
     </assignedAuthor>
   </author>
+  <!-- Header participations with no Composition target: the register
+       reports each once, rather than one row per name part. -->
+  <informant>
+    <assignedEntity>
+      <id root="2.16.840.1.113883.4.6" extension="5566778899"/>
+      <assignedPerson>
+        <name><given>Wren</given><family>Achebe</family></name>
+      </assignedPerson>
+    </assignedEntity>
+  </informant>
   <custodian>
     <assignedCustodian>
       <representedCustodianOrganization>
@@ -78,6 +88,17 @@
       </representedCustodianOrganization>
     </assignedCustodian>
   </custodian>
+  <!-- documentationOf/serviceEvent -> Composition.event, per the base
+       R4 Composition mapping's own .event row. -->
+  <documentationOf>
+    <serviceEvent classCode="PCPR">
+      <code code="428191000124101" codeSystem="2.16.840.1.113883.6.96" displayName="Documentation of current medications"/>
+      <effectiveTime>
+        <low value="20260401"/>
+        <high value="20260402"/>
+      </effectiveTime>
+    </serviceEvent>
+  </documentationOf>
   <componentOf>
     <encompassingEncounter>
       <!-- Two ids - both must be captured, not just the first. -->

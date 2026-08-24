@@ -202,6 +202,28 @@ _BOOLEAN = _local(
 )
 
 
+US_REALM_HEADER_CONFIDENTIALITY = Citation(
+    title="US Realm Header prohibits Composition.confidentiality (0..0)",
+    url="https://hl7.org/fhir/us/ccda/StructureDefinition-US-Realm-Header.html",
+    authoritative=True,
+    note=(
+        "The base R4 Composition mapping routes ClinicalDocument/confidentialityCode to "
+        ".confidentiality, so the value is carried rather than dropped - but the US Realm Header "
+        "profile constrains that element to 0..0. A document validated against that profile will "
+        "flag it."
+    ),
+)
+
+# (source_format, fhir_path) -> Citation, for a mapping that is correct but
+# carries a caveat worth stating even though the value was copied
+# unchanged. Kept separate from TRANSFORM_CITATIONS because nothing here
+# transformed anything - the citation explains the decision, not a value
+# change.
+MAPPING_CAVEATS: dict[tuple[str, str], Citation] = {
+    ("CDA", "confidentiality"): US_REALM_HEADER_CONFIDENTIALITY,
+}
+
+
 # (source_format, fhir_path with indices normalised) -> Citation
 TRANSFORM_CITATIONS: dict[tuple[str, str], Citation] = {
     # --- HL7v2 ---------------------------------------------------------
@@ -220,6 +242,9 @@ TRANSFORM_CITATIONS: dict[tuple[str, str], Citation] = {
     ("HL7v2", "valueQuantity.value"): _DECIMAL_NORMALISED,
     # --- C-CDA ---------------------------------------------------------
     ("CDA", "Bundle.timestamp"): CDA_DATETIME,
+    # Composition.date is dateTime, so unlike Bundle.timestamp it keeps
+    # a date-only effectiveTime - same reformatting, same citation.
+    ("CDA", "date"): CDA_DATETIME,
     ("CDA", "birthDate"): CDA_DATE,
     ("CDA", "gender"): _CDA_GENDER,
     ("CDA", "class.code"): _CDA_ENCOUNTER_CLASS,
@@ -255,6 +280,12 @@ def normalise_path(fhir_path: str) -> str:
         _INDEX_RE = re.compile(r"\[\d+\]")
     tail = fhir_path.split(".resource.", 1)[-1]
     return _INDEX_RE.sub("[]", tail)
+
+
+def caveat_for(source_format: str, fhir_path: str) -> Citation | None:
+    """A caveat governing this mapping, if one is registered - see
+    MAPPING_CAVEATS. Matched the same normalised way citation_for matches."""
+    return MAPPING_CAVEATS.get((source_format, normalise_path(fhir_path)))
 
 
 def citation_for(source_format: str | None, fhir_path: str | None) -> Citation | None:

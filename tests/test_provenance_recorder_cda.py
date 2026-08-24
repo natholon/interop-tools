@@ -102,39 +102,42 @@ def test_cda_provenance_recording_does_not_change_bundle_output(fixture):
 def test_ccd_basic_crosswalk_matches_known_field_values():
     # Direct content-correctness check against ccd_basic.xml's own
     # already-known values (test_ccd_mapping.py's own assertions).
+    # Entry indices are one higher than the resource order suggests:
+    # this fixture carries a header <author>, so the Bundle is a
+    # document and the Composition leads it (bdl-11).
     recorder = ProvenanceRecorder(source_format="CDA")
     bundle = _build_bundle("ccd_basic.xml", recorder=recorder)
     entries = resolve_bundle_paths(bundle, recorder)
     by_path = {e.fhir_path: e for e in entries}
 
-    identifier_entry = by_path["Bundle.entry[0].resource.identifier[0].value"]
+    identifier_entry = by_path["Bundle.entry[1].resource.identifier[0].value"]
     assert identifier_entry.value == "998991"
     # Points at the attribute the value came from, not the bare <id>:
     # cda_locator cannot always resolve a childless element, which made
     # every mapped CDA identifier look unread.
     assert identifier_entry.source_location == xpath_location("recordTarget", "patientRole", "id[0]", "@extension")
 
-    family_entry = by_path["Bundle.entry[0].resource.name[0].family"]
+    family_entry = by_path["Bundle.entry[1].resource.name[0].family"]
     assert family_entry.value == "Betterhalf"
-    given_entry = by_path["Bundle.entry[0].resource.name[0].given[0]"]
+    given_entry = by_path["Bundle.entry[1].resource.name[0].given[0]"]
     assert given_entry.value == "Eve"
 
-    gender_entry = by_path["Bundle.entry[0].resource.gender"]
+    gender_entry = by_path["Bundle.entry[1].resource.gender"]
     assert gender_entry.value == "female"
     assert gender_entry.source_value == "F"
 
-    birth_date_entry = by_path["Bundle.entry[0].resource.birthDate"]
+    birth_date_entry = by_path["Bundle.entry[1].resource.birthDate"]
     assert birth_date_entry.value == "1975-05-01"
     assert birth_date_entry.source_value == "19750501"
 
-    city_entry = by_path["Bundle.entry[0].resource.address[0].city"]
+    city_entry = by_path["Bundle.entry[1].resource.address[0].city"]
     assert city_entry.value == "Beaverton"
 
-    telecom_entry = by_path["Bundle.entry[0].resource.telecom[0].value"]
+    telecom_entry = by_path["Bundle.entry[1].resource.telecom[0].value"]
     assert telecom_entry.value == "+1-555-555-2003"
     assert telecom_entry.source_value == "tel:+1-555-555-2003"
 
-    class_entry = by_path["Bundle.entry[1].resource.class.code"]
+    class_entry = by_path["Bundle.entry[2].resource.class.code"]
     assert class_entry.value == "AMB"
     assert class_entry.source_value == "AMB"
 
@@ -151,30 +154,30 @@ def test_ccd_basic_crosswalk_matches_known_field_values():
     assert telecom_entry.field_label == "Contact Point"
     assert class_entry.field_label == "Code"
 
-    period_start_entry = by_path["Bundle.entry[1].resource.period.start"]
+    period_start_entry = by_path["Bundle.entry[2].resource.period.start"]
     assert period_start_entry.source_location == xpath_location(
         "componentOf/encompassingEncounter/effectiveTime/low/@value"
     )
     assert period_start_entry.field_label == "Start Date/Time"
-    period_end_entry = by_path["Bundle.entry[1].resource.period.end"]
+    period_end_entry = by_path["Bundle.entry[2].resource.period.end"]
     assert period_end_entry.source_location == xpath_location(
         "componentOf/encompassingEncounter/effectiveTime/high/@value"
     )
     assert period_end_entry.field_label == "End Date/Time"
 
-    condition0_code = by_path["Bundle.entry[2].resource.code.coding[0].code"]
+    condition0_code = by_path["Bundle.entry[3].resource.code.coding[0].code"]
     assert condition0_code.value == "38341003"
     assert condition0_code.field_label == "Coded Value"
-    condition0_display = by_path["Bundle.entry[2].resource.code.coding[0].display"]
+    condition0_display = by_path["Bundle.entry[3].resource.code.coding[0].display"]
     assert condition0_display.value == "Hypertensive disorder"
     assert condition0_display.field_label == "Display Name"
-    condition0_status = by_path["Bundle.entry[2].resource.clinicalStatus.coding[0].code"]
+    condition0_status = by_path["Bundle.entry[3].resource.clinicalStatus.coding[0].code"]
     assert condition0_status.value == "active"
     assert condition0_status.source_location == xpath_location("act", "statusCode", "@code")
     assert condition0_status.field_label == "Status Code"
-    condition0_onset = by_path["Bundle.entry[2].resource.onsetDateTime"]
+    condition0_onset = by_path["Bundle.entry[3].resource.onsetDateTime"]
     assert condition0_onset.value == "2025-01-03"
-    assert "Bundle.entry[2].resource.abatementDateTime" not in by_path
+    assert "Bundle.entry[3].resource.abatementDateTime" not in by_path
 
     bundle_identifier = by_path["Bundle.identifier.value"]
     assert bundle_identifier.value == "TT988"
@@ -187,42 +190,45 @@ def test_ccd_header_multiplicities_records_correct_indices_for_repeating_fields(
     # <telecom>s, and two encounter <id>s - every kept FHIR array index
     # must match the fact recorded for it, and every source_location must
     # point at the correct XML repetition index too.
+    # Entry indices are one higher than the resource order suggests:
+    # this fixture carries a header <author>, so the Bundle is a
+    # document and the Composition leads it (bdl-11).
     recorder = ProvenanceRecorder(source_format="CDA")
     bundle = _build_bundle("ccd_header_multiplicities.xml", recorder=recorder)
     entries = resolve_bundle_paths(bundle, recorder)
     by_path = {e.fhir_path: e for e in entries}
 
-    name0 = by_path["Bundle.entry[0].resource.name[0].family"]
+    name0 = by_path["Bundle.entry[1].resource.name[0].family"]
     assert name0.value == "Plicity"
-    name1 = by_path["Bundle.entry[0].resource.name[1].family"]
+    name1 = by_path["Bundle.entry[1].resource.name[1].family"]
     assert name1.value == "Named"
     assert name1.source_location == xpath_location("recordTarget", "patientRole", "patient", "name[1]", "family")
 
-    addr0 = by_path["Bundle.entry[0].resource.address[0].city"]
+    addr0 = by_path["Bundle.entry[1].resource.address[0].city"]
     assert addr0.value == "Portland"
-    addr1 = by_path["Bundle.entry[0].resource.address[1].postalCode"]
+    addr1 = by_path["Bundle.entry[1].resource.address[1].postalCode"]
     assert addr1.value == "97204"
     assert addr1.source_location == xpath_location("recordTarget", "patientRole", "addr[1]", "postalCode")
 
-    telecom0 = by_path["Bundle.entry[0].resource.telecom[0].value"]
+    telecom0 = by_path["Bundle.entry[1].resource.telecom[0].value"]
     assert telecom0.value == "+1-555-555-3001"
-    telecom1 = by_path["Bundle.entry[0].resource.telecom[1].value"]
+    telecom1 = by_path["Bundle.entry[1].resource.telecom[1].value"]
     assert telecom1.value == "+1-555-555-3002"
 
     # A root-only <id> (no @extension) still produces a real fact - the
     # value is the fallback urn:oid: representation, not a skipped index.
-    patient_id_entry = by_path["Bundle.entry[0].resource.identifier[0].value"]
+    patient_id_entry = by_path["Bundle.entry[1].resource.identifier[0].value"]
     assert patient_id_entry.value.startswith("urn:oid:")
 
-    encounter_id0 = by_path["Bundle.entry[1].resource.identifier[0].value"]
+    encounter_id0 = by_path["Bundle.entry[2].resource.identifier[0].value"]
     assert encounter_id0.value == "LOCALENC1"
-    encounter_id1 = by_path["Bundle.entry[1].resource.identifier[1].value"]
+    encounter_id1 = by_path["Bundle.entry[2].resource.identifier[1].value"]
     assert encounter_id1.value == "NATIONALENC1"
     assert encounter_id1.source_location == xpath_location("componentOf/encompassingEncounter/id[1]", "@extension")
 
     # This fixture's own encompassingEncounter/effectiveTime carries only a
     # <low>, no <high> - period.end must never appear.
-    assert "Bundle.entry[1].resource.period.end" not in by_path
+    assert "Bundle.entry[2].resource.period.end" not in by_path
 
 
 def test_ccd_effective_time_variants_records_bare_value_vs_low_high_shapes():

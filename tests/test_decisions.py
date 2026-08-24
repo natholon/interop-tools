@@ -459,7 +459,7 @@ def _cda_decisions(fixture: str):
 
 
 def test_cda_reports_dropped_values():
-    decisions = _cda_decisions("ccd_basic.xml")
+    decisions = _cda_decisions("ccd_effective_time_variants.xml")
     dropped = _by_location([d for d in decisions if d.kind == "dropped"])
     assert dropped, "a CCD drops real values - languageCode is never mapped"
     # A wholly unmapped element reports once, naming the element rather
@@ -471,7 +471,7 @@ def test_cda_transformed_values_are_not_reported_as_dropped():
     # The mapper rewrites most values it reads - a date reformatted, an OID
     # turned into a urn:oid: URI. Comparing values alone called nearly half
     # the document lost; matching the resolved source span does not.
-    dropped = set(_by_location(_cda_decisions("ccd_basic.xml")))
+    dropped = set(_by_location(_cda_decisions("ccd_effective_time_variants.xml")))
     for suffix in (
         "patient/birthTime/@value",                 # -> Patient.birthDate, reformatted
         "patientRole/patient/name/family",          # -> HumanName.family
@@ -481,7 +481,7 @@ def test_cda_transformed_values_are_not_reported_as_dropped():
 
 
 def test_cda_structural_xml_is_not_reported_as_dropped():
-    dropped = set(_by_location(_cda_decisions("ccd_basic.xml")))
+    dropped = set(_by_location(_cda_decisions("ccd_effective_time_variants.xml")))
     for fragment in ("templateId", "typeId", "@classCode", "@moodCode", "@xmlns"):
         assert not [loc for loc in dropped if fragment in loc], fragment
 
@@ -490,13 +490,13 @@ def test_cda_code_system_is_reported_only_when_its_code_is_unmapped():
     # codeSystem qualifies the code beside it, so it is consumed only when
     # that code was actually read - the same conditional rule the other two
     # formats use.
-    dropped = set(_by_location(_cda_decisions("ccd_basic.xml")))
+    dropped = set(_by_location(_cda_decisions("ccd_effective_time_variants.xml")))
     # The Problem Observation's value/@code IS mapped, so its codeSystem is not a drop.
     assert not [loc for loc in dropped if loc.endswith("observation/value/@codeSystem")]
     # ClinicalDocument/code is not mapped at all, so it reports as one
     # element-level row whose detail names every attribute it carried,
     # codeSystem included.
-    doc_code = next(d for d in _cda_decisions("ccd_basic.xml")
+    doc_code = next(d for d in _cda_decisions("ccd_effective_time_variants.xml")
                     if d.source_location == "ClinicalDocument/code")
     assert "@codeSystem=" in (doc_code.detail or "")
     assert "@displayName=" in (doc_code.detail or "")
@@ -506,7 +506,7 @@ def test_cda_narrative_block_reports_once_not_per_paragraph():
     # C-CDA requires a section's narrative to restate its entries, so
     # reporting every paragraph would bury the real findings under a
     # duplicate of them.
-    decisions = _cda_decisions("ccd_basic.xml")
+    decisions = _cda_decisions("ccd_effective_time_variants.xml")
     narrative = [d for d in decisions if (d.source_location or "").endswith("/text()")
                  and "section" in (d.source_location or "")]
     assert len({d.source_location for d in narrative}) == len(narrative)
@@ -532,7 +532,7 @@ def test_cda_wholly_unmapped_element_reports_once_not_per_attribute():
     """An unmapped <code> produced three rows (@code, @codeSystem,
     @displayName) telling a reviewer one fact. The HL7v2 half already
     reports a wholly unmapped field once; this brings C-CDA in line."""
-    dropped = _by_location(_cda_decisions("ccd_basic.xml"))
+    dropped = _by_location(_cda_decisions("ccd_effective_time_variants.xml"))
     doc_code = dropped["ClinicalDocument/code"]
     assert "@code=" in doc_code.detail and "@codeSystem=" in doc_code.detail
     assert not [loc for loc in dropped if loc.startswith("ClinicalDocument/code/@")]
@@ -559,7 +559,7 @@ def test_cda_a_single_occurrence_keeps_its_exact_location():
 def test_cda_drops_cite_a_real_ig_verdict_not_unchecked():
     """Every drop used to cite "not yet checked". Where the IG's own
     mapping table has been read, the register now states what it says."""
-    decisions = _cda_decisions("ccd_basic.xml")
+    decisions = _cda_decisions("ccd_effective_time_variants.xml")
     titles = {d.citation.title for d in decisions if d.kind == "dropped"}
     assert any("no map specified" in t for t in titles)
     assert any("not supported by target" in t for t in titles)
@@ -604,7 +604,7 @@ def test_cda_entry_identifiers_are_built_closing_the_ig_gap():
         assert identifiers and all(identifiers), f"{resource_type} must carry the entry id"
 
     # And the register no longer reports them as gaps.
-    gaps = [d for d in _cda_decisions("ccd_basic.xml") if d.summary.startswith("GAP:")]
+    gaps = [d for d in _cda_decisions("ccd_effective_time_variants.xml") if d.summary.startswith("GAP:")]
     assert not [g for g in gaps if g.source_location.endswith("observation/id")]
 
 
@@ -613,7 +613,7 @@ def test_cda_concern_act_id_and_observation_id_get_different_verdicts():
     Concern Act's own id is marked "not supported by target" while the
     Problem Observation's id inside it maps. Longest-suffix matching is
     what keeps those apart."""
-    by_loc = _by_location(_cda_decisions("ccd_basic.xml"))
+    by_loc = _by_location(_cda_decisions("ccd_effective_time_variants.xml"))
     act_id = next(d for loc, d in by_loc.items() if loc.endswith("entry/act/id"))
     assert "not supported by target" in act_id.citation.title
     assert not act_id.summary.startswith("GAP:")
@@ -1012,51 +1012,49 @@ def test_values_carried_into_the_bundle_are_never_reported_as_dropped():
     assert not [loc for loc in dropped if loc.endswith("assignedEntity/telecom/@use")]
 
 
-def test_required_header_participations_report_once_each_with_a_verdict():
-    # author (1..*) and custodian (1..1) are required of every C-CDA
-    # document, so every real conversion drops them - a collection Bundle
-    # has no Composition to carry either. Reported one row per
-    # participation, not one per name part and id: six rows for an author
-    # say nothing the first does not.
-    decisions = _decisions_for_any_fixture("ccd_basic.xml")
+def test_unread_header_participation_reports_once_with_a_verdict():
+    # A header participation nothing was read from is one finding, not one
+    # per name part and id - the same rule <entry> follows, one level up.
+    # author and custodian used to land here; they are Composition fields
+    # now, so informant is what exercises it.
+    decisions = _decisions_for_any_fixture("ccd_header_multiplicities.xml")
     dropped = [d for d in decisions if d.kind == "dropped"]
 
-    header = [d for d in dropped if d.source_location in ("ClinicalDocument/author", "ClinicalDocument/custodian")]
-    assert sorted(d.source_location for d in header) == [
-        "ClinicalDocument/author",
-        "ClinicalDocument/custodian",
-    ]
-    for decision in header:
-        assert "Composition" in (decision.detail or ""), decision.source_location
-        assert decision.citation.title == "C-CDA on FHIR: no map specified"
-
-    # Nothing beneath either one is reported separately.
-    beneath = [
-        d
-        for d in dropped
-        if any(
-            (d.source_location or "").startswith(prefix + "/")
-            for prefix in ("ClinicalDocument/author", "ClinicalDocument/custodian")
-        )
-    ]
-    assert beneath == [], [d.source_location for d in beneath]
+    informant = [d for d in dropped if (d.source_location or "").startswith("ClinicalDocument/informant")]
+    assert [d.source_location for d in informant] == ["ClinicalDocument/informant"]
+    assert informant[0].citation.title == "C-CDA on FHIR: no map specified"
+    # One row, but it still names everything the participation carried.
+    assert "Achebe" in (informant[0].detail or "")
+    assert "5566778899" in (informant[0].detail or "")
 
 
-def test_two_header_authors_stay_two_findings():
-    # Repeated shapes normally collapse into one row carrying a count -
-    # right for seven Problems entries dropping the same id, wrong here.
-    # Two document authors are two statements, and this header's are not
-    # even the same kind: one is a person, one a software system.
-    dropped = [d for d in _decisions_for_any_fixture("ccd_header_multiplicities.xml") if d.kind == "dropped"]
-    authors = [d for d in dropped if (d.source_location or "").startswith("ClinicalDocument/author")]
-    assert [d.source_location for d in authors] == [
-        "ClinicalDocument/author",
-        "ClinicalDocument/author[1]",
-    ]
-    assert "Bergstrom" in (authors[0].detail or "")
-    assert "Cedar Ridge EHR 5" in (authors[1].detail or "")
-    # Each is headed by a name or device model, not by its <time>.
-    assert [d.lost_value for d in authors] == ["Bergstrom", "Cedar Ridge EHR 5"]
+def test_header_author_and_custodian_are_no_longer_dropped():
+    # Both are required of every C-CDA document and both now have a real
+    # Composition target, so neither should reach the drop register.
+    dropped = [d for d in _decisions_for_any_fixture("ccd_basic.xml") if d.kind == "dropped"]
+    locations = [d.source_location or "" for d in dropped]
+    assert not [loc for loc in locations if loc.startswith("ClinicalDocument/custodian")]
+    # The author's own <time> has no Composition target and still drops;
+    # the author itself does not.
+    author_drops = [loc for loc in locations if loc.startswith("ClinicalDocument/author")]
+    assert author_drops == ["ClinicalDocument/author/time"]
+
+
+def test_both_header_authors_become_composition_authors():
+    # Two authors, one a person and one a software system. Both are
+    # Composition.author entries, and the device becomes a Device rather
+    # than a nameless Practitioner.
+    from app.provenance.dispatch import convert_with_provenance
+
+    raw = (_EDI_FIXTURES / "ccd_header_multiplicities.xml").read_text(encoding="utf-8")
+    bundle, _, _ = convert_with_provenance(raw)
+    composition = bundle.entry[0].resource
+    assert composition.get_resource_type() == "Composition"
+    assert len(composition.author) == 2
+
+    by_id = {e.resource.id: e.resource for e in bundle.entry}
+    kinds = [by_id[a.reference.removeprefix("urn:uuid:")].get_resource_type() for a in composition.author]
+    assert sorted(kinds) == ["Device", "Practitioner"]
 
 
 @pytest.mark.parametrize("fixture", _ALL_FIXTURES)

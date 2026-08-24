@@ -1715,6 +1715,73 @@ def _build_narrative_sections(
     return "".join(parts)
 
 
+_ATTESTER_MODE_TO_TAG = {"legal": "legalAuthenticator", "professional": "authenticator"}
+
+
+def _reverse_composition_header(
+    bundle: Bundle, authors_by_id: dict, organizations_by_id: dict
+) -> tuple[str, str, str, str]:
+    """(setId element, author+custodian+attester elements, confidentiality
+    code) from the Bundle's Composition - the reverse of
+    app.cda.composition.build_composition.
+
+    Returns the pieces separately because CDA's header is a sequence:
+    setId sits between languageCode and recordTarget, while author,
+    custodian and the authenticators follow recordTarget.
+
+    The date comes back from `Composition.date`, not `Bundle.timestamp`.
+    `.date` is dateTime and so preserves a date-only effectiveTime;
+    `.timestamp` is instant and cannot hold one, and reading it dropped
+    the element entirely on the way out - which then cost the next
+    forward pass its whole Composition, since date is required.
+    """
+    composition = find_resource(bundle, "Composition")
+    if composition is None:
+        return "", "", "N", ""
+
+    set_id = ""
+    if composition.identifier is not None and composition.identifier.value:
+        set_id = (
+            f'<setId root="{_reverse_identifier_root(composition.identifier)}"'
+            f' extension="{_esc(composition.identifier.value)}"/>'
+        )
+
+    parts = [
+        _reverse_author_element(reference, authors_by_id) for reference in (composition.author or [])
+    ]
+
+    if composition.custodian is not None and composition.custodian.reference:
+        organization = organizations_by_id.get(composition.custodian.reference.removeprefix("urn:uuid:"))
+        if organization is not None:
+            ids = "".join(
+                f'<id root="{_reverse_identifier_root(identifier)}" extension="{_esc(identifier.value)}"/>'
+                for identifier in (organization.identifier or [])
+                if identifier.value
+            )
+            name = f"<name>{_esc(organization.name)}</name>" if organization.name else ""
+            parts.append(
+                "<custodian><assignedCustodian><representedCustodianOrganization>"
+                f"{ids}{name}"
+                "</representedCustodianOrganization></assignedCustodian></custodian>"
+            )
+
+    for attester in composition.attester or []:
+        tag = _ATTESTER_MODE_TO_TAG.get(attester.mode)
+        if tag is None:
+            continue
+        time = f'<time value="{format_hl7_ts(attester.time)}"/>' if attester.time else ""
+        party = ""
+        if attester.party is not None and attester.party.reference:
+            practitioner = authors_by_id.get(attester.party.reference.removeprefix("urn:uuid:"))
+            if practitioner is not None:
+                party = f"<assignedEntity>{_reverse_practitioner_id_and_name(practitioner)}</assignedEntity>"
+        if not time and not party:
+            continue
+        parts.append(f"<{tag}>{time}{party}</{tag}>")
+
+    return set_id, "".join(parts), composition.confidentiality or "N", format_hl7_ts(composition.date)
+
+
 def build_sectioned_document(
     bundle: Bundle,
     template_id: str,
@@ -1765,6 +1832,9 @@ def build_sectioned_document(
     authors_by_id = dict(practitioners_by_id)
     authors_by_id.update({d.id: d for d in find_resources(bundle, "Device")})
     organizations_by_id = {o.id: o for o in find_resources(bundle, "Organization")}
+    set_id, header_participations, confidentiality, composition_date = _reverse_composition_header(
+        bundle, authors_by_id, organizations_by_id
+    )
     locations_by_id = {loc.id: loc for loc in find_resources(bundle, "Location")}
     document_references = find_resources(bundle, "DocumentReference")
     binaries_by_id = {b.id: b for b in find_resources(bundle, "Binary")}
@@ -1773,7 +1843,7 @@ def build_sectioned_document(
 
     document_id = _esc(bundle.identifier.value) if bundle.identifier else "TT000"
     document_root = _reverse_identifier_root(bundle.identifier) if bundle.identifier else _PLACEHOLDER_ROOT
-    effective_time = format_hl7_ts(bundle.timestamp) if bundle.timestamp else ""
+    effective_time = composition_date or (format_hl7_ts(bundle.timestamp) if bundle.timestamp else "")
 
     hospital_discharge_diagnosis_section = ""
     discharge_medications_section = ""
@@ -1819,9 +1889,12 @@ def build_sectioned_document(
         f'<code code="{doc_code}" codeSystem="2.16.840.1.113883.6.1" displayName="{doc_code_display}"/>'
         f"<title>{title}</title>"
         f'{f"<effectiveTime value=\"{effective_time}\"/>" if effective_time else ""}'
-        '<confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>'
+        f'<confidentialityCode code="{_esc(confidentiality)}" codeSystem="2.16.840.1.113883.5.25"/>'
         '<languageCode code="en-US"/>'
-        f"{_build_patient_role(patient)}{_build_component_of(encounter)}{body}"
+        f"{set_id}"
+        # CDA's header is a sequence: recordTarget, author, custodian,
+        # the authenticators, then componentOf.
+        f"{_build_patient_role(patient)}{header_participations}{_build_component_of(encounter)}{body}"
         "</ClinicalDocument>"
     )
 

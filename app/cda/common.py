@@ -781,15 +781,27 @@ def build_encounter_from_header(document, patient_id: str, recorder=None) -> Enc
     return encounter
 
 
-def assemble_bundle(document, patient: Patient, *resources: Resource, recorder=None) -> Bundle:
+def assemble_bundle(
+    document, patient: Patient, *resources: Resource, composition=None, recorder=None
+) -> Bundle:
     """Wrap a Patient plus any number of additional resources into a
     Bundle, with ClinicalDocument-derived metadata (id -> Bundle.identifier,
     effectiveTime -> Bundle.timestamp) - the CDA-header equivalent of
     app/mappings/common.py::assemble_bundle, which reads MSH fields instead.
-    Bundle.type is "collection", matching every existing HL7v2 pipeline's
-    output shape - a proper FHIR-Document-shaped Bundle(type="document")
-    with a Composition is deliberately out of scope for this slice (see
-    CLAUDE.md). `recorder` is optional; when given, the document's own
+
+    **A C-CDA ClinicalDocument IS a document, so this produces
+    `Bundle(type="document")`** with the Composition as entry[0], which is
+    what R4's bdl-11 requires. Two more invariants bind at that type and
+    are checked rather than assumed: bdl-9 (an identifier with both a
+    system and a value) and bdl-10 (a timestamp). `Bundle.timestamp` is
+    `instant`, so a date-only ClinicalDocument/effectiveTime cannot supply
+    one - such a document stays `type="collection"` rather than being
+    given a fabricated time. Same for a document with no Composition to
+    lead with. HL7v2 and X12 keep their own shapes: the v2-to-FHIR IG
+    assigns Bundle.type "message", and maps MDM^T02's document notification
+    to DocumentReference, not Composition.
+
+    `recorder` is optional; when given, the document's own
     id/effectiveTime are recorded against `bundle.id` itself - see
     app/provenance/resolver.py's own bundle.id special case."""
     bundle = Bundle(id=str(uuid.uuid4()), type="collection")
@@ -818,8 +830,18 @@ def assemble_bundle(document, patient: Patient, *resources: Resource, recorder=N
                 bundle.id, "timestamp", xpath_location("effectiveTime", "@value"), timestamp, source_value=document_effective_time_raw
             )
 
-    bundle.entry = [BundleEntry(fullUrl=f"urn:uuid:{patient.id}", resource=patient)]
+    leading = [composition] if composition is not None else []
+    bundle.entry = [
+        BundleEntry(fullUrl=f"urn:uuid:{entry.id}", resource=entry) for entry in leading + [patient]
+    ]
     bundle.entry.extend(BundleEntry(fullUrl=f"urn:uuid:{resource.id}", resource=resource) for resource in resources)
+
+    # bdl-9/-10/-11, checked rather than assumed - see the docstring.
+    has_qualified_identifier = bundle.identifier is not None and bool(
+        bundle.identifier.system and bundle.identifier.value
+    )
+    if composition is not None and has_qualified_identifier and bundle.timestamp is not None:
+        bundle.type = "document"
     return bundle
 
 
@@ -851,9 +873,15 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
         apply_patient_extensions,
     )
 
+    from app.cda.composition import build_composition
+
     patient = build_patient_from_header(document, recorder=recorder)
     encounter = build_encounter_from_header(document, patient.id, recorder=recorder)
     resources = [encounter] if encounter is not None else []
+    # (source index, section element, what it produced) - Composition.section
+    # references exactly its own section's resources, so the association has
+    # to be kept here where both are in scope.
+    section_resources: list[tuple[int, object, list]] = []
 
     for section_index, section in enumerate(
         find_all(document, "component/structuredBody/component/section")
@@ -866,7 +894,9 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
                 # entries in scope. See that function's own docstring for
                 # why a pre-pass rather than threading a lookup dict.
                 resolve_narrative_references(section)
-                resources.extend(builder(section, patient.id, recorder=recorder))
+                built = list(builder(section, patient.id, recorder=recorder))
+                resources.extend(built)
+                section_resources.append((section_index, section, built))
                 # Social History carries observations the IG maps to
                 # Patient extensions rather than to Observations. Handled
                 # here rather than in the section builder because
@@ -880,7 +910,11 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
         # An unrecognized section is silently skipped - disclosed, not a
         # bug (see CLAUDE.md's per-document-type scope-limit notes).
 
-    return assemble_bundle(document, patient, *resources, recorder=recorder)
+    composition, composition_resources = build_composition(
+        document, patient, encounter, section_resources, recorder=recorder
+    )
+    resources.extend(composition_resources)
+    return assemble_bundle(document, patient, *resources, composition=composition, recorder=recorder)
 
 # Disclosed local system for an assignedEntity/assignedAuthor id that
 # carries no recognisable authority of its own.
@@ -932,8 +966,8 @@ def build_authoring_device(assigned_author, author_base: str, recorder=None) -> 
     if identifier:
         device.identifier = [identifier]
         if recorder:
-            recorder.record(
-                device_id, "identifier[0].value", xpath_location(author_base, "id"), identifier.value
+            record_identifier(
+                recorder, device_id, "identifier[0]", id_element, xpath_location(author_base, "id"), identifier
             )
 
     if not names and identifier is None:
@@ -967,10 +1001,42 @@ def build_author_participant(element, base_location: str, allow_device: bool = T
     author_element = find_child(element, "author")
     if author_element is None:
         return None
+    return build_author_from_element(
+        author_element,
+        xpath_location(base_location, "author"),
+        allow_device=allow_device,
+        recorder=recorder,
+    )
+
+
+
+def record_identifier(recorder, resource_id: str, path: str, id_element, id_location: str, identifier) -> None:
+    """Record both halves of an Identifier built from a CDA `<id>`.
+
+    `build_identifier` sets `.system` from `@root` and `.value` from
+    `@extension` (or from `@root` when that is all the id has), so
+    recording only the value reports every `@root` as dropped - data the
+    mapper did carry. The value's location names the attribute that
+    actually supplied it, since a bare `.../id` resolves to nothing. One
+    helper so the two cannot drift apart, the same reason record_coding
+    and record_quantity exist.
+    """
+    if not recorder or identifier is None or id_element is None:
+        return
+    value_attribute = "@extension" if id_element.get("extension") else "@root"
+    recorder.record(resource_id, f"{path}.value", xpath_location(id_location, value_attribute), identifier.value)
+    if identifier.system:
+        recorder.record(resource_id, f"{path}.system", xpath_location(id_location, "@root"), identifier.system)
+
+def build_author_from_element(author_element, base_location: str, allow_device: bool = True, recorder=None):
+    """The same reversal as build_author_participant, but taking the
+    `<author>` element itself rather than its parent - a document header
+    carries several, so its caller iterates them and cannot rely on
+    "the first <author> under this parent"."""
     assigned_author = find_child(author_element, "assignedAuthor")
     if assigned_author is None:
         return None
-    author_base = xpath_location(base_location, "author", "assignedAuthor")
+    author_base = xpath_location(base_location, "assignedAuthor")
     if find_child(assigned_author, "assignedAuthoringDevice") is not None:
         if not allow_device:
             return None

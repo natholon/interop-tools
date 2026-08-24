@@ -1331,3 +1331,25 @@ def test_validate_document_never_raises_missing_segment_error_directly():
         validate_document(document)
     except MissingSegmentError:
         pytest.fail("validate_document() must not raise MissingSegmentError - it should be a finding")
+
+
+_US_REALM_RULE = "cda.composition-confidentiality-not-us-realm-conformant"
+
+
+def test_confidentiality_code_reports_the_us_realm_prohibition():
+    # The value is carried (the base R4 Composition mapping names the
+    # target), but US Realm Header constrains .confidentiality to 0..0 -
+    # a reviewer should hear that from the validator rather than from a
+    # failed profile validation later.
+    document = _doc(
+        _patient() + '<confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>'
+    )
+    matching = [f for f in validate_document(document).findings if f.rule_id == _US_REALM_RULE]
+    assert len(matching) == 1
+    assert matching[0].severity == "info"
+    assert "0..0" in matching[0].message
+
+
+def test_no_confidentiality_code_produces_no_us_realm_finding():
+    matching = [f for f in validate_document(_doc(_patient())).findings if f.rule_id == _US_REALM_RULE]
+    assert matching == []

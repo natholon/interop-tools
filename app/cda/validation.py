@@ -261,6 +261,33 @@ def _rule_document_effective_time(document, now: datetime) -> list[ValidationFin
     return []
 
 
+def _rule_composition_confidentiality(document) -> list[ValidationFinding]:
+    """ClinicalDocument/confidentialityCode maps to
+    Composition.confidentiality per the base R4 Composition mapping - and
+    US Realm Header constrains that element to 0..0.
+
+    Carrying the value is the right call (it is real data the mapping
+    names a target for, and dropping it would lose it silently), but a
+    document validated against US Realm Header will flag it, so say so
+    here rather than letting a reviewer meet it as a surprise.
+    """
+    element = find_child(document, "confidentialityCode")
+    if element is None or not (element.get("code") or "").strip():
+        return []
+    return [
+        ValidationFinding(
+            severity="info",
+            rule_id="cda.composition-confidentiality-not-us-realm-conformant",
+            segment="ClinicalDocument/confidentialityCode",
+            message=(
+                "confidentialityCode is carried to Composition.confidentiality per the base R4 Composition "
+                "mapping, but the US Realm Header profile constrains that element to 0..0 - a document "
+                "validated against that profile will flag it."
+            ),
+        )
+    ]
+
+
 def _rule_encounter(encompassing_encounter, now: datetime) -> list[ValidationFinding]:
     findings = []
 
@@ -1294,6 +1321,7 @@ def validate_document(document) -> ValidationReport:
     now = datetime.now(timezone.utc)
 
     findings.extend(_rule_document_effective_time(document, now))
+    findings.extend(_rule_composition_confidentiality(document))
 
     patient = _find_patient(document)
     if patient is None:

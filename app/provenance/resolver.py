@@ -13,7 +13,7 @@ from app.provenance.hl7_field_names import resolve_hl7_field_label
 from app.provenance.hl7_locator import parse_hl7_location
 from app.provenance.models import ProvenanceEntry
 from app.provenance.recorder import ProvenanceRecorder
-from app.provenance.transform_citations import citation_for
+from app.provenance.transform_citations import caveat_for, citation_for
 
 
 def _resolve_field_label(source_format: str, source_location: str | None) -> str | None:
@@ -42,15 +42,20 @@ def _resolve_field_label(source_format: str, source_location: str | None) -> str
 
 
 def _resolve_transform_citation(source_format, fhir_path, fact):
-    """Only a direct fact whose recorded source value genuinely differs
-    from what was built counts as transformed - the same test the
-    crosswalk's own "Transformed" badge applies, kept here so the two
-    cannot disagree about which rows claim a citation."""
+    """The citation governing this mapping.
+
+    Only a direct fact whose recorded source value genuinely differs from
+    what was built counts as *transformed* - the same test the crosswalk's
+    own "Transformed" badge applies, kept here so the two cannot disagree.
+    A mapping that copied its value unchanged can still carry a caveat
+    worth stating (Composition.confidentiality is correct per the base
+    mapping and prohibited by US Realm Header), so an untransformed direct
+    fact falls through to MAPPING_CAVEATS."""
     if fact.derivation != "direct":
         return None
     if fact.source_value is None or fact.source_value == fact.value:
-        return None
-    return citation_for(source_format, fhir_path)
+        return caveat_for(source_format, fhir_path)
+    return citation_for(source_format, fhir_path) or caveat_for(source_format, fhir_path)
 
 
 def resolve_bundle_paths(bundle: Bundle, recorder: ProvenanceRecorder) -> list[ProvenanceEntry]:
