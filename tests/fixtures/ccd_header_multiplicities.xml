@@ -49,6 +49,35 @@
       </patient>
     </patientRole>
   </recordTarget>
+  <!-- Two authors, the second a software system - CDA models the author
+       as an assignedPerson/assignedAuthoringDevice choice, and both
+       shapes drop the same way at header level. -->
+  <author>
+    <time value="20260401113000-0500"/>
+    <assignedAuthor>
+      <id root="2.16.840.1.113883.4.6" extension="9911223344"/>
+      <assignedPerson>
+        <name><given>Tomas</given><family>Bergstrom</family></name>
+      </assignedPerson>
+    </assignedAuthor>
+  </author>
+  <author>
+    <time value="20260401113500-0500"/>
+    <assignedAuthor>
+      <id root="2.16.840.1.113883.19.5" extension="EHR-7"/>
+      <assignedAuthoringDevice>
+        <manufacturerModelName>Cedar Ridge EHR 5</manufacturerModelName>
+        <softwareName>Cedar Ridge Charting</softwareName>
+      </assignedAuthoringDevice>
+    </assignedAuthor>
+  </author>
+  <custodian>
+    <assignedCustodian>
+      <representedCustodianOrganization>
+        <name>Cedar Ridge Medical Group</name>
+      </representedCustodianOrganization>
+    </assignedCustodian>
+  </custodian>
   <componentOf>
     <encompassingEncounter>
       <!-- Two ids - both must be captured, not just the first. -->

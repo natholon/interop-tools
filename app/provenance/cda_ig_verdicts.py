@@ -95,6 +95,24 @@ _CITATION_BY_VERDICT = {
 IG_VERDICTS: dict[str, tuple[str, str]] = {
     # --- Document header: the IG publishes no header mapping at all -----
     "ClinicalDocument/code": (NO_MAP, "No header mapping is published; document type has no specified FHIR target."),
+    # author (1..*) and custodian (1..1) are required of every C-CDA
+    # document, so these two are dropped by every real conversion - worth
+    # stating precisely rather than leaving to the generic header note.
+    # Their FHIR home would be Composition.author/.custodian, and this app
+    # deliberately emits Bundle(type="collection") with no Composition
+    # (see app/cda/common.py::assemble_bundle for why). The IG publishes
+    # no header table either, so there is also no named target being
+    # missed - this is "no map specified", not a gap.
+    "ClinicalDocument/author": (
+        NO_MAP,
+        "No header mapping is published. The document author's FHIR home would be Composition.author, "
+        "and this app builds no Composition - it emits a collection Bundle, not a FHIR Document.",
+    ),
+    "ClinicalDocument/custodian": (
+        NO_MAP,
+        "No header mapping is published. The custodian's FHIR home would be Composition.custodian, "
+        "and this app builds no Composition - it emits a collection Bundle, not a FHIR Document.",
+    ),
     "ClinicalDocument/title": (NO_MAP, "No header mapping is published."),
     "ClinicalDocument/languageCode": (NO_MAP, "No header mapping is published."),
     "ClinicalDocument/confidentialityCode": (NO_MAP, "No header mapping is published."),

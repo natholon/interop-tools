@@ -1010,3 +1010,44 @@ def test_values_carried_into_the_bundle_are_never_reported_as_dropped():
     )
     assert role.telecom[0].use == "work"
     assert not [loc for loc in dropped if loc.endswith("assignedEntity/telecom/@use")]
+
+
+def test_required_header_participations_report_once_each_with_a_verdict():
+    # author (1..*) and custodian (1..1) are required of every C-CDA
+    # document, so every real conversion drops them - a collection Bundle
+    # has no Composition to carry either. Reported one row per
+    # participation, not one per name part and id: six rows for an author
+    # say nothing the first does not.
+    decisions = _decisions_for_any_fixture("ccd_basic.xml")
+    dropped = [d for d in decisions if d.kind == "dropped"]
+
+    header = [d for d in dropped if d.source_location in ("ClinicalDocument/author", "ClinicalDocument/custodian")]
+    assert sorted(d.source_location for d in header) == [
+        "ClinicalDocument/author",
+        "ClinicalDocument/custodian",
+    ]
+    for decision in header:
+        assert "Composition" in (decision.detail or ""), decision.source_location
+        assert decision.citation.title == "C-CDA on FHIR: no map specified"
+
+    # Nothing beneath either one is reported separately.
+    beneath = [
+        d
+        for d in dropped
+        if any(
+            (d.source_location or "").startswith(prefix + "/")
+            for prefix in ("ClinicalDocument/author", "ClinicalDocument/custodian")
+        )
+    ]
+    assert beneath == [], [d.source_location for d in beneath]
+
+
+def test_a_device_header_author_groups_the_same_way_as_a_person():
+    # The header carries two authors, one an assignedAuthoringDevice - the
+    # grouping keys off the participation, not what is inside it.
+    dropped = [d for d in _decisions_for_any_fixture("ccd_header_multiplicities.xml") if d.kind == "dropped"]
+    authors = [d for d in dropped if (d.source_location or "").startswith("ClinicalDocument/author")]
+    assert [d.source_location for d in authors] == ["ClinicalDocument/author"]
+    # One row, but it still names what both authors carried.
+    assert "Cedar Ridge EHR 5" in (authors[0].detail or "")
+    assert "Bergstrom" in (authors[0].detail or "")

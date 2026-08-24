@@ -31,6 +31,29 @@
       </patient>
     </patientRole>
   </recordTarget>
+  <!-- author (1..*) and custodian (1..1) are required of every C-CDA
+       document. Neither has a FHIR home in a collection Bundle, so both
+       drop - carried here so the drop register actually sees them. -->
+  <author>
+    <time value="20260401113000-0500"/>
+    <assignedAuthor>
+      <id root="2.16.840.1.113883.4.6" extension="1122334455"/>
+      <assignedPerson>
+        <name><given>Priya</given><family>Raman</family></name>
+      </assignedPerson>
+      <representedOrganization>
+        <name>Fieldstone Clinic</name>
+      </representedOrganization>
+    </assignedAuthor>
+  </author>
+  <custodian>
+    <assignedCustodian>
+      <representedCustodianOrganization>
+        <id root="2.16.840.1.113883.19.5" extension="FHN-1"/>
+        <name>Fieldstone Health Network</name>
+      </representedCustodianOrganization>
+    </assignedCustodian>
+  </custodian>
   <componentOf>
     <encompassingEncounter>
       <id root="2.16.840.1.113883.19" extension="ENC001"/>

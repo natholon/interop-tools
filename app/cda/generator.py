@@ -156,6 +156,13 @@ _MEDICATION_CODES = [
 ]
 # Obviously-synthetic authoring systems, for the assignedAuthoringDevice
 # half of _random_entry_author's own choice.
+_ORGANIZATION_NAMES = [
+    "Fieldstone Health Network",
+    "Cedar Ridge Medical Group",
+    "Harborview Community Health",
+    "Alder Creek Physicians",
+]
+
 _AUTHORING_DEVICES = [
     ("Meridian Care Platform 7", "Meridian Charting"),
     ("Northwind EHR 4200", "Northwind Clinical Suite"),
@@ -1025,7 +1032,7 @@ def _random_participant_location(rng: random.Random) -> str:
     )
 
 
-def _random_entry_author(rng: random.Random, allow_device: bool = True) -> str:
+def _random_entry_author(rng: random.Random, allow_device: bool = True, include_organization: bool = False) -> str:
     """An <author> on a clinical statement, splitting between CDA's own
     assignedPerson and assignedAuthoringDevice choices - direct fuzz
     coverage of app/cda/common.py::build_author_participant's two
@@ -1050,7 +1057,20 @@ def _random_entry_author(rng: random.Random, allow_device: bool = True) -> str:
             f'<id root="2.16.840.1.113883.19.5" extension="{author_id}"/>'
             f"<assignedPerson><name><given>{given}</given><family>{family}</family></name></assignedPerson>"
         )
+    if include_organization and maybe(rng, 0.7):
+        inner += f"<representedOrganization><name>{rng.choice(_ORGANIZATION_NAMES)}</name></representedOrganization>"
     return f'<author><time value="20260615113000-0500"/><assignedAuthor>{inner}</assignedAuthor></author>'
+
+
+def _random_custodian(rng: random.Random) -> str:
+    """ClinicalDocument/custodian, required 1..1 - the organization in
+    charge of maintaining the document."""
+    return (
+        "<custodian><assignedCustodian><representedCustodianOrganization>"
+        f'<id root="2.16.840.1.113883.19.5" extension="{_random_uuid_like(rng)[:9]}"/>'
+        f"<name>{rng.choice(_ORGANIZATION_NAMES)}</name>"
+        "</representedCustodianOrganization></assignedCustodian></custodian>"
+    )
 
 
 def _random_procedure_author(rng: random.Random) -> str:
@@ -1722,7 +1742,16 @@ def _generate_sectioned_document(
         f"{effective_time}"
         '<confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>'
         '<languageCode code="en-US"/>'
-        f"{_random_patient(rng)}{encounter}{body}"
+        # author (1..*) and custodian (1..1) are required of every C-CDA
+        # document, and the header is a sequence: recordTarget, author,
+        # custodian, then componentOf. Omitting them made every generated
+        # document invalid against the ClinicalDocument StructureDefinition,
+        # and left the drop register blind to two elements a real document
+        # always carries.
+        f"{_random_patient(rng)}"
+        f"{_random_entry_author(rng, include_organization=True)}"
+        f"{_random_custodian(rng)}"
+        f"{encounter}{body}"
         "</ClinicalDocument>"
     )
     return _pretty_print(parse_document(xml_text))  # parse = self-check: a generator bug should raise, not return broken XML

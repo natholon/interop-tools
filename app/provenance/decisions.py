@@ -634,6 +634,62 @@ def _unconverted_entry_paths(leaves: list[_CdaLeaf], is_mapped) -> set[str]:
     return entries - read
 
 
+# Header participations that are whole statements about the document, not
+# loose attributes: an author or a custodian is one fact carrying a name,
+# an id and an organization. Reported once each, the same rule <entry>
+# already follows one level down. Only recognised directly under the
+# document root - `author` also appears inside entries, where the entry
+# itself is the right granularity.
+HEADER_PARTICIPATION_TAGS = frozenset(
+    {
+        "author",
+        "authorization",
+        "authenticator",
+        "custodian",
+        "dataEnterer",
+        "documentationOf",
+        "informant",
+        "informationRecipient",
+        "inFulfillmentOf",
+        "legalAuthenticator",
+        "relatedDocument",
+    }
+)
+
+
+_PARTICIPATION_IDENTIFYING_TAGS = ("family", "name", "manufacturerModelName")
+
+
+def _unread_header_participation_paths(leaves: list[_CdaLeaf], is_mapped) -> set[str]:
+    """Paths of header participations with no mapped leaf anywhere beneath.
+
+    Two of these are required of every C-CDA document (`author` 1..*,
+    `custodian` 1..1), so a real document always carries them and this app
+    always drops them - a Bundle(type="collection") has no Composition to
+    hang them on. Reporting that as one row per participation, rather than
+    one per name part and id, says the thing worth reviewing.
+    """
+    read: set[str] = set()
+    participations: set[str] = set()
+    for leaf in leaves:
+        path = _enclosing_header_participation(leaf.path)
+        if path is None:
+            continue
+        participations.add(path)
+        if is_mapped(leaf):
+            read.add(path)
+    return participations - read
+
+
+def _enclosing_header_participation(path: str) -> str | None:
+    parts = path.split("/")
+    if len(parts) < 3 or parts[0].split("[")[0] != "ClinicalDocument":
+        return None
+    if parts[1].split("[")[0] not in HEADER_PARTICIPATION_TAGS:
+        return None
+    return "/".join(parts[:2])
+
+
 def _enclosing_entry(path: str) -> str | None:
     parts = path.split("/")
     for i in range(len(parts) - 1, -1, -1):
@@ -757,6 +813,12 @@ def _dropped_cda_decisions(
     unconverted = _unconverted_entry_paths(
         leaves, lambda leaf: is_mapped(leaf, allow_path_fallback=False)
     )
+    # Same grouping, but these keep an ordinary IG verdict: the reason a
+    # header author is dropped is that no header mapping is published, not
+    # that this app skipped a clinical statement it understood.
+    unread_participations = _unread_header_participation_paths(
+        leaves, lambda leaf: is_mapped(leaf, allow_path_fallback=False)
+    )
 
     by_element: dict[str, list[_CdaLeaf]] = {}
     for leaf in leaves:
@@ -778,8 +840,30 @@ def _dropped_cda_decisions(
             )
         )
 
+    for participation_path in sorted(unread_participations):
+        part_leaves = [lf for lf in leaves if lf.path.startswith(participation_path + "/")]
+        carried = ", ".join(dict.fromkeys(f"{lf.value!r}" for lf in part_leaves))
+        # Two authors collapse into one shape row listing each row's value,
+        # so that value has to identify the participation - a name or a
+        # device model, not whichever leaf happened to come first (the
+        # <time>, which says nothing about who authored anything).
+        identifying = next(
+            (lf for lf in part_leaves if lf.tag in _PARTICIPATION_IDENTIFYING_TAGS),
+            part_leaves[0],
+        )
+        rows.append(
+            _CdaRow(
+                participation_path,
+                participation_path.split("/")[-1].split("[")[0],
+                identifying.value,
+                f"Carried {carried}.",
+                part_leaves[0].template_ids,
+            )
+        )
+
     for element_path, element_leaves in by_element.items():
-        if any(element_path == p or element_path.startswith(p + "/") for p in unconverted):
+        skip = list(unconverted) + list(unread_participations)
+        if any(element_path == p or element_path.startswith(p + "/") for p in skip):
             continue
         reportable = [
             leaf
