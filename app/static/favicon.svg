@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="interop-tools">
+    <!-- The app's own motif: the subtitle's bidirectional arrow. This
+         converts both ways (message to FHIR and back), which a one-way
+         arrow or a generic medical cross would not say.
+         Solid accent tile with white arrows, rather than theme-aware
+         strokes, so it holds contrast against a light or dark tab strip
+         without a prefers-color-scheme block inside the SVG. -->
+    <rect width="32" height="32" rx="7" fill="#2563eb"/>
+    <g fill="none" stroke="#ffffff" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M7 12h18"/>
+        <path d="M20 7l5 5-5 5"/>
+        <path d="M25 20H7"/>
+        <path d="M12 15l-5 5 5 5"/>
+    </g>
+</svg>
