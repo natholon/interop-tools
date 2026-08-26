@@ -124,6 +124,17 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
         "per resolve_appointment_timing.",
     ),
     "SCH-10": (NO_TARGET, "SCH-10 (Appointment Duration Units) has a blank FHIR Attribute."),
+    # SCH-25 maps to Appointment.status through the published
+    # FillerStatusCodes[Appointment] ConceptMap, which this app implements.
+    # Three of its v2 codes - Discontinued, Blocked, Overbook - have blank
+    # target rows, so a message carrying one falls back to the trigger's
+    # own status rather than being guessed at. That is the only way SCH-25
+    # reaches the register.
+    "SCH-25": (
+        NO_TARGET,
+        "SCH-25 maps to Appointment.status, which this app builds - but the FillerStatusCodes ConceptMap "
+        "leaves Discontinued, Blocked and Overbook without a target, so those codes have nowhere to go.",
+    ),
     "SCH-11": (
         SUPERSEDED,
         "SCH-11 maps to the appointment timing as a whole, which this app reads as the legacy "

@@ -50,6 +50,17 @@ from app.provenance.citations import (
 )
 
 NOT_SUPPORTED = "not_supported"
+# The element was read; its code simply is not in the published
+# ConceptMap, so the mapping fell back to its documented default. That is
+# a property of the document, not a missing capability - the HL7v2 half
+# says the same about a PID-7 the date parser cannot read.
+UNRECOGNIZED = "unrecognized"
+# The target is a fixed value per the spec or the IG, so the source
+# element is never consulted at all.
+FIXED_TARGET = "fixed_target"
+# The IG names a target on a resource this element did not produce,
+# because it was folded into another one.
+FOLDED = "folded"
 NO_MAP = "no_map"
 OUT_OF_SCOPE = "out_of_scope"
 SUPERSEDED = "superseded"
@@ -82,12 +93,43 @@ CDA_IG_TARGET_OUT_OF_SCOPE = Citation(
     ),
 )
 
+CDA_IG_UNRECOGNIZED_CODE = Citation(
+    title="Code not in the published ConceptMap",
+    url="https://build.fhir.org/ig/HL7/ccda-on-fhir/",
+    authoritative=True,
+    note=(
+        "This app reads the element and maps it through the IG's own ConceptMap. The document's code "
+        "has no row there, so the mapping fell back to its documented default - a property of this "
+        "document rather than a missing capability."
+    ),
+)
+
+CDA_IG_FIXED_TARGET = Citation(
+    title="Target is a fixed value; the source element is not read",
+    url="https://build.fhir.org/ig/HL7/ccda-on-fhir/",
+    authoritative=True,
+    note="The IG (or C-CDA itself) fixes the FHIR value for this field, so the source element is never consulted.",
+)
+
+CDA_IG_FOLDED = Citation(
+    title="Folded into another resource, which has nowhere to carry this",
+    url="https://build.fhir.org/ig/HL7/ccda-on-fhir/",
+    authoritative=True,
+    note=(
+        "The IG maps this to a field on the resource built from this element - but the element was "
+        "folded into another resource per the IG's own panel guidance, so it produced none of its own."
+    ),
+)
+
 _CITATION_BY_VERDICT = {
     NOT_SUPPORTED: CDA_IG_NOT_SUPPORTED,
     SUPERSEDED: CDA_IG_SUPERSEDED,
     NO_MAP: CDA_IG_NO_MAP_SPECIFIED,
     OUT_OF_SCOPE: CDA_IG_TARGET_OUT_OF_SCOPE,
     GAP: CDA_IG_DEFINES_TARGET,
+    UNRECOGNIZED: CDA_IG_UNRECOGNIZED_CODE,
+    FIXED_TARGET: CDA_IG_FIXED_TARGET,
+    FOLDED: CDA_IG_FOLDED,
 }
 
 # (shape suffix) -> (verdict, what the IG says). Matched by longest suffix,
@@ -110,6 +152,173 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
         "The base mapping routes .relatedDocument to Composition.relatesTo, which points at another document - "
         "a single-document conversion has nothing to resolve it to.",
     ),
+    # --- a negated Medication Activity ------------------------------------
+    # negationInd="true" means this administration did NOT happen, and the
+    # Medications mapper skips the entry entirely rather than asserting a
+    # MedicationRequest for it - the same negation handling Problems uses.
+    # Nothing the entry carries has anywhere to go, so these reach the
+    # register as collateral. Most such entries report once, as "entry not
+    # converted"; a few leaves escape that grouping where the span
+    # resolver cannot attribute them, which is its own disclosed
+    # imprecision rather than a second cause.
+    "2.16.840.1.113883.10.20.22.4.16|@negationInd": (
+        NOT_SUPPORTED,
+        "A negated Medication Activity produces no MedicationRequest, and the CSV gives negationInd "
+        "no target of its own.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.16|author/assignedAuthor/assignedPerson/name/family": (
+        NOT_SUPPORTED,
+        "The MedicationRequest table maps the author to .requester, which a negated entry never "
+        "builds - it produces no MedicationRequest at all.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.16|author/assignedAuthor/assignedPerson/name/given": (
+        NOT_SUPPORTED,
+        "The MedicationRequest table maps the author to .requester, which a negated entry never "
+        "builds - it produces no MedicationRequest at all.",
+    ),
+
+    # C-CDA fixes statusCode to "completed" for both the Vital Signs
+    # Organizer and each Vital Sign Observation, and CF-vitals states the
+    # FHIR status plainly - so neither source element is ever consulted.
+    "2.16.840.1.113883.10.20.22.4.26|statusCode": (
+        FIXED_TARGET,
+        "C-CDA fixes the Vital Signs Organizer statusCode to completed, and CF-vitals fixes the "
+        "panel Observation.status to final.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.27|statusCode": (
+        FIXED_TARGET,
+        "C-CDA fixes a Vital Sign Observation statusCode to completed, and CF-vitals fixes "
+        "Observation.status to final.",
+    ),
+
+    # A Family History Organizer's statusCode is fixed to "completed" by
+    # the template itself, so this app sets FamilyMemberHistory.status
+    # from the spec rather than reading it. Same for the member
+    # observations beneath it.
+    "2.16.840.1.113883.10.20.22.4.45|statusCode": (
+        FIXED_TARGET,
+        "The Family History Organizer template fixes statusCode to completed, so FamilyMemberHistory"
+        ".status is set from the spec rather than read.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.46|statusCode": (
+        FIXED_TARGET,
+        "A Family History Observation sits under an organizer whose status is fixed; its own "
+        "statusCode has no separate FHIR target.",
+    ),
+
+    # The Medication Free Text Sig maps to Dosage.patientInstruction, which
+    # this app builds - but only for an entry that becomes a
+    # MedicationRequest at all. Where the entry is skipped (negated, or no
+    # resolvable medication code) the sig is collateral. Unscoped
+    # deliberately: the sig template is the only thing in this app with
+    # this shape, and its own templateId does not reach the scanner here.
+    "entryRelationship/substanceAdministration/text()": (
+        NOT_SUPPORTED,
+        "The free-text sig maps to Dosage.patientInstruction, which only exists on a MedicationRequest "
+        "- and the entry carrying this one produced none.",
+    ),
+
+    # --- effectiveTime bounds with no target ------------------------------
+    # The Allergy CSV answers this outright: "..effectiveTime..low" is a
+    # source value to .onsetDateTime and "..effectiveTime..high" is "not
+    # supported by target". AllergyIntolerance.lastOccurrence exists, but
+    # the IG declines to map it there, so neither do we.
+    "2.16.840.1.113883.10.20.22.4.7|effectiveTime/high": (
+        NOT_SUPPORTED,
+        "The Allergy table marks the high bound not supported by target.",
+    ),
+    # A Reaction Observation's effectiveTime maps as a whole to
+    # .reaction.onset, a single dateTime built from the low bound.
+    "2.16.840.1.113883.10.20.22.4.9|effectiveTime/high": (
+        SUPERSEDED,
+        "The Allergy table maps the reaction effectiveTime to .reaction.onset, a single dateTime "
+        "this app builds from the low bound.",
+    ),
+    # An administration happens at a point in time, so only the low bound
+    # has a home on Immunization.occurrenceDateTime.
+    "2.16.840.1.113883.10.20.22.4.52|effectiveTime/high": (
+        SUPERSEDED,
+        "The Immunization table maps effectiveTime to occurrenceDateTime, a single point in time "
+        "this app builds from the low bound.",
+    ),
+
+    # --- statusCode -------------------------------------------------------
+    # Read and mapped through each section's own published ConceptMap; a
+    # code with no row there falls back to that map's documented default.
+    "2.16.840.1.113883.10.20.22.4.1|statusCode": (
+        UNRECOGNIZED,
+        "ConceptMap-CF-ResultReportStatus has no row for this code, so DiagnosticReport.status fell "
+        "back to unknown.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.2|statusCode": (
+        UNRECOGNIZED,
+        "ConceptMap-CF-ResultStatus has no row for this code, so Observation.status fell back to unknown.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.14|statusCode": (
+        UNRECOGNIZED,
+        "ConceptMap-CF-ProcedureStatus has no row for this code, so Procedure.status fell back to unknown.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.52|statusCode": (
+        UNRECOGNIZED,
+        "CF_ImmunizationStatus has no row for this code, so Immunization.status fell back to "
+        "completed - that value set has no unknown.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.44|statusCode": (
+        UNRECOGNIZED,
+        "The disclosed Plan of Treatment status map has no row for this code, so the CarePlan "
+        "activity status fell back to unknown.",
+    ),
+    # Social History and its specialisations fix the FHIR status, so the
+    # source statusCode is never consulted.
+    "2.16.840.1.113883.10.20.22.4.38|statusCode": (
+        FIXED_TARGET,
+        "CF-social fixes Observation.status to final for a Social History Observation.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.78|statusCode": (
+        FIXED_TARGET,
+        "CF-social fixes Observation.status to final for a Smoking Status Observation.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.200|statusCode": (
+        FIXED_TARGET,
+        "Birth Sex becomes a us-core-birthsex extension on Patient, which carries a value and no status.",
+    ),
+    "2.16.840.1.113883.10.20.34.3.45|statusCode": (
+        FIXED_TARGET,
+        "Gender Identity becomes a us-core-genderIdentity extension on Patient, which carries a "
+        "value and no status.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.200|value/@displayName": (
+        NOT_SUPPORTED,
+        "us-core-birthsex is valueCode - a bare code, with nowhere to carry a display name.",
+    ),
+
+    # --- folded into a panel ---------------------------------------------
+    # CF-vitals groups a systolic/diastolic pair, and an O2 saturation with
+    # its siblings, into one panel Observation. A reading folded into one
+    # produces no Observation of its own - the same reason its id, status
+    # and effectiveTime are not carried either.
+    "2.16.840.1.113883.10.20.22.4.27|author/assignedAuthor/assignedPerson/name/family": (
+        FOLDED,
+        "CF-vitals maps a Vital Sign Observation author to the Observation built from it; a reading "
+        "folded into a panel produces none.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.27|author/assignedAuthor/assignedPerson/name/given": (
+        FOLDED,
+        "CF-vitals maps a Vital Sign Observation author to the Observation built from it; a reading "
+        "folded into a panel produces none.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.27|interpretationCode": (
+        FOLDED,
+        "CF-vitals maps interpretationCode to the Observation built from this reading; a reading "
+        "folded into a panel produces none.",
+    ),
+    # An author's own <time> has no target on any of these tables - only
+    # .attester (the authenticators) has a time.
+    "2.16.840.1.113883.10.20.22.4.27|author/time": (
+        NO_MAP,
+        "CF-vitals maps the author to .performer and names no target for when they authored it.",
+    ),
+
     # The document author's own <time>. The base R4 Composition mapping
     # routes ".author.assignedAuthor" to Composition.author and names no
     # target for when they authored it - Composition.date is the

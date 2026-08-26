@@ -138,12 +138,16 @@ def _build_dosage(
                 )
         if rate_quantity:
             dose_and_rate.rateQuantity = rate_quantity
-            if recorder and resource_id and relative_path:
-                recorder.record(
+            if resource_id and relative_path:
+                # Through record_quantity, like doseQuantity beside it:
+                # build_quantity_from_pq reads @unit too, and recording
+                # only the value reported every rate unit as dropped.
+                record_quantity(
+                    recorder,
                     resource_id,
-                    f"{relative_path}.doseAndRate[0].rateQuantity.value",
-                    xpath_location(_ENTRY_BASE, "rateQuantity", "@value"),
-                    rate_quantity_element.get("value"),
+                    f"{relative_path}.doseAndRate[0].rateQuantity",
+                    xpath_location(_ENTRY_BASE, "rateQuantity"),
+                    rate_quantity,
                 )
         dosage.doseAndRate = [dose_and_rate]
     if bounds_start or bounds_end:

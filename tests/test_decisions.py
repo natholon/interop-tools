@@ -260,7 +260,7 @@ from app.provenance.decisions import (
     apply_rejections,
     compute_decisions as _compute,
 )
-from app.generators.registry import generate
+from app.generators.registry import generate, list_supported_types
 
 
 def _converted(message: str):
@@ -1140,3 +1140,38 @@ def test_a_skipped_entry_cannot_borrow_a_siblings_read_by_value():
     # Nothing beneath it is reported separately any more.
     beneath = [d.source_location for d in dropped if (d.source_location or "").startswith(f"{section}/entry/")]
     assert beneath == [], beneath
+
+
+_GENERATED_SAMPLE_TYPES = [(mt, te) for mt, te, _ in list_supported_types()]
+
+
+def _decisions_for_generated(message_type: str, trigger_event: str, seed: int):
+    raw = generate(message_type, trigger_event, seed=seed)
+    if message_type == "CDA":
+        return _cda_decisions_for_text(raw)
+    _, report, _ = convert_with_provenance(raw)
+    return compute_decisions(report, raw)
+
+
+@pytest.mark.parametrize("message_type,trigger_event", _GENERATED_SAMPLE_TYPES)
+def test_generated_samples_carry_only_checked_verdicts(message_type, trigger_event):
+    """The same guarantee the fixture-parametrized tests make, over the
+    generator instead.
+
+    Fixtures are a couple of dozen hand-written documents; the generators
+    reach far more shape combinations, and measuring against them found 27
+    unchecked shapes while the fixture tests were green - six of which
+    turned out to be bugs rather than missing verdicts. Without this, the
+    claim goes back to being only as wide as the corpus the moment a
+    mapping changes.
+    """
+    for seed in range(8):
+        for decision in _decisions_for_generated(message_type, trigger_event, seed):
+            if decision.kind != "dropped":
+                continue
+            assert not decision.citation.title.startswith("Not yet checked"), (
+                f"{message_type}^{trigger_event} seed={seed}: {decision.source_location}"
+            )
+            assert not (decision.summary or "").startswith("GAP"), (
+                f"{message_type}^{trigger_event} seed={seed}: {decision.source_location}"
+            )
