@@ -28,7 +28,23 @@ from app.generators.base import (
 from app.hl7.parser import parse_message
 
 
-def _sch_common_fields(rng: random.Random) -> dict:
+# SCH-25 (Filler Status Code) has to agree with the trigger, or the
+# generated message contradicts itself: the IG maps SCH-25 to
+# Appointment.status, so a cancel carrying "Booked" produces a booked
+# appointment on a cancel message. "Discontinued" is one of the three
+# codes the published ConceptMap gives no target for - included so the
+# fall-back-to-the-trigger path is exercised too.
+_FILLER_STATUS_BY_TRIGGER = {
+    "S12": ("Booked", "Pending", "Waitlist"),
+    "S13": ("Booked", "Pending"),
+    "S14": ("Booked", "Discontinued"),
+    "S26": ("Noshow",),
+    "S15": ("Cancelled",),
+    "S17": ("Deleted",),
+}
+
+
+def _sch_common_fields(rng: random.Random, trigger_event: str) -> dict:
     fields = {1: f"PLC{random_identifier(rng, 4)}"}
     if maybe(rng, p=0.5):
         fields[2] = f"FIL{random_identifier(rng, 4)}"
@@ -42,8 +58,8 @@ def _sch_common_fields(rng: random.Random) -> dict:
         start, end = random_time_range(rng, min_days=0, max_days=30)
         fields[9] = str(int((end - start).total_seconds() // 60))
         fields[10] = "MIN"
-    if maybe(rng, p=0.2):
-        fields[25] = "Booked"
+    if maybe(rng, p=0.4):
+        fields[25] = rng.choice(_FILLER_STATUS_BY_TRIGGER[trigger_event])
     return fields
 
 
@@ -120,7 +136,7 @@ def _assemble(msh: str, sch_fields: dict, timing_segments: list[str], pid: str, 
 
 def _generate_booked(rng: random.Random, trigger_event: str) -> str:
     msh, _ = generate_msh_segment(rng, "SIU", trigger_event)
-    sch_fields = _sch_common_fields(rng)
+    sch_fields = _sch_common_fields(rng, trigger_event)
     timing_segments = _apply_required_timing(rng, sch_fields)
     pid = generate_pid_segment(rng)
     resource_segments = _resource_group_segments(rng)
@@ -147,7 +163,7 @@ def generate_siu_s26(rng: random.Random) -> str:
 
 def _generate_untimed(rng: random.Random, trigger_event: str) -> str:
     msh, _ = generate_msh_segment(rng, "SIU", trigger_event)
-    sch_fields = _sch_common_fields(rng)
+    sch_fields = _sch_common_fields(rng, trigger_event)
     timing_segments = _apply_optional_timing(rng)
     pid = generate_pid_segment(rng)
     resource_segments = _resource_group_segments(rng)

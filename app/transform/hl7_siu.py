@@ -45,6 +45,27 @@ from app.transform.hl7_common import build_msh, build_pid, reverse_cwe, reverse_
 _AIG_LOCATION_ID_SYSTEM = "urn:interop-tools:location-id"
 
 
+# The published FillerStatusCodes[Appointment] ConceptMap, reversed. It is
+# a bijection over the codes it maps, so there is no representative to
+# choose; the three v2 codes with no FHIR target (Discontinued, Blocked,
+# Overbook) never appear as an Appointment.status to reverse from.
+#
+# Written out rather than inverting the forward table, whose keys are
+# upper-cased for case-insensitive lookup - inverting it emitted WAITLIST
+# where HL7 table 0278 spells the code Waitlist. Both re-parse, but only
+# one is the code the table publishes.
+APPOINTMENT_STATUS_TO_FILLER_STATUS = {
+    "pending": "Pending",
+    "waitlist": "Waitlist",
+    "booked": "Booked",
+    "checked-in": "Started",
+    "fulfilled": "Complete",
+    "cancelled": "Cancelled",
+    "entered-in-error": "Deleted",
+    "noshow": "Noshow",
+}
+
+
 def _build_sch(appointment) -> str:
     fields: dict[int, str] = {}
     for identifier in appointment.identifier or []:
@@ -63,6 +84,13 @@ def _build_sch(appointment) -> str:
         fields[9] = str(appointment.minutesDuration)
         fields[10] = "MIN"
 
+    # SCH-25 carries the status back out. The forward mapper reads it
+    # (the IG maps Filler Status Code -> Appointment.status), so omitting
+    # it here left the next forward pass with nothing but the trigger's
+    # own default - a waitlisted or pending appointment came back booked.
+    filler_status = APPOINTMENT_STATUS_TO_FILLER_STATUS.get(appointment.status)
+    if filler_status:
+        fields[25] = filler_status
     return segment("SCH", fields, 25)
 
 

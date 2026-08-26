@@ -2392,3 +2392,74 @@ def test_oru_round_trip_preserves_the_attending_practitioner_with_its_degree():
     attending_id = encounter.participant[0].individual.reference.removeprefix("urn:uuid:")
     attending = next(e.resource for e in round_tripped.entry if e.resource.id == attending_id)
     assert attending.qualification[0].code.coding[0].code == "MD"
+
+
+@pytest.mark.parametrize("trigger,filler_code,expected", [("S12", "Waitlist", "waitlist"), ("S12", "Pending", "pending")])
+def test_siu_filler_status_overrides_the_trigger_default_and_round_trips(trigger, filler_code, expected):
+    # The IG maps SCH-25 (Filler Status Code) to Appointment.status via its
+    # own FillerStatusCodes ConceptMap. It was ignored, so every S12 came
+    # out "booked" no matter what the filler said - and once it was read,
+    # the reverse builder had to write it back or a waitlisted appointment
+    # returned as booked on the next pass.
+    from app.generators.registry import generate
+
+    source = generate("SIU", trigger, seed=1)
+    lines = source.split("\r")
+    for index, line in enumerate(lines):
+        if line.startswith("SCH"):
+            fields = line.split("|")
+            fields += [""] * (26 - len(fields))
+            fields[25] = filler_code
+            lines[index] = "|".join(fields)
+    source = "\r".join(lines)
+
+    bundle = convert_to_bundle(source)
+    appointment = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Appointment")
+    assert appointment.status == expected
+
+    message = build_message_from_bundle(bundle, "HL7", "SIU", trigger)
+    sch = next(line for line in message.split("\r") if line.startswith("SCH"))
+    assert sch.split("|")[25] == filler_code
+
+    round_tripped = convert_to_bundle(message)
+    appointment = next(e.resource for e in round_tripped.entry if e.resource.get_resource_type() == "Appointment")
+    assert appointment.status == expected
+
+
+def test_siu_unmapped_filler_status_falls_back_to_the_trigger_default():
+    # Discontinued, Blocked and Overbook have blank target rows in the
+    # published ConceptMap - the IG found no consensus target - so they
+    # must not be guessed at.
+    from app.mappings.siu import resolve_filler_status
+    from app.hl7.parser import parse_message
+
+    from app.generators.registry import generate
+
+    source = generate("SIU", "S12", seed=1)
+    lines = source.split("\r")
+    for index, line in enumerate(lines):
+        if line.startswith("SCH"):
+            fields = line.split("|")
+            fields += [""] * (26 - len(fields))
+            fields[25] = "Discontinued"
+            lines[index] = "|".join(fields)
+    source = "\r".join(lines)
+
+    sch = next(seg for seg in parse_message(source) if seg[0][0] == "SCH")
+    assert resolve_filler_status(sch) is None
+    bundle = convert_to_bundle(source)
+    appointment = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Appointment")
+    assert appointment.status == "booked"
+
+
+def test_siu_filler_status_tables_are_inverses():
+    # Two hand-written tables for one published ConceptMap drift silently
+    # otherwise, and the reverse one exists only because inverting the
+    # forward table emitted WAITLIST where HL7 table 0278 spells it
+    # Waitlist.
+    from app.mappings.siu import FILLER_STATUS_TO_APPOINTMENT_STATUS
+    from app.transform.hl7_siu import APPOINTMENT_STATUS_TO_FILLER_STATUS
+
+    assert {v: k for k, v in FILLER_STATUS_TO_APPOINTMENT_STATUS.items()} == {
+        k: v.upper() for k, v in APPOINTMENT_STATUS_TO_FILLER_STATUS.items()
+    }

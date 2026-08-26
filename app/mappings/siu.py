@@ -227,6 +227,35 @@ def _build_participants(
     return participants, extra_resources
 
 
+# SCH-25 (Filler Status Code, HL7 table 0278) -> Appointment.status, per
+# the v2-to-FHIR SCH[Appointment] map and its named ConceptMap
+# "FillerStatusCodes[Appointment]", both fetched directly. Discontinued,
+# Blocked and Overbook have blank target rows there - the IG found no
+# consensus target - so they fall through to the trigger-derived status
+# rather than being guessed at.
+FILLER_STATUS_TO_APPOINTMENT_STATUS = {
+    "PENDING": "pending",
+    "WAITLIST": "waitlist",
+    "BOOKED": "booked",
+    "STARTED": "checked-in",
+    "COMPLETE": "fulfilled",
+    "CANCELLED": "cancelled",
+    "DELETED": "entered-in-error",
+    "NOSHOW": "noshow",
+}
+
+
+def resolve_filler_status(sch) -> str | None:
+    """SCH-25's own mapped Appointment.status, or None when it is absent or
+    carries a code the published ConceptMap gives no target for.
+
+    The filler's status is what the appointment actually *is*; the trigger
+    event only says what kind of message carried it. So this wins when it
+    resolves, and the trigger-derived literal stays the fallback.
+    """
+    return FILLER_STATUS_TO_APPOINTMENT_STATUS.get(field_str(sch, 25).strip().upper())
+
+
 def build_appointment_core(
     sch,
     tq1_segments,
@@ -250,6 +279,9 @@ def build_appointment_core(
     function runs (see that function's own docstring) - the same "hoist the
     id so there's something to record against before construction" pattern
     app/mappings/adt.py::build_encounter_core already established."""
+    filler_status = resolve_filler_status(sch)
+    if filler_status:
+        status = filler_status
     appointment = Appointment(
         id=appointment_id,
         status=status,
@@ -257,12 +289,18 @@ def build_appointment_core(
         extension=[Extension(url=_TRIGGER_EVENT_EXTENSION_URL, valueCode=trigger_event)],
     )
     if recorder:
-        # No SIU trigger reads Appointment.status from a field's own value -
-        # every trigger's status is a fixed literal (or, for the booked
-        # family, shared across S12/S13/S14 with no persisted state to tell
-        # them apart) - always derivation="inferred", same as every ADT
-        # trigger's own status.
-        recorder.record_inferred(appointment_id, "status", status_reason, status)
+        # SCH-25 is the one real source: the IG maps the Filler Status Code
+        # to .status. Absent - or carrying one of the three codes the
+        # published ConceptMap gives no target for - the status falls back
+        # to the trigger's own fixed literal, which no field supplied
+        # (shared across S12/S13/S14, with no persisted state to tell a new
+        # booking from a reschedule), same as every ADT trigger's status.
+        if filler_status:
+            recorder.record(
+                appointment_id, "status", hl7_location("SCH", 25), status, source_value=field_str(sch, 25)
+            )
+        else:
+            recorder.record_inferred(appointment_id, "status", status_reason, status)
 
     identifiers = _build_identifiers(sch)
     if identifiers:

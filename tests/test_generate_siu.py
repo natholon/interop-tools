@@ -51,13 +51,26 @@ def test_required_fields_always_present(generator_fn, trigger_event):
         assert field_str(sch, 1), "SCH-1 placer appointment ID must always be present"
 
 
+def _expected_status(message: str, trigger_event: str) -> str:
+    """The IG maps SCH-25 (Filler Status Code) to Appointment.status, so a
+    populated SCH-25 decides it and the trigger's own literal is only the
+    fallback. Asserting the trigger default unconditionally encoded the
+    behaviour from before SCH-25 was read at all."""
+    from app.hl7.parser import parse_message
+    from app.mappings.siu import resolve_filler_status
+
+    sch = next(seg for seg in parse_message(message) if seg[0][0] == "SCH")
+    return resolve_filler_status(sch) or _EXPECTED_STATUS[trigger_event]
+
+
 @pytest.mark.parametrize("generator_fn, trigger_event", _TIMING_REQUIRED_GENERATORS)
 def test_timing_required_triggers_always_have_resolvable_timing(generator_fn, trigger_event):
     # Would raise MappingError if timing were ever unresolved for these triggers.
     for seed in range(30):
-        bundle = convert_hl7_to_bundle(generator_fn(random.Random(seed)))
+        message = generator_fn(random.Random(seed))
+        bundle = convert_hl7_to_bundle(message)
         appointment = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Appointment")
-        assert appointment.status == _EXPECTED_STATUS[trigger_event]
+        assert appointment.status == _expected_status(message, trigger_event)
         assert appointment.start is not None
         assert appointment.end is not None
         assert appointment.extension[0].valueCode == trigger_event
@@ -67,9 +80,10 @@ def test_timing_required_triggers_always_have_resolvable_timing(generator_fn, tr
 def test_untimed_triggers_succeed_with_and_without_timing(generator_fn, trigger_event):
     has_timing = no_timing = 0
     for seed in range(60):
-        bundle = convert_hl7_to_bundle(generator_fn(random.Random(seed)))
+        message = generator_fn(random.Random(seed))
+        bundle = convert_hl7_to_bundle(message)
         appointment = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Appointment")
-        assert appointment.status == _EXPECTED_STATUS[trigger_event]
+        assert appointment.status == _expected_status(message, trigger_event)
         if appointment.start is not None:
             has_timing += 1
         else:
