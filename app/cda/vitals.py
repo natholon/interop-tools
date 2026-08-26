@@ -408,9 +408,7 @@ def _build_pulse_oximetry_panel(
         if recorder:
             entry_member_base = _member_base(entry_index)
             component_path = f"component[{len(components) - 1}]"
-            recorder.record(
-                panel_id, f"{component_path}.code.coding[0].code", f"{entry_member_base}/code/@code", code_element.get("code")
-            )
+            record_coding(recorder, panel_id, f"{component_path}.code", f"{entry_member_base}/code", code)
             recorder.record(
                 panel_id,
                 f"{component_path}.valueQuantity.value",

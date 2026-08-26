@@ -66,6 +66,7 @@ from app.cda.common import (
     record_identifier,
     build_practitioner_from_assigned_entity,
     parse_partial_ts,
+    record_coding,
 )
 from app.cda.narrative_sections import extract_narrative_text
 from app.cda.parser import find_all, find_child, ivl_ts_bounds, ts_value
@@ -324,13 +325,10 @@ def _build_sections(section_resources, composition_id: str, recorder=None) -> li
             path = f"section[{len(sections) - 1}]"
             if title:
                 recorder.record(composition_id, f"{path}.title", xpath_location(base, "title"), title)
-            if code is not None and code.coding:
-                recorder.record(
-                    composition_id,
-                    f"{path}.code.coding[0].code",
-                    xpath_location(base, "code", "@code"),
-                    code.coding[0].code,
-                )
+            # Through record_coding: the section's displayName is carried
+            # into .code.coding[0].display, and recording only the code
+            # left it looking dropped.
+            record_coding(recorder, composition_id, f"{path}.code", xpath_location(base, "code"), code)
             if section.text is not None:
                 recorder.record(
                     composition_id, f"{path}.text.div", xpath_location(base, "text"), narrative_text

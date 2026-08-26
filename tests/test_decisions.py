@@ -1175,3 +1175,61 @@ def test_generated_samples_carry_only_checked_verdicts(message_type, trigger_eve
             assert not (decision.summary or "").startswith("GAP"), (
                 f"{message_type}^{trigger_event} seed={seed}: {decision.source_location}"
             )
+
+
+@pytest.mark.parametrize("message_type,trigger_event", _GENERATED_SAMPLE_TYPES)
+def test_no_built_value_has_an_unrecorded_other_half(message_type, trigger_event):
+    """A coding's display, or a quantity's unit, recorded alongside its
+    partner rather than left behind.
+
+    record_coding and record_quantity exist because recording one half
+    makes the other look dropped - the register then accuses the mapper of
+    losing data it carried. Four separate instances of this were found by
+    hand (reference ranges, one-sided IVL_PQ bounds, rateQuantity, and
+    Composition.section codes), which is three too many to keep relying on
+    someone noticing.
+
+    Distinct from the verdict-coverage tests: the drop register's value
+    fallback can mask this by matching the same text elsewhere in the
+    document, so an unrecorded half does not reliably show up as an
+    unchecked drop. This checks the Bundle directly instead.
+    """
+    import json
+    import re
+
+    for seed in range(4):
+        bundle, report, _ = convert_with_provenance(generate(message_type, trigger_event, seed=seed))
+        document = json.loads(bundle.model_dump_json(exclude_none=True))
+        recorded = {entry.fhir_path for entry in report.entries}
+        for entry in report.entries:
+            for suffix, partner in ((".coding[0].code", "display"), (".value", "unit")):
+                if not entry.fhir_path.endswith(suffix):
+                    continue
+                other = entry.fhir_path[: -len(suffix.split(".")[-1])] + partner
+                if other in recorded:
+                    continue
+                head, _, tail = other.partition(".resource.")
+                if not tail:
+                    continue
+                index = int(re.search(r"entry\[(\d+)\]", head).group(1))
+                built = _resolve_json_path(document["entry"][index]["resource"], tail)
+                assert not built, f"{message_type}^{trigger_event} seed={seed}: {other} is built but unrecorded"
+
+
+def _resolve_json_path(resource, path: str):
+    import re
+
+    current = resource
+    for part in path.split("."):
+        match = re.match(r"([A-Za-z_]+)(?:\[(\d+)\])?$", part)
+        if not match or not isinstance(current, dict):
+            return None
+        current = current.get(match.group(1))
+        if current is None:
+            return None
+        if match.group(2) is not None:
+            index = int(match.group(2))
+            if not isinstance(current, list) or index >= len(current):
+                return None
+            current = current[index]
+    return current
