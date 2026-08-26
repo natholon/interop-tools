@@ -915,6 +915,13 @@ pre {
     background: var(--surface-sunk);
     box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
 }
+/* A citation whose full note is a tooltip - marked so it reads as
+   hoverable rather than as plain text that happens to be cut short. */
+.decision-cite.has-note {
+    border-bottom: 1px dotted currentColor;
+    cursor: help;
+}
+
 #crosswalk-table tr.is-rejected {
     opacity: 0.6;
     text-decoration: line-through;

@@ -551,8 +551,14 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
         cite.textContent = citation.title;
     }
+    // The note is a full sentence - the longest runs past 300 characters -
+    // and inlining it made a quarter of the crosswalk rows 3-6x taller than
+    // the rest and pushed the table to nearly 2500px inside an 870px pane.
+    // It rides as a tooltip instead: the reason stays one hover away
+    // without competing with the title for the column.
     if (citation.note) {
-        cite.appendChild(document.createTextNode(` \u2014 ${citation.note}`));
+        cite.title = citation.note;
+        cite.classList.add("has-note");
     }
     return cite;
 }
