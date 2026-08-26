@@ -11,6 +11,13 @@
     --accent-hover: #1d4ed8;
     --accent-contrast: #ffffff;
     --radius: 8px;
+    /* The page is wide because its main content is: the crosswalk table
+       runs past 2000px with paths kept on one line, and the two
+       correlated panes want room to sit side by side. Prose is capped
+       separately - a 1400px line of body text is unreadable, so widening
+       the page must not widen the paragraphs with it. */
+    --page-width: 1440px;
+    --prose-width: 68ch;
     --error-bg: #fdecea;
     --error-border: #c0392b;
     --error-ink: #8f2c20;
@@ -89,7 +96,7 @@ body {
     font-family: var(--font-sans);
     background: var(--paper);
     color: var(--ink);
-    max-width: 960px;
+    max-width: var(--page-width);
     margin: 0 auto;
     padding: 1.75rem 1.5rem 4rem;
     line-height: 1.55;
@@ -111,6 +118,16 @@ header h1 {
     color: var(--ink-soft);
     margin: 0;
     font-size: 0.95rem;
+    /* No prose cap: this is a one-line label, not running text, and
+       capping it only made it wrap for no reading benefit. */
+}
+
+/* Running text stays at a readable measure regardless of how wide the
+   page gets - only the data-heavy parts use the full width. */
+.page-intro,
+.panel > p,
+.unsupported-banner {
+    max-width: var(--prose-width);
 }
 
 .field {
