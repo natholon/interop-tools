@@ -46,7 +46,10 @@ def resolve_appointment_timing(sch, tq1_segments) -> tuple[str | None, str | Non
     return start, end
 
 
-def _resolve_minutes_duration(sch, tq1_segments) -> int | None:
+# Public (not module-private) - app/validation/siu.py became a second
+# real consumer, needing the same TQ1-6-over-SCH-9 resolution to check
+# a stated duration against the appointment's own start and end.
+def resolve_minutes_duration(sch, tq1_segments) -> int | None:
     """TQ1-6 (Service Duration) is preferred, consistent with TQ1 being
     preferred for timing generally - this avoids a stale legacy SCH-9
     duration contradicting a TQ1-derived start/end (e.g. on a reschedule
@@ -319,7 +322,7 @@ def build_appointment_core(
         if recorder:
             recorder.record(appointment_id, "end", _timing_source_location(sch, tq1_segments, field=8), end)
 
-    minutes_duration = _resolve_minutes_duration(sch, tq1_segments)
+    minutes_duration = resolve_minutes_duration(sch, tq1_segments)
     if minutes_duration is not None:
         appointment.minutesDuration = minutes_duration
         if recorder:
@@ -372,7 +375,7 @@ def build_appointment_core(
 
 
 def _tq1_duration_used(tq1_segments) -> bool:
-    """Mirrors _resolve_minutes_duration's own TQ1-preferred-over-SCH-9
+    """Mirrors resolve_minutes_duration's own TQ1-preferred-over-SCH-9
     branch check, purely so the recorded source_location matches whichever
     branch actually supplied the value - no change to _resolve_minutes_
     duration's own behavior."""

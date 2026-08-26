@@ -4,7 +4,7 @@ via the mappers' own resolve_appointment_timing(), not re-derived, so this
 stays in sync with whatever TQ1/SCH-11 resolution the real converter does."""
 
 from app.hl7.parser import field_str, optional_segment, optional_segments
-from app.mappings.siu import resolve_appointment_timing
+from app.mappings.siu import resolve_minutes_duration, resolve_appointment_timing
 from app.validation.common import parse_comparable_fhir_datetime
 from app.validation.models import ValidationFinding
 
@@ -31,6 +31,39 @@ def _rule_appointment_end_before_start(sch, tq1_segments) -> list[ValidationFind
             )
         ]
     return []
+
+
+def _rule_duration_disagrees_with_timing(sch, tq1_segments) -> list[ValidationFinding]:
+    """A stated duration that contradicts the appointment's own start and
+    end - two fields of one message disagreeing about the same fact.
+
+    Resolved through the mappers own helpers rather than re-derived, so
+    this cannot drift from whichever of TQ1-6/SCH-9 and TQ1-7/8/SCH-11 the
+    converter actually reads. Only reported when all three resolve: a
+    duration with no timing to check it against is legal and common.
+    """
+    duration = resolve_minutes_duration(sch, tq1_segments)
+    if duration is None:
+        return []
+    start, end = resolve_appointment_timing(sch, tq1_segments)
+    start_dt = parse_comparable_fhir_datetime(start) if start else None
+    end_dt = parse_comparable_fhir_datetime(end) if end else None
+    if start_dt is None or end_dt is None:
+        return []
+    actual = int((end_dt - start_dt).total_seconds() // 60)
+    if actual == duration:
+        return []
+    return [
+        ValidationFinding(
+            severity="warning",
+            rule_id="siu.appointment-duration-disagrees-with-timing",
+            segment="SCH",
+            message=(
+                f"The stated duration ({duration} minutes) does not match the appointment's own start "
+                f"and end ({actual} minutes)."
+            ),
+        )
+    ]
 
 
 def _rule_empty_participants(message) -> list[ValidationFinding]:
@@ -63,5 +96,6 @@ def validate(message, trigger_event: str) -> list[ValidationFinding]:
     findings: list[ValidationFinding] = []
     tq1_segments = optional_segments(message, "TQ1")
     findings.extend(_rule_appointment_end_before_start(sch, tq1_segments))
+    findings.extend(_rule_duration_disagrees_with_timing(sch, tq1_segments))
     findings.extend(_rule_empty_participants(message))
     return findings

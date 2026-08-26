@@ -54,19 +54,31 @@ def _sch_common_fields(rng: random.Random, trigger_event: str) -> dict:
     if maybe(rng, p=0.5):
         code, display = random_appointment_type_code(rng)
         fields[8] = f"{code}^{display}^LOCAL"
-    if maybe(rng, p=0.5):
-        start, end = random_time_range(rng, min_days=0, max_days=30)
-        fields[9] = str(int((end - start).total_seconds() // 60))
-        fields[10] = "MIN"
     if maybe(rng, p=0.4):
         fields[25] = rng.choice(_FILLER_STATUS_BY_TRIGGER[trigger_event])
     return fields
 
 
+def _minutes(start, end) -> str:
+    return str(int((end - start).total_seconds() // 60))
+
+
+def _apply_sch_duration(rng: random.Random, sch_fields: dict, start, end) -> None:
+    """SCH-9/10 from the SAME start/end the appointment actually uses.
+
+    Drawing its own range made the duration disagree with end - start on
+    half the generated messages - the identical two-independent-draws bug
+    the ADT generator had with admit and discharge times.
+    """
+    if maybe(rng, p=0.5):
+        sch_fields[9] = _minutes(start, end)
+        sch_fields[10] = "MIN"
+
+
 def _tq1_segment(rng: random.Random, start, end) -> str:
     tq1_fields = {1: "1", 7: format_hl7_datetime(start), 8: format_hl7_datetime(end)}
     if maybe(rng, p=0.5):
-        tq1_fields[6] = str(int((end - start).total_seconds() // 60))
+        tq1_fields[6] = _minutes(start, end)
     return segment("TQ1", tq1_fields, 14)
 
 
@@ -75,17 +87,28 @@ def _apply_required_timing(rng: random.Random, sch_fields: dict) -> list[str]:
     (component 4 = start, component 5 = end) - both must always resolve to a
     real start+end, exercising resolve_appointment_timing's two paths."""
     start, end = random_time_range(rng, min_days=0, max_days=30)
+    _apply_sch_duration(rng, sch_fields, start, end)
     if maybe(rng, p=0.75):
         return [_tq1_segment(rng, start, end)]
     sch_fields[11] = f"^^^{format_hl7_datetime(start)}^{format_hl7_datetime(end)}"
     return []
 
 
-def _apply_optional_timing(rng: random.Random) -> list[str]:
-    """S15: timing is optional - ~40% include a TQ1, ~60% omit entirely."""
+def _apply_optional_timing(rng: random.Random, sch_fields: dict) -> list[str]:
+    """S15/S17: timing is optional - ~40% include a TQ1, ~60% omit entirely.
+
+    With no timing at all a bare SCH-9 is still legal and still maps
+    (minutesDuration with no start), and cannot contradict anything - so
+    it is generated there too, just from its own duration rather than
+    from a start/end pair nothing else uses.
+    """
     if not maybe(rng, p=0.4):
+        if maybe(rng, p=0.4):
+            sch_fields[9] = str(rng.choice((15, 20, 30, 45, 60)))
+            sch_fields[10] = "MIN"
         return []
     start, end = random_time_range(rng, min_days=0, max_days=30)
+    _apply_sch_duration(rng, sch_fields, start, end)
     return [_tq1_segment(rng, start, end)]
 
 
@@ -164,7 +187,7 @@ def generate_siu_s26(rng: random.Random) -> str:
 def _generate_untimed(rng: random.Random, trigger_event: str) -> str:
     msh, _ = generate_msh_segment(rng, "SIU", trigger_event)
     sch_fields = _sch_common_fields(rng, trigger_event)
-    timing_segments = _apply_optional_timing(rng)
+    timing_segments = _apply_optional_timing(rng, sch_fields)
     pid = generate_pid_segment(rng)
     resource_segments = _resource_group_segments(rng)
     return _assemble(msh, sch_fields, timing_segments, pid, resource_segments)

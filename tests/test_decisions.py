@@ -293,7 +293,17 @@ def test_rejecting_a_status_with_no_null_code_uses_data_absent_reason():
     # Tier 3: Appointment.status has no null-flavour code and a Required
     # binding, so the only conformant option is value-absent plus the
     # data-absent-reason extension on the primitive.
-    bundle, decisions = _converted(generate("SIU", "S12", seed=3))
+    # SCH-25 is stripped rather than a lucky seed picked: with a Filler
+    # Status Code present the status is a direct fact, and which seeds
+    # carry one shifts whenever the generator's RNG sequence changes.
+    separator = "\r"
+    message = separator.join(
+        "|".join(part if index != 25 else "" for index, part in enumerate(line.split("|")))
+        if line.startswith("SCH")
+        else line
+        for line in generate("SIU", "S12", seed=3).split(separator)
+    )
+    bundle, decisions = _converted(message)
     target = next(d for d in decisions if d.kind == "inferred" and d.fhir_path.endswith(".status"))
     index = _entry_index(target.fhir_path)
 
