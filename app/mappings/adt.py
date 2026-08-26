@@ -9,7 +9,6 @@ from fhir.resources.R4B.encounter import (
     Encounter,
     EncounterHospitalization,
     EncounterLocation,
-    EncounterParticipant,
 )
 from fhir.resources.R4B.period import Period
 from fhir.resources.R4B.reference import Reference
@@ -19,15 +18,13 @@ from app.hl7.errors import MappingError, MissingSegmentError
 from app.hl7.parser import field_str, require_segment
 from app.mappings.base import MessageMapper
 from app.mappings.common import (
-    PARTICIPATION_TYPE_SYSTEM,
     assemble_bundle,
+    build_encounter_participants,
     build_location_chain_from_pl,
     build_patient,
-    build_practitioner_from_xcn,
     build_reference_with_optional_display,
     build_visit_identifier,
     location_display,
-    person_display,
     resolve_encounter_class,
 )
 from app.provenance.location import hl7_location
@@ -122,27 +119,13 @@ def build_encounter_core(
             )
         ]
 
-    # PV1-7 -> participant.individual(Practitioner), per the v2-to-FHIR
-    # PV1[Encounter] map. This used to build a display string only, so
-    # everything XCN carries beyond family/given - the id, and the degree
-    # XCN.7 maps to qualification.code - had nowhere to go and was dropped.
-    # A real Practitioner is also more useful to a consumer, which is the
-    # same reasoning SIU's AIP and ORU's OBX-16 already follow.
-    attending = build_practitioner_from_xcn(pv1, 7, recorder=recorder)
-    attending_display = person_display(pv1, 7)
-    if attending is not None:
-        if extra_resources is not None:
-            extra_resources.append(attending)
-        encounter.participant = [
-            EncounterParticipant(
-                type=[CodeableConcept(coding=[Coding(system=PARTICIPATION_TYPE_SYSTEM, code="ATND")])],
-                individual=build_reference_with_optional_display(attending.id, attending_display),
-            )
-        ]
-        if recorder and attending_display:
-            recorder.record(
-                encounter_id, "participant[0].individual.display", hl7_location("PV1", 7), attending_display
-            )
+    # PV1-7/8/9/17 -> participant[1..4], per the v2-to-FHIR PV1[Encounter]
+    # map. Shared with build_minimal_encounter: the IG does not care which
+    # message type carried the PV1.
+    if extra_resources is not None:
+        participants = build_encounter_participants(pv1, encounter_id, extra_resources, recorder=recorder)
+        if participants:
+            encounter.participant = participants
 
     period_start = parse_hl7_datetime(field_str(pv1, 44))
     period_start_location = hl7_location("PV1", 44)

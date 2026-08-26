@@ -346,16 +346,32 @@ def generate_pid_segment(rng: random.Random) -> str:
     return segment("PID", fields, 13)
 
 
+# PV1-7 Attending, PV1-8 Referring, PV1-9 Consulting, PV1-17 Admitting -
+# every one of them XCN and 0..-1 per the v2-to-FHIR PV1[Encounter] map.
+_PV1_DOCTOR_FIELDS = (7, 8, 9, 17)
+
+
 def build_minimal_pv1_fields(rng: random.Random, patient_class: str) -> dict:
     """The PV1 fields common to every generator that includes a PV1 segment:
-    PV1-1 (set id), PV1-2 (patient class), optional PV1-7 (attending
-    physician) and PV1-19 (visit number). Shared by app.generators.adt and
-    app.generators.oru so their PV1 generation doesn't independently drift -
-    callers add any further trigger-specific fields (location, discharge
-    time, etc.) on top of the returned dict."""
+    PV1-1 (set id), PV1-2 (patient class), the optional doctor fields
+    PV1-7/8/9/17, and PV1-19 (visit number). Shared by app.generators.adt
+    and app.generators.oru so their PV1 generation doesn't independently
+    drift - callers add any further trigger-specific fields (location,
+    discharge time, etc.) on top of the returned dict.
+
+    All four doctor fields are 0..-1 in the v2-to-FHIR PV1[Encounter] map,
+    so a repetition is generated some of the time: without one, nothing
+    exercised the repeating half of the mapping, and only the first
+    attending doctor was ever read.
+    """
     fields = {1: "1", 2: patient_class}
-    if maybe(rng):
-        fields[7] = random_physician_xcn(rng)
+    for field_num in _PV1_DOCTOR_FIELDS:
+        if not maybe(rng):
+            continue
+        doctors = [random_physician_xcn(rng)]
+        if maybe(rng, p=0.25):
+            doctors.append(random_physician_xcn(rng))
+        fields[field_num] = "~".join(doctors)
     if maybe(rng):
         fields[19] = f"V{random_identifier(rng, 4)}"
     return fields

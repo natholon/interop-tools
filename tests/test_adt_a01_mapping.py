@@ -77,3 +77,33 @@ def test_bundle_round_trips_through_json():
     round_tripped = Bundle.model_validate_json(bundle.model_dump_json())
     assert round_tripped.type == bundle.type
     assert len(round_tripped.entry) == len(bundle.entry)
+
+
+def test_pv1_doctor_fields_map_to_participants_with_their_own_type_codes():
+    # PV1-7/8/9/17 are each 0..-1 in the v2-to-FHIR PV1[Encounter] map,
+    # with their own ParticipationType code. Only the attending doctor was
+    # read, and only its first repetition.
+    pv1 = ["PV1"] + [""] * 50
+    pv1[1], pv1[2], pv1[3] = "1", "I", "W^101^A"
+    pv1[7] = "D1^Attend^Ann~D2^Attend^Bob"
+    pv1[8] = "R1^Refer^Rae"
+    pv1[9] = "C1^Consult^Cal~C2^Consult^Cam"
+    pv1[17] = "A1^Admit^Amy"
+    pv1[19], pv1[44] = "V1", "20260101120000"
+    message = "\r".join([
+        r"MSH|^~\&|A|B|C|D|20260101120000||ADT^A01|M1|P|2.5",
+        "EVN|A01|20260101120000",
+        "PID|1||MRN1^^^H^MR||Doe^Jane||19800101|F",
+        "|".join(pv1),
+    ])
+    bundle = AdtA01Mapper().to_bundle(parse_message(message))
+    encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
+
+    assert [p.type[0].coding[0].code for p in encounter.participant] == [
+        "ATND", "ATND", "REF", "CON", "CON", "ADM",
+    ]
+    # Every repetition materialises its own Practitioner, not just the first.
+    assert len([e for e in bundle.entry if e.resource.get_resource_type() == "Practitioner"]) == 6
+    assert [p.individual.display for p in encounter.participant] == [
+        "Attend, Ann", "Attend, Bob", "Refer, Rae", "Consult, Cal", "Consult, Cam", "Admit, Amy",
+    ]

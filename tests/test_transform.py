@@ -2385,7 +2385,9 @@ def test_oru_round_trip_preserves_the_attending_practitioner_with_its_degree():
 
     message = build_message_from_bundle(bundle, "HL7", "ORU", "R01")
     pv1 = next(line for line in message.split("\r") if line.startswith("PV1"))
-    assert pv1.split("|")[7] == "5452^Reyes^Betty^^^^MD"
+    # PV1-7 is 0..-1, so a second attending comes back as a repetition
+    # rather than overwriting the first.
+    assert pv1.split("|")[7].split("~")[0] == "5452^Reyes^Betty^^^^MD"
 
     round_tripped = convert_to_bundle(message)
     encounter = next(e.resource for e in round_tripped.entry if e.resource.get_resource_type() == "Encounter")

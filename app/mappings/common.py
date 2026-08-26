@@ -15,7 +15,7 @@ from fhir.resources.R4B.resource import Resource
 from app.fhir_models.builders import (
     build_addresses,
     build_human_names,
-    build_phone_telecom,
+    build_phone_telecoms,
     hl7_sex_to_fhir_gender,
     parse_hl7_date,
     parse_hl7_datetime,
@@ -112,9 +112,9 @@ def build_patient(pid, recorder=None) -> Patient:
     addresses = build_addresses(pid, resource_id=patient_id, recorder=recorder)
     if addresses:
         patient.address = addresses
-    telecom = build_phone_telecom(pid, resource_id=patient_id, recorder=recorder)
-    if telecom:
-        patient.telecom = [telecom]
+    telecoms = build_phone_telecoms(pid, resource_id=patient_id, recorder=recorder)
+    if telecoms:
+        patient.telecom = telecoms
     return patient
 
 
@@ -222,7 +222,7 @@ def build_location_chain_from_pl(segment, field_num: int, recorder=None) -> list
     return chain
 
 
-def person_display(segment, field_num: int) -> str:
+def person_display(segment, field_num: int, repetition: int = 0) -> str:
     """Build a human-readable display string from an XCN-shaped field (id^
     family^given, e.g. PV1-7, AIP-3). Shared across message types since XCN
     fields are formatted identically regardless of which segment they're in.
@@ -231,13 +231,31 @@ def person_display(segment, field_num: int) -> str:
     presence check ("id or family or given") - without the fallback, an
     id-only field would materialize a Practitioner but pair it with an empty
     display, which FHIR's Reference.display rejects (must be non-empty)."""
-    family = field_str(segment, field_num, component=2)
-    given = field_str(segment, field_num, component=3)
+    family = field_str(segment, field_num, repetition=repetition, component=2)
+    given = field_str(segment, field_num, repetition=repetition, component=3)
     name = ", ".join(part for part in (family, given) if part)
-    return name or field_str(segment, field_num, component=1)
+    return name or field_str(segment, field_num, repetition=repetition, component=1)
 
 
-def build_practitioner_from_xcn(segment, field_num: int, recorder=None) -> Practitioner | None:
+def build_practitioners_from_xcn(segment, field_num: int, recorder=None) -> list[Practitioner]:
+    """Every repetition of an XCN field, not just the first.
+
+    The v2-to-FHIR segment maps give PV1-7/8/9/17, OBX-16 and TXA-9 a
+    cardinality of 0..-1, so a message naming two attending doctors is
+    ordinary rather than exotic - and reading only the first silently
+    discarded the rest.
+    """
+    built = []
+    for index in range(len(field_repetitions(segment, field_num)) or 1):
+        practitioner = build_practitioner_from_xcn(segment, field_num, recorder=recorder, repetition=index)
+        if practitioner is not None:
+            built.append(practitioner)
+    return built
+
+
+def build_practitioner_from_xcn(
+    segment, field_num: int, recorder=None, repetition: int = 0
+) -> Practitioner | None:
     """Build a real Practitioner resource from an XCN-shaped field (id^family^
     given^..., e.g. PV1-7, AIP-3). Returns None when the field is entirely
     empty. Shared so any future mapper needing a materialized (not just
@@ -247,9 +265,9 @@ def build_practitioner_from_xcn(segment, field_num: int, recorder=None) -> Pract
     is always the segment's own name, e.g. "AIP"/"TXA") rather than passed in
     separately, since this function is generic across callers using
     different segment types for the identical XCN shape."""
-    practitioner_id = field_str(segment, field_num, component=1)
-    family = field_str(segment, field_num, component=2)
-    given = field_str(segment, field_num, component=3)
+    practitioner_id = field_str(segment, field_num, repetition=repetition, component=1)
+    family = field_str(segment, field_num, repetition=repetition, component=2)
+    given = field_str(segment, field_num, repetition=repetition, component=3)
     if not (practitioner_id or family or given):
         return None
     practitioner = Practitioner(id=str(uuid.uuid4()))
@@ -260,7 +278,7 @@ def build_practitioner_from_xcn(segment, field_num: int, recorder=None) -> Pract
             recorder.record(
                 practitioner.id,
                 "identifier[0].value",
-                hl7_location(segment_id, field_num, component=1),
+                hl7_location(segment_id, field_num, repetition=repetition, component=1),
                 practitioner_id,
             )
     if family or given:
@@ -269,19 +287,19 @@ def build_practitioner_from_xcn(segment, field_num: int, recorder=None) -> Pract
             name.family = family
             if recorder:
                 recorder.record(
-                    practitioner.id, "name[0].family", hl7_location(segment_id, field_num, component=2), family
+                    practitioner.id, "name[0].family", hl7_location(segment_id, field_num, repetition=repetition, component=2), family
                 )
         if given:
             name.given = [given]
             if recorder:
                 recorder.record(
-                    practitioner.id, "name[0].given[0]", hl7_location(segment_id, field_num, component=3), given
+                    practitioner.id, "name[0].given[0]", hl7_location(segment_id, field_num, repetition=repetition, component=3), given
                 )
         practitioner.name = [name]
     # XCN.7 -> qualification.code, per the v2-to-FHIR IG's own
     # XCN[Practitioner] datatype map (bound to DegreeLicenseCertificate).
     # Every XCN-derived Practitioner in this app dropped its degree before.
-    degree = field_str(segment, field_num, component=7)
+    degree = field_str(segment, field_num, repetition=repetition, component=7)
     if degree:
         practitioner.qualification = [
             PractitionerQualification(
@@ -292,7 +310,7 @@ def build_practitioner_from_xcn(segment, field_num: int, recorder=None) -> Pract
             recorder.record(
                 practitioner.id,
                 "qualification[0].code.coding[0].code",
-                hl7_location(segment_id, field_num, component=7),
+                hl7_location(segment_id, field_num, repetition=repetition, component=7),
                 degree,
             )
     return practitioner
@@ -343,6 +361,46 @@ def build_visit_identifier(pv1) -> Identifier | None:
 PARTICIPATION_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"
 
 
+# PV1 doctor fields -> Encounter.participant type codes, straight from the
+# v2-to-FHIR PV1[Encounter] map. Order matters: it is the order the IG
+# assigns participant[1..4]. All four are XCN and 0..-1.
+PV1_DOCTOR_FIELDS = (
+    (7, "ATND"),
+    (8, "REF"),
+    (9, "CON"),
+    (17, "ADM"),
+)
+
+
+def build_encounter_participants(pv1, encounter_id: str, extra_resources: list, recorder=None) -> list:
+    """PV1-7/8/9/17 -> Encounter.participant, one per repetition.
+
+    Shared by build_encounter_core and build_minimal_encounter: the IG's
+    PV1[Encounter] map does not care which message type carried the PV1,
+    and reading these only for ADT meant an ORU or MDM context encounter
+    silently dropped every doctor the segment named.
+    """
+    participants = []
+    for field_num, type_code in PV1_DOCTOR_FIELDS:
+        for index, practitioner in enumerate(build_practitioners_from_xcn(pv1, field_num, recorder=recorder)):
+            extra_resources.append(practitioner)
+            display = person_display(pv1, field_num, repetition=index)
+            participants.append(
+                EncounterParticipant(
+                    type=[CodeableConcept(coding=[Coding(system=PARTICIPATION_TYPE_SYSTEM, code=type_code)])],
+                    individual=build_reference_with_optional_display(practitioner.id, display),
+                )
+            )
+            if recorder and display:
+                recorder.record(
+                    encounter_id,
+                    f"participant[{len(participants) - 1}].individual.display",
+                    hl7_location("PV1", field_num, repetition=index),
+                    display,
+                )
+    return participants
+
+
 def build_minimal_encounter(pv1, patient_id: str, recorder=None, extra_resources=None) -> Encounter:
     """A minimal Encounter for message types whose PV1 (when present) gives
     context rather than an admit/discharge lifecycle event - ORU's optional
@@ -391,26 +449,12 @@ def build_minimal_encounter(pv1, patient_id: str, recorder=None, extra_resources
                 )
             ]
 
-        # PV1-7 -> participant.individual(Practitioner), the same
-        # PV1[Encounter] row ADT already follows. Dropped here for the same
-        # reason PV1-3 was: "minimal" means no lifecycle to infer, not
-        # ignore what the PV1 carried. XCN's id and its XCN.7 degree only
-        # have somewhere to go on a real Practitioner, which is why this
-        # materialises one rather than building a display string.
-        attending = build_practitioner_from_xcn(pv1, 7, recorder=recorder)
-        if attending is not None:
-            extra_resources.append(attending)
-            attending_display = person_display(pv1, 7)
-            encounter.participant = [
-                EncounterParticipant(
-                    type=[CodeableConcept(coding=[Coding(system=PARTICIPATION_TYPE_SYSTEM, code="ATND")])],
-                    individual=build_reference_with_optional_display(attending.id, attending_display),
-                )
-            ]
-            if recorder and attending_display:
-                recorder.record(
-                    encounter_id, "participant[0].individual.display", hl7_location("PV1", 7), attending_display
-                )
+        # PV1-7/8/9/17 -> participant, the same PV1[Encounter] rows ADT
+        # follows. Dropped here for the same reason PV1-3 was: "minimal"
+        # means no lifecycle to infer, not ignore what the PV1 carried.
+        participants = build_encounter_participants(pv1, encounter_id, extra_resources, recorder=recorder)
+        if participants:
+            encounter.participant = participants
     return encounter
 
 

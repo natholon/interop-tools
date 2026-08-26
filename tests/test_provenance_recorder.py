@@ -348,7 +348,7 @@ def test_siu_s12_basic_crosswalk_matches_known_field_values():
         (e for e in entries if e.fhir_path.endswith("resource.name[0].family") and e.value == "Smith"), None
     )
     assert practitioner_entry is not None
-    assert practitioner_entry.source_location == hl7_location("AIP", 3, component=2)
+    assert practitioner_entry.source_location == hl7_location("AIP", 3, repetition=0, component=2)
 
     participant_entry = by_path["Bundle.entry[1].resource.participant[1].actor.display"]
     assert participant_entry.value == "Smith, John"
@@ -515,12 +515,12 @@ def test_oru_r01_basic_crosswalk_matches_known_field_values():
     performer_index = next(i for i, e in enumerate(bundle.entry) if e.resource is performer)
     performer_family = by_path[f"Bundle.entry[{performer_index}].resource.name[0].family"]
     assert performer_family.value == "Rivera"
-    assert performer_family.source_location == hl7_location("OBX", 16, component=2)
+    assert performer_family.source_location == hl7_location("OBX", 16, repetition=0, component=2)
     performer_given = by_path[f"Bundle.entry[{performer_index}].resource.name[0].given[0]"]
     assert performer_given.value == "Ana"
     performer_id = by_path[f"Bundle.entry[{performer_index}].resource.identifier[0].value"]
     assert performer_id.value == "5678"
-    assert performer_id.source_location == hl7_location("OBX", 16, component=1)
+    assert performer_id.source_location == hl7_location("OBX", 16, repetition=0, component=1)
 
 
 def test_oru_r01_shared_performer_recorded_once_not_once_per_observation():
@@ -666,7 +666,7 @@ def test_mdm_t02_basic_crosswalk_matches_known_field_values():
     # already established.
     author_display_entry = by_path[f"Bundle.entry[{doc_index}].resource.author[0].display"]
     assert author_display_entry.value == "Chen, Wei"
-    assert author_display_entry.source_location == hl7_location("TXA", 9)
+    assert author_display_entry.source_location == hl7_location("TXA", 9, repetition=0)
 
     originator = next(
         e.resource
@@ -675,7 +675,7 @@ def test_mdm_t02_basic_crosswalk_matches_known_field_values():
     )
     originator_index = next(i for i, e in enumerate(bundle.entry) if e.resource is originator)
     originator_family_entry = by_path[f"Bundle.entry[{originator_index}].resource.name[0].family"]
-    assert originator_family_entry.source_location == hl7_location("TXA", 9, component=2)
+    assert originator_family_entry.source_location == hl7_location("TXA", 9, repetition=0, component=2)
 
     authenticator_display_entry = by_path[f"Bundle.entry[{doc_index}].resource.authenticator.display"]
     assert authenticator_display_entry.value == "Alvarez, Rosa"
@@ -714,7 +714,7 @@ def test_mdm_t02_same_author_authenticator_records_authenticator_display_from_tx
     authenticator_entry = by_path[f"Bundle.entry[{doc_index}].resource.authenticator.display"]
     assert authenticator_entry.source_location == hl7_location("TXA", 10)
     author_entry = by_path[f"Bundle.entry[{doc_index}].resource.author[0].display"]
-    assert author_entry.source_location == hl7_location("TXA", 9)
+    assert author_entry.source_location == hl7_location("TXA", 9, repetition=0)
 
 
 def test_mdm_t02_obx_with_caret_binary_data_is_not_truncated_in_crosswalk():

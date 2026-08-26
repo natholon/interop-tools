@@ -81,18 +81,19 @@ def test_component_that_is_mapped_is_not_reported_as_dropped():
 
 
 def test_wholly_unmapped_field_reports_once_not_per_component():
-    # PV1-8 (Referring Doctor) is not mapped at all. One decision saying
-    # so is informative; five component-level rows are noise that buries
-    # the partially-dropped fields.
+    # PV1-10 (Hospital Service) is not mapped at all. One decision saying
+    # so is informative; component-level rows are noise that buries the
+    # partially-dropped fields. (This used PV1-8 until the referring
+    # doctor gained its own participant mapping.)
     decisions = _decisions(
         _message(
             "PID|1||578324^^^MRN||Doe^Jane||19620305|F",
-            "PV1|1|I|C100|||||1234^Smith^John^A^MD|||||||||||V1",
+            "PV1|1|I|C100|||||||SUR^Surgery^L|||||||||V1",
         )
     )
     by_location = _by_location(decisions)
-    assert by_location["PV1-8"].lost_value == "1234^Smith^John^A^MD"
-    assert not any(loc.startswith("PV1-8.") for loc in by_location)
+    assert by_location["PV1-10"].lost_value == "SUR^Surgery^L"
+    assert not any(loc.startswith("PV1-10.") for loc in by_location)
 
 
 def test_inferred_mappings_are_reported_with_their_reason():

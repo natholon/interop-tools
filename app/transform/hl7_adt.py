@@ -35,12 +35,19 @@ from app.generators.base import segment
 from app.hl7.errors import MappingError
 from app.transform.base import MessageBuilder
 from app.transform.common import find_resource, find_resources, format_hl7_ts
-from app.transform.hl7_common import CLASS_TO_PATIENT_CLASS, build_msh, build_pid, reverse_pl_field
+from app.transform.hl7_common import (
+    CLASS_TO_PATIENT_CLASS,
+    build_msh,
+    build_pid,
+    reverse_pl_field,
+    reverse_pv1_doctor_fields,
+)
 
 
 
-def _build_pv1(encounter, locations_by_id: dict | None = None) -> str:
+def _build_pv1(encounter, locations_by_id: dict | None = None, practitioners_by_id: dict | None = None) -> str:
     locations_by_id = locations_by_id or {}
+    practitioners_by_id = practitioners_by_id or {}
     fields: dict[int, str] = {1: "1"}
     if encounter is None:
         return segment("PV1", fields, 45)
@@ -60,10 +67,7 @@ def _build_pv1(encounter, locations_by_id: dict | None = None) -> str:
         if current is not None and current.location:
             fields[3] = reverse_pl_field(current.location, locations_by_id)
 
-    if encounter.participant:
-        display = encounter.participant[0].individual.display if encounter.participant[0].individual else None
-        if display:
-            fields[7] = display
+    fields.update(reverse_pv1_doctor_fields(encounter, practitioners_by_id))
 
     if encounter.identifier:
         visit_number = encounter.identifier[0].value
@@ -108,7 +112,8 @@ class _BaseAdtBuilder(MessageBuilder):
         evn = self._build_evn(encounter, msh_dt)
         pid = build_pid(patient)
         locations_by_id = {loc.id: loc for loc in find_resources(bundle, "Location")}
-        pv1 = _build_pv1(encounter, locations_by_id)
+        practitioners_by_id = {p.id: p for p in find_resources(bundle, "Practitioner")}
+        pv1 = _build_pv1(encounter, locations_by_id, practitioners_by_id)
 
         return "\r".join([msh, evn, pid, pv1]) + "\r"
 

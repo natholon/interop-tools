@@ -24,7 +24,7 @@ from fhir.resources.R4B.resource import Resource
 
 from app.fhir_models.builders import build_codeable_concept_from_cwe, parse_hl7_datetime
 from app.hl7.errors import MissingSegmentError
-from app.hl7.parser import field_str, group_segments_by_leader, raw_field_str, require_segment
+from app.hl7.parser import field_repetitions, field_str, group_segments_by_leader, raw_field_str, require_segment
 from app.mappings.base import MessageMapper
 from app.mappings.common import (
     assemble_bundle,
@@ -118,10 +118,12 @@ def _build_observation_value(obx, resource_id: str | None = None, recorder=None)
     return {}
 
 
-def _resolve_performer(
+def _resolve_performers(
     obx, performer_cache: dict[str, Practitioner], recorder=None
-) -> tuple[Practitioner | None, bool]:
-    """OBX-16 (Responsible Observer) -> a Practitioner, reused across the
+) -> list[tuple[Practitioner, bool]]:
+    """OBX-16 (Responsible Observer) -> one Practitioner per repetition
+    (the field is 0..-1 in the v2-to-FHIR OBX[Observation] map), each
+    reused across the
     whole message when the same XCN id (component 1) appears on more than
     one result - a single report panel commonly has every OBX-16 populated
     with the same verifying physician, and without this a 10-result panel
@@ -130,14 +132,19 @@ def _resolve_performer(
     adds it to the Bundle once. `recorder` is only threaded into a newly
     built Practitioner - a cache hit's own fields were already recorded the
     first time it was built."""
-    performer_key = field_str(obx, 16, component=1)
-    if performer_key and performer_key in performer_cache:
-        return performer_cache[performer_key], False
-    performer = build_practitioner_from_xcn(obx, 16, recorder=recorder)
-    if performer is not None and performer_key:
-        performer_cache[performer_key] = performer
-    return performer, performer is not None
-
+    resolved: list[tuple[Practitioner, bool]] = []
+    for index in range(len(field_repetitions(obx, 16)) or 1):
+        performer_key = field_str(obx, 16, repetition=index, component=1)
+        if performer_key and performer_key in performer_cache:
+            resolved.append((performer_cache[performer_key], False))
+            continue
+        performer = build_practitioner_from_xcn(obx, 16, recorder=recorder, repetition=index)
+        if performer is None:
+            continue
+        if performer_key:
+            performer_cache[performer_key] = performer
+        resolved.append((performer, True))
+    return resolved
 
 def build_observation(
     obx, patient_id: str, encounter_id: str | None, performer_cache: dict[str, Practitioner], recorder=None
@@ -186,11 +193,10 @@ def build_observation(
             recorder.record(observation_id, "effectiveDateTime", hl7_location("OBX", 14), effective, source_value=field_str(obx, 14))
 
     extra_resources: list[Resource] = []
-    performer, is_new = _resolve_performer(obx, performer_cache, recorder=recorder)
-    if performer is not None:
-        observation.performer = [Reference(reference=f"urn:uuid:{performer.id}")]
-        if is_new:
-            extra_resources.append(performer)
+    performers = _resolve_performers(obx, performer_cache, recorder=recorder)
+    if performers:
+        observation.performer = [Reference(reference=f"urn:uuid:{p.id}") for p, _ in performers]
+        extra_resources.extend(p for p, is_new in performers if is_new)
 
     return observation, extra_resources
 

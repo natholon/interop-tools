@@ -64,7 +64,7 @@ from fhir.resources.R4B.resource import Resource
 
 from app.fhir_models.builders import build_codeable_concept_from_cwe, parse_hl7_datetime
 from app.hl7.errors import MissingSegmentError
-from app.hl7.parser import field_str, optional_segments, raw_field_str, require_segment
+from app.hl7.parser import field_repetitions, field_str, optional_segments, raw_field_str, require_segment
 from app.mappings.base import MessageMapper
 from app.mappings.common import (
     assemble_bundle,
@@ -306,23 +306,40 @@ def build_document_reference(
         )
 
     extra_resources: list[Resource] = []
-    originator, author_ref = _build_xcn_practitioner_reference(txa, 9, recorder=recorder)
-    if originator is not None:
-        document_reference.author = [author_ref]
-        extra_resources.append(originator)
-        if recorder and author_ref.display:
+    # TXA-9 is 0..-1 in the v2-to-FHIR TXA[DocumentReference] map - a note
+    # dictated by two people is ordinary - so every repetition becomes its
+    # own author, not just the first.
+    originator = None
+    authors = []
+    for index in range(len(field_repetitions(txa, 9)) or 1):
+        practitioner = build_practitioner_from_xcn(txa, 9, recorder=recorder, repetition=index)
+        if practitioner is None:
+            continue
+        display = person_display(txa, 9, repetition=index)
+        authors.append(build_reference_with_optional_display(practitioner.id, display))
+        extra_resources.append(practitioner)
+        if originator is None:
+            originator = practitioner
+        if recorder and display:
             # TXA-9 produces two independent facts, same "one source field,
             # two FHIR destinations" case SIU's own AIP-3 already
             # established: the materialized Practitioner's own name (already
             # recorded inside build_practitioner_from_xcn above) and this
-            # DocumentReference's own author[0].display string.
-            recorder.record(document_reference_id, "author[0].display", hl7_location("TXA", 9), author_ref.display)
+            # DocumentReference's own author[N].display string.
+            recorder.record(
+                document_reference_id,
+                f"author[{len(authors) - 1}].display",
+                hl7_location("TXA", 9, repetition=index),
+                display,
+            )
+    if authors:
+        document_reference.author = authors
 
     # If TXA-10 identifies the same real person as TXA-9 (e.g. a physician
     # who both dictates and co-signs a note), reuse the same materialized
     # Practitioner rather than building a second, near-identical one -
     # same rationale as ORU's OBX-16 performer_cache dedup.
-    originator_id = field_str(txa, 9, component=1)
+    originator_id = field_str(txa, 9, repetition=0, component=1)
     authenticator_id = field_str(txa, 10, component=1)
     if originator is not None and authenticator_id and authenticator_id == originator_id:
         authenticator_display = person_display(txa, 10)

@@ -151,14 +151,27 @@ def build_addresses(pid_segment, resource_id: str | None = None, recorder=None) 
     return addresses
 
 
-def build_phone_telecom(pid_segment, resource_id: str | None = None, recorder=None) -> ContactPoint | None:
-    """Build a single Patient.telecom entry from PID-13 (home phone, XTN)."""
-    phone = field_str(pid_segment, 13)
-    if not phone:
-        return None
-    if recorder:
-        recorder.record(resource_id, "telecom[0].value", hl7_location("PID", 13), phone)
-    return ContactPoint(system="phone", use="home", value=phone)
+def build_phone_telecoms(pid_segment, resource_id: str | None = None, recorder=None) -> list[ContactPoint]:
+    """Patient.telecom from every repetition of PID-13 (home phone, XTN).
+
+    PID-13 is 0..-1 in the v2-to-FHIR PID[Patient] map - a patient with a
+    home and a mobile number is ordinary - and reading only the first
+    repetition silently discarded the rest.
+    """
+    telecoms = []
+    for index, repetition in enumerate(field_repetitions(pid_segment, 13)):
+        phone = component_str(repetition, 1)
+        if not phone:
+            continue
+        telecoms.append(ContactPoint(system="phone", use="home", value=phone))
+        if recorder:
+            recorder.record(
+                resource_id,
+                f"telecom[{len(telecoms) - 1}].value",
+                hl7_location("PID", 13, repetition=index),
+                phone,
+            )
+    return telecoms
 
 
 def build_codeable_concept_from_cwe(

@@ -143,6 +143,37 @@ def build_xcn_from_practitioner(practitioner) -> str:
     return f"{identifier}^{family}^{given}"
 
 
+# The inverse of app.mappings.adt._PV1_DOCTOR_FIELDS. Participants are
+# grouped back by their ParticipationType code, and each group's members
+# become repetitions of that field - which is how a second attending
+# doctor survives the trip.
+_PARTICIPATION_TYPE_TO_PV1_FIELD = {"ATND": 7, "REF": 8, "CON": 9, "ADM": 17}
+
+
+def reverse_pv1_doctor_fields(encounter, practitioners_by_id: dict) -> dict:
+    """Encounter.participant -> PV1-7/8/9/17, as repeating XCN fields.
+
+    Without the practitioner map a reference cannot be resolved to a real
+    XCN, so those participants are skipped rather than written as a bare
+    display string.
+    """
+    fields: dict[int, list[str]] = {}
+    if not practitioners_by_id:
+        return {}
+    for participant in encounter.participant or []:
+        if not participant.type or not participant.type[0].coding:
+            continue
+        field_num = _PARTICIPATION_TYPE_TO_PV1_FIELD.get(participant.type[0].coding[0].code)
+        individual = participant.individual
+        if field_num is None or individual is None or not individual.reference:
+            continue
+        practitioner = practitioners_by_id.get(individual.reference.removeprefix("urn:uuid:"))
+        if practitioner is None:
+            continue
+        fields.setdefault(field_num, []).append(build_xcn_from_practitioner(practitioner))
+    return {num: "~".join(values) for num, values in fields.items()}
+
+
 def build_minimal_pv1(encounter, practitioners_by_id: dict | None = None) -> str | None:
     """The minimal PV1 shape app.mappings.common.build_minimal_encounter
     itself reads: class code, visit identifier, the PL location chain and
@@ -159,12 +190,7 @@ def build_minimal_pv1(encounter, practitioners_by_id: dict | None = None) -> str
     class_code = encounter.class_fhir.code if encounter.class_fhir else None
     if class_code:
         fields[2] = CLASS_TO_PATIENT_CLASS.get(class_code, "O")
-    if encounter.participant and practitioners_by_id:
-        individual = encounter.participant[0].individual
-        if individual is not None and individual.reference:
-            practitioner = practitioners_by_id.get(individual.reference.removeprefix("urn:uuid:"))
-            if practitioner is not None:
-                fields[7] = build_xcn_from_practitioner(practitioner)
+    fields.update(reverse_pv1_doctor_fields(encounter, practitioners_by_id or {}))
     if encounter.identifier:
         visit_number = encounter.identifier[0].value
         if visit_number:
