@@ -26,6 +26,37 @@ from app.transform.registry import get_builder, list_supported_targets
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+
+def _document(bundle):
+    return next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "DocumentReference")
+
+
+def _has_encounter_practitioner(bundle) -> bool:
+    encounter = next(
+        (e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter"), None
+    )
+    return encounter is not None and bool(encounter.participant)
+
+
+def _first_seed_with(message_type: str, trigger: str, predicate, limit: int = 40) -> str:
+    """The first generated message satisfying `predicate`.
+
+    Optional fields are generated at ~50%, so pinning one lucky seed means
+    the test quietly stops exercising its own subject the moment an
+    unrelated generator change shifts the RNG sequence - which is exactly
+    what happened to the two callers of this helper.
+    """
+    from app.pipeline import convert_to_bundle as _convert
+
+    for seed in range(limit):
+        text = generate(message_type, trigger, seed=seed)
+        try:
+            if predicate(_convert(text)):
+                return text
+        except (StopIteration, AttributeError):
+            continue
+    raise AssertionError(f"no seed under {limit} produced the shape this test needs")
+
 def test_list_supported_targets_includes_adt_a01():
     assert ("HL7", "ADT", "A01") in list_supported_targets()
 
@@ -2129,7 +2160,10 @@ def test_mdm_trigger_round_trips_and_preserves_document_type(trigger):
     # confirms the trigger-string swap alone is enough for each sibling,
     # the same fixture-free (generator-backed) shape the equivalent ADT/ORU
     # breadth-pass tests use when no dedicated per-trigger fixture exists.
-    forward_text = generate("MDM", trigger, seed=7)
+    # Seeded rather than seed-pinned: TXA-12 is optional, so a fixed seed
+    # silently stops testing anything the moment an unrelated change shifts
+    # the RNG. Take the first seed that actually carries one.
+    forward_text = _first_seed_with("MDM", trigger, lambda b: _document(b).masterIdentifier)
     bundle = convert_hl7_to_bundle(forward_text)
 
     message_text = build_message_from_bundle(bundle, "HL7", "MDM", trigger)
@@ -2372,22 +2406,22 @@ def test_oru_round_trip_preserves_the_attending_practitioner_with_its_degree():
     # to infer, not ignore what the PV1 carried - the same argument that
     # closed PV1-3 for this builder. XCN.7's degree only has somewhere to
     # go on a real Practitioner, which is why one is materialised.
-    from app.generators.registry import generate
-
-    source = generate("ORU", "R01", seed=4)
+    # Seeded rather than seed-pinned, for the same reason the MDM breadth
+    # test is: PV1 and PV1-7 are both optional.
+    source = _first_seed_with("ORU", "R01", _has_encounter_practitioner)
     bundle = convert_to_bundle(source)
     encounter = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Encounter")
     attending_id = encounter.participant[0].individual.reference.removeprefix("urn:uuid:")
     attending = next(e.resource for e in bundle.entry if e.resource.id == attending_id)
-    assert attending.identifier[0].value == "5452"
-    assert attending.name[0].family == "Reyes"
+    identifier = attending.identifier[0].value
+    family, given = attending.name[0].family, attending.name[0].given[0]
     assert attending.qualification[0].code.coding[0].code == "MD"
 
     message = build_message_from_bundle(bundle, "HL7", "ORU", "R01")
     pv1 = next(line for line in message.split("\r") if line.startswith("PV1"))
     # PV1-7 is 0..-1, so a second attending comes back as a repetition
     # rather than overwriting the first.
-    assert pv1.split("|")[7].split("~")[0] == "5452^Reyes^Betty^^^^MD"
+    assert pv1.split("|")[7].split("~")[0] == f"{identifier}^{family}^{given}^^^^MD"
 
     round_tripped = convert_to_bundle(message)
     encounter = next(e.resource for e in round_tripped.entry if e.resource.get_resource_type() == "Encounter")
@@ -2465,3 +2499,99 @@ def test_siu_filler_status_tables_are_inverses():
     assert {v: k for k, v in FILLER_STATUS_TO_APPOINTMENT_STATUS.items()} == {
         k: v.upper() for k, v in APPOINTMENT_STATUS_TO_FILLER_STATUS.items()
     }
+
+
+def _demographics_message() -> str:
+    pid = {
+        1: "1",
+        3: "MRN1^^^HOSP^MR~ALT9^^^OTHER^PI",
+        5: "Doe^Jane",
+        7: "19800101",
+        8: "F",
+        13: "555-0100~555-0199",
+        15: "en^English^HL70296",
+        16: "M^Married^HL70002",
+        25: "3",
+        29: "20200501103000",
+    }
+    pv1 = {
+        1: "1",
+        2: "I",
+        3: "W^101^A",
+        4: "E^Emergency^HL70007",
+        5: "PRE123^^^HOSP^PI",
+        10: "SUR^Surgery^L",
+        13: "R^Re-admission^HL70092",
+        14: "7^Emergency room^HL70023",
+        15: "A0^No functional limitations^HL70009",
+        16: "Y^VIP^HL70099",
+        19: "V1",
+        38: "LF^Low fat^L",
+        44: "20260101120000",
+    }
+
+    def build(name, fields, width):
+        parts = [name] + [""] * width
+        for index, value in fields.items():
+            parts[index] = value
+        return "|".join(parts)
+
+    return "\r".join(
+        [
+            "MSH|^~\\&|A|B|C|D|20260101120000||ADT^A01|M1|P|2.5",
+            "EVN|A01|20260101120000",
+            build("PID", pid, 30),
+            build("PV1", pv1, 45),
+        ]
+    )
+
+
+def test_adt_round_trip_preserves_the_pv1_hospitalization_cluster():
+    # PV1-4/5/10/13/14/15/16/38 are reversed by the shared helper both PV1
+    # builders use, so a context Encounter carries them exactly as an ADT
+    # one does.
+    bundle = convert_to_bundle(_demographics_message())
+    round_tripped = convert_to_bundle(build_message_from_bundle(bundle, "HL7", "ADT", "A01"))
+
+    def snapshot(b):
+        encounter = next(e.resource for e in b.entry if e.resource.get_resource_type() == "Encounter")
+        hospitalization = encounter.hospitalization
+        code = lambda concept: concept.coding[0].code if concept and concept.coding else None
+        return (
+            code(encounter.type[0]),
+            code(encounter.serviceType),
+            hospitalization.preAdmissionIdentifier.value,
+            hospitalization.preAdmissionIdentifier.type.coding[0].code,
+            code(hospitalization.reAdmission),
+            code(hospitalization.admitSource),
+            code(hospitalization.specialArrangement[0]),
+            code(hospitalization.specialCourtesy[0]),
+            code(hospitalization.dietPreference[0]),
+        )
+
+    assert snapshot(round_tripped) == snapshot(bundle)
+    assert snapshot(bundle)[2] == "PRE123"
+
+
+def test_adt_round_trip_preserves_patient_demographics_and_repetitions():
+    bundle = convert_to_bundle(_demographics_message())
+    round_tripped = convert_to_bundle(build_message_from_bundle(bundle, "HL7", "ADT", "A01"))
+
+    def snapshot(b):
+        patient = next(e.resource for e in b.entry if e.resource.get_resource_type() == "Patient")
+        return (
+            patient.maritalStatus.coding[0].code,
+            patient.communication[0].language.coding[0].code,
+            patient.multipleBirthInteger,
+            str(patient.deceasedDateTime),
+            [(i.value, i.type.coding[0].code) for i in patient.identifier],
+            [t.value for t in patient.telecom],
+        )
+
+    assert snapshot(round_tripped) == snapshot(bundle)
+    # The choice types must come back through the branch that produced
+    # them, not the IG's fallback branch.
+    patient = next(e.resource for e in round_tripped.entry if e.resource.get_resource_type() == "Patient")
+    assert patient.multipleBirthBoolean is None
+    assert patient.deceasedBoolean is None
+

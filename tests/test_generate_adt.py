@@ -142,3 +142,45 @@ def test_a13_discharge_fields_vary_across_seeds():
             absent += 1
     assert present > 0
     assert absent > 0
+
+
+def _field(raw: str, segment_id: str, field_num: int) -> str:
+    line = next((l for l in raw.split("\r") if l.startswith(segment_id + "|")), "")
+    parts = line.split("|")
+    return parts[field_num] if len(parts) > field_num else ""
+
+
+def test_pv1_hospitalization_fields_vary_across_seeds():
+    # Every one of these has a real FHIR target, so each needs to occur
+    # both present and absent for the mapping to be fuzzed at all.
+    for field_num in (4, 5, 10, 13, 14, 15, 16, 38):
+        values = {bool(_field(generate_adt_a01(random.Random(seed)), "PV1", field_num)) for seed in range(40)}
+        assert values == {True, False}, f"PV1-{field_num} never varies"
+
+
+def test_pid_demographic_fields_vary_across_seeds():
+    for field_num in (15, 16):
+        values = {bool(_field(generate_adt_a01(random.Random(seed)), "PID", field_num)) for seed in range(40)}
+        assert values == {True, False}, f"PID-{field_num} never varies"
+
+
+def test_both_branches_of_each_demographic_choice_pair_occur():
+    # PID-24/25 and PID-29/30 are choice pairs the mapper resolves by
+    # precedence - generating only the indicator would leave
+    # multipleBirthInteger and deceasedDateTime untested.
+    seen = set()
+    for seed in range(120):
+        raw = generate_adt_a01(random.Random(seed))
+        for field_num in (24, 25, 29, 30):
+            if _field(raw, "PID", field_num):
+                seen.add(field_num)
+    assert seen == {24, 25, 29, 30}
+
+
+def test_repeating_fields_sometimes_carry_a_second_repetition():
+    # PID-3, PID-13 and the four PV1 doctor fields are all 0..-1.
+    for segment_id, field_num in (("PID", 3), ("PID", 13), ("PV1", 7), ("PV1", 8), ("PV1", 9), ("PV1", 17)):
+        assert any(
+            "~" in _field(generate_adt_a01(random.Random(seed)), segment_id, field_num) for seed in range(120)
+        ), f"{segment_id}-{field_num} never repeats"
+

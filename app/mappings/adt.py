@@ -19,6 +19,7 @@ from app.hl7.parser import field_str, require_segment
 from app.mappings.base import MessageMapper
 from app.mappings.common import (
     assemble_bundle,
+    apply_pv1_encounter_fields,
     build_encounter_participants,
     build_location_chain_from_pl,
     build_patient,
@@ -126,6 +127,7 @@ def build_encounter_core(
         participants = build_encounter_participants(pv1, encounter_id, extra_resources, recorder=recorder)
         if participants:
             encounter.participant = participants
+    apply_pv1_encounter_fields(encounter, pv1, recorder=recorder)
 
     period_start = parse_hl7_datetime(field_str(pv1, 44))
     period_start_location = hl7_location("PV1", 44)

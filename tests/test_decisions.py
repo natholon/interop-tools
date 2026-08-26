@@ -81,19 +81,20 @@ def test_component_that_is_mapped_is_not_reported_as_dropped():
 
 
 def test_wholly_unmapped_field_reports_once_not_per_component():
-    # PV1-10 (Hospital Service) is not mapped at all. One decision saying
-    # so is informative; component-level rows are noise that buries the
-    # partially-dropped fields. (This used PV1-8 until the referring
-    # doctor gained its own participant mapping.)
+    # PV1-20 (Financial Class) is not mapped at all - its IG target is a
+    # Coverage/Account this app never builds from HL7v2. One decision
+    # saying so is informative; component-level rows are noise that buries
+    # the partially-dropped fields. (This used PV1-8, then PV1-10, until
+    # each of those gained a real mapping.)
     decisions = _decisions(
         _message(
             "PID|1||578324^^^MRN||Doe^Jane||19620305|F",
-            "PV1|1|I|C100|||||||SUR^Surgery^L|||||||||V1",
+            _segment("PV1", {1: "1", 2: "I", 3: "C100", 19: "V1", 20: "SELF^20260101"}),
         )
     )
     by_location = _by_location(decisions)
-    assert by_location["PV1-10"].lost_value == "SUR^Surgery^L"
-    assert not any(loc.startswith("PV1-10.") for loc in by_location)
+    assert by_location["PV1-20"].lost_value == "SELF^20260101"
+    assert not any(loc.startswith("PV1-20.") for loc in by_location)
 
 
 def test_inferred_mappings_are_reported_with_their_reason():
@@ -172,18 +173,18 @@ def test_repeating_field_components_get_distinct_decision_ids():
 
 
 def test_unmapped_simple_field_is_reported_as_dropped():
-    # A field with no "^" is still real data. PV1-10 (Hospital Service) is
+    # A field with no "^" is still real data. PV1-18 (Patient Type) is
     # genuinely unmapped by this app and must show up - the register claims
     # completeness, and skipping non-composite fields quietly broke it.
     decisions = _decisions(
         _message(
             "PID|1||578324^^^MRN||Doe^Jane||19620305|F",
-            _segment("PV1", {1: "1", 2: "I", 3: "C100^^A^GENHOSP", 10: "CAR", 19: "V1"}),
+            _segment("PV1", {1: "1", 2: "I", 3: "C100^^A^GENHOSP", 18: "INP", 19: "V1"}),
         )
     )
     dropped = _by_location([d for d in decisions if d.kind == "dropped"])
-    assert "PV1-10" in dropped
-    assert dropped["PV1-10"].lost_value == "CAR"
+    assert "PV1-18" in dropped
+    assert dropped["PV1-18"].lost_value == "INP"
 
 
 def test_set_id_and_control_fields_are_not_reported_as_drops():

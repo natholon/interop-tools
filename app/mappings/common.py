@@ -3,17 +3,23 @@ import uuid
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
-from fhir.resources.R4B.encounter import Encounter, EncounterLocation, EncounterParticipant
+from fhir.resources.R4B.encounter import (
+    Encounter,
+    EncounterHospitalization,
+    EncounterLocation,
+    EncounterParticipant,
+)
 from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.identifier import Identifier
 from fhir.resources.R4B.location import Location
-from fhir.resources.R4B.patient import Patient
+from fhir.resources.R4B.patient import Patient, PatientCommunication
 from fhir.resources.R4B.practitioner import Practitioner, PractitionerQualification
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.resource import Resource
 
 from app.fhir_models.builders import (
     build_addresses,
+    build_codeable_concept_from_cwe,
     build_human_names,
     build_phone_telecoms,
     hl7_sex_to_fhir_gender,
@@ -35,6 +41,56 @@ IDENTIFIER_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0203"
 DEGREE_SYSTEM = "http://terminology.hl7.org/CodeSystem/v2-0360"
 
 
+PATIENT_ID_FALLBACK_SYSTEM = "urn:interop-tools:patient-id"
+
+
+def build_identifier_from_cx(
+    repetition,
+    fallback_system: str,
+    *,
+    resource_id: str = "",
+    relative_path: str = "",
+    location: str = "",
+    recorder=None,
+) -> Identifier | None:
+    """A CX-typed field repetition -> Identifier, per the v2-to-FHIR
+    CX[Identifier] datatype map: CX.1 -> .value, CX.4 -> .system (falling
+    back to a local placeholder when the assigning authority is absent),
+    CX.5 -> .type.coding.code (HL7 table 0203).
+
+    `location` is the field's own location string minus its component - the
+    caller composes it, since only the caller knows the segment/field/
+    repetition its own CX came from.
+    """
+    value = component_str(repetition, 1)
+    if not value:
+        return None
+    assigning_authority = component_str(repetition, 4)
+    system = assigning_authority or fallback_system
+    identifier = Identifier(system=system, value=value)
+    identifier_type = component_str(repetition, 5)
+    if identifier_type:
+        identifier.type = CodeableConcept(coding=[Coding(system=IDENTIFIER_TYPE_SYSTEM, code=identifier_type)])
+    if not recorder:
+        return identifier
+    if identifier_type:
+        recorder.record(resource_id, f"{relative_path}.type.coding[0].code", f"{location}.5", identifier_type)
+    recorder.record(resource_id, f"{relative_path}.value", f"{location}.1", value)
+    # CX.4 genuinely drives .system, so it needs its own fact - without it
+    # the crosswalk shows no source for .system at all, and a completeness
+    # check can't tell "mapped but unrecorded" apart from "dropped".
+    if assigning_authority:
+        recorder.record(resource_id, f"{relative_path}.system", f"{location}.4", system)
+    else:
+        recorder.record_inferred(
+            resource_id,
+            f"{relative_path}.system",
+            "CX.4 (Assigning Authority) was empty, so a local placeholder system is used.",
+            system,
+        )
+    return identifier
+
+
 def build_patient(pid, recorder=None) -> Patient:
     """PID -> Patient. Shared by every HL7 message type; PID is mapped
     identically regardless of message type or trigger event. `recorder`
@@ -43,55 +99,16 @@ def build_patient(pid, recorder=None) -> Patient:
     patient_id = str(uuid.uuid4())
     identifiers = []
     for idx, repetition in enumerate(field_repetitions(pid, 3)):
-        value = component_str(repetition, 1)
-        if not value:
-            continue
-        assigning_authority = component_str(repetition, 4)
-        system = assigning_authority or "urn:interop-tools:patient-id"
-        identifier = Identifier(system=system, value=value)
-        # CX.5 -> Identifier.type.coding.code, per the v2-to-FHIR IG's own
-        # CX[Identifier] datatype map, which binds it to the IdentifierType
-        # value set (HL7 table 0203). Leaving it unmapped made PID-3.5 the
-        # single largest class of dropped HL7v2 data in this app.
-        identifier_type = component_str(repetition, 5)
-        if identifier_type:
-            identifier.type = CodeableConcept(
-                coding=[Coding(system=IDENTIFIER_TYPE_SYSTEM, code=identifier_type)]
-            )
-        identifiers.append(identifier)
-        if recorder:
-            index = len(identifiers) - 1
-            if identifier_type:
-                recorder.record(
-                    patient_id,
-                    f"identifier[{index}].type.coding[0].code",
-                    hl7_location("PID", 3, repetition=idx, component=5),
-                    identifier_type,
-                )
-            recorder.record(
-                patient_id,
-                f"identifier[{index}].value",
-                hl7_location("PID", 3, repetition=idx, component=1),
-                value,
-            )
-            # PID-3.4 genuinely drives .system, so it needs its own fact -
-            # without it the crosswalk shows no source for .system at all,
-            # and a completeness check can't tell "mapped but unrecorded"
-            # apart from "dropped".
-            if assigning_authority:
-                recorder.record(
-                    patient_id,
-                    f"identifier[{index}].system",
-                    hl7_location("PID", 3, repetition=idx, component=4),
-                    system,
-                )
-            else:
-                recorder.record_inferred(
-                    patient_id,
-                    f"identifier[{index}].system",
-                    "PID-3.4 (Assigning Authority) was empty, so a local placeholder system is used.",
-                    system,
-                )
+        identifier = build_identifier_from_cx(
+            repetition,
+            PATIENT_ID_FALLBACK_SYSTEM,
+            resource_id=patient_id,
+            relative_path=f"identifier[{len(identifiers)}]",
+            location=hl7_location("PID", 3, repetition=idx),
+            recorder=recorder,
+        )
+        if identifier is not None:
+            identifiers.append(identifier)
 
     patient = Patient(id=patient_id)
     if identifiers:
@@ -115,7 +132,77 @@ def build_patient(pid, recorder=None) -> Patient:
     telecoms = build_phone_telecoms(pid, resource_id=patient_id, recorder=recorder)
     if telecoms:
         patient.telecom = telecoms
+
+    marital_status = build_codeable_concept_from_cwe(
+        pid, 16, resource_id=patient_id, relative_path="maritalStatus", recorder=recorder
+    )
+    if marital_status:
+        patient.maritalStatus = marital_status
+
+    language = build_codeable_concept_from_cwe(
+        pid, 15, resource_id=patient_id, relative_path="communication[0].language", recorder=recorder
+    )
+    if language:
+        patient.communication = [PatientCommunication(language=language)]
+
+    _apply_multiple_birth(patient, pid, patient_id, recorder)
+    _apply_deceased(patient, pid, patient_id, recorder)
     return patient
+
+
+# PID-24/PID-30 are ID (Yes/No) fields. The v2 table spells the values
+# Y/N, and anything else is not a boolean this app should guess at.
+_YES_NO = {"Y": True, "N": False}
+
+
+def _apply_multiple_birth(patient: Patient, pid, patient_id: str, recorder=None) -> None:
+    """PID-25 -> multipleBirthInteger, else PID-24 -> multipleBirthBoolean.
+
+    multipleBirth[x] is a choice, and the IG states the precedence itself:
+    PID-24 maps "IF PID-25 NOT VALUED", so a birth order supersedes the
+    bare indicator rather than the two competing.
+    """
+    birth_order = field_str(pid, 25)
+    if birth_order.strip().isdigit():
+        patient.multipleBirthInteger = int(birth_order)
+        if recorder:
+            recorder.record(patient_id, "multipleBirthInteger", hl7_location("PID", 25), birth_order)
+        return
+    indicator = _YES_NO.get(field_str(pid, 24).strip().upper())
+    if indicator is None:
+        return
+    patient.multipleBirthBoolean = indicator
+    if recorder:
+        recorder.record(
+            patient_id,
+            "multipleBirthBoolean",
+            hl7_location("PID", 24),
+            str(indicator),
+            source_value=field_str(pid, 24),
+        )
+
+
+def _apply_deceased(patient: Patient, pid, patient_id: str, recorder=None) -> None:
+    """PID-29 -> deceasedDateTime, else PID-30 -> deceasedBoolean.
+
+    Same choice-type precedence the IG spells out: PID-30 maps "IF PID-29
+    NOT VALUED", so a real death date wins over the indicator.
+    """
+    raw_death = field_str(pid, 29)
+    death = parse_hl7_datetime(raw_death) or parse_hl7_date(raw_death)
+    if death:
+        patient.deceasedDateTime = death
+        if recorder:
+            recorder.record(patient_id, "deceasedDateTime", hl7_location("PID", 29), death, source_value=raw_death)
+        return
+    indicator = _YES_NO.get(field_str(pid, 30).strip().upper())
+    if indicator is None:
+        return
+    patient.deceasedBoolean = indicator
+    if recorder:
+        recorder.record(
+            patient_id, "deceasedBoolean", hl7_location("PID", 30), str(indicator), source_value=field_str(pid, 30)
+        )
 
 
 # PL (person location) -> a chain of Location resources, per the
@@ -372,6 +459,64 @@ PV1_DOCTOR_FIELDS = (
 )
 
 
+# PV1 fields the v2-to-FHIR PV1[Encounter] map routes onto the Encounter
+# itself or its .hospitalization, with the FHIR path each one takes. All
+# CWE, so one loop serves them; PV1-15 and PV1-38 have repeating targets.
+_PV1_CODED_FIELDS: tuple[tuple[int, str, bool], ...] = (
+    (4, "type[0]", True),
+    (10, "serviceType", False),
+    (13, "hospitalization.reAdmission", False),
+    (14, "hospitalization.admitSource", False),
+    (15, "hospitalization.specialArrangement[0]", True),
+    (16, "hospitalization.specialCourtesy[0]", True),
+    (38, "hospitalization.dietPreference[0]", True),
+)
+
+
+def apply_pv1_encounter_fields(encounter, pv1, recorder=None) -> None:
+    """PV1-4/5/10/13/14/15/16/38 -> Encounter.type, .serviceType and
+    .hospitalization, per the v2-to-FHIR PV1[Encounter] map.
+
+    Shared by build_encounter_core and build_minimal_encounter for the
+    same reason the doctor participants are: the IG's map does not care
+    which message type carried the PV1. `.hospitalization` is created
+    lazily so an encounter carrying none of these fields does not gain an
+    empty one.
+    """
+
+    def hospitalization():
+        if encounter.hospitalization is None:
+            encounter.hospitalization = EncounterHospitalization()
+        return encounter.hospitalization
+
+    for field_num, path, is_list in _PV1_CODED_FIELDS:
+        concept = build_codeable_concept_from_cwe(
+            pv1, field_num, resource_id=encounter.id, relative_path=path, recorder=recorder
+        )
+        if concept is None:
+            continue
+        attribute = path.split(".")[-1].split("[")[0]
+        target = hospitalization() if path.startswith("hospitalization.") else encounter
+        setattr(target, attribute, [concept] if is_list else concept)
+
+    # PV1-5 is CX, not CWE - the preadmit number is an identifier, and
+    # gets the same CX.1/CX.4/CX.5 treatment PID-3 does.
+    for repetition in field_repetitions(pv1, 5)[:1]:
+        preadmit = build_identifier_from_cx(
+            repetition,
+            _PREADMIT_IDENTIFIER_SYSTEM,
+            resource_id=encounter.id,
+            relative_path="hospitalization.preAdmissionIdentifier",
+            location=hl7_location("PV1", 5),
+            recorder=recorder,
+        )
+        if preadmit is not None:
+            hospitalization().preAdmissionIdentifier = preadmit
+
+
+_PREADMIT_IDENTIFIER_SYSTEM = "urn:interop-tools:hl7v2-preadmit-number"
+
+
 def build_encounter_participants(pv1, encounter_id: str, extra_resources: list, recorder=None) -> list:
     """PV1-7/8/9/17 -> Encounter.participant, one per repetition.
 
@@ -455,6 +600,7 @@ def build_minimal_encounter(pv1, patient_id: str, recorder=None, extra_resources
         participants = build_encounter_participants(pv1, encounter_id, extra_resources, recorder=recorder)
         if participants:
             encounter.participant = participants
+    apply_pv1_encounter_fields(encounter, pv1, recorder=recorder)
     return encounter
 
 

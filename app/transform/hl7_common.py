@@ -80,9 +80,10 @@ def build_pid(patient) -> str:
     fields: dict[int, str] = {1: "1"}
 
     if patient.identifier:
-        identifier = patient.identifier[0]
-        system = identifier.system or ""
-        fields[3] = f"{identifier.value or ''}^^^{system}^MR"
+        # Every identifier, not just the first: PID-3 is 0..-1 and the
+        # forward direction reads every repetition, so writing one back
+        # would silently drop the rest.
+        fields[3] = "~".join(reverse_cx(identifier) for identifier in patient.identifier)
 
     if patient.name:
         name = patient.name[0]
@@ -115,11 +116,41 @@ def build_pid(patient) -> str:
         )
 
     if patient.telecom:
-        phone = next((t.value for t in patient.telecom if t.system == "phone" and t.value), None)
-        if phone:
-            fields[13] = phone
+        phones = [t.value for t in patient.telecom if t.system == "phone" and t.value]
+        if phones:
+            fields[13] = "~".join(phones)
 
-    return segment("PID", fields, 13)
+    fields.update(_reverse_demographics(patient))
+    return segment("PID", fields, 30)
+
+
+def _reverse_demographics(patient) -> dict[int, str]:
+    """Patient.maritalStatus/.communication/.multipleBirth[x]/.deceased[x]
+    back to PID-15/16/24/25/29/30.
+
+    Each choice type reverses to the one field the forward direction would
+    read first (PID-25 over PID-24, PID-29 over PID-30), so the value comes
+    back through the same branch that produced it rather than through the
+    branch the IG treats as the fallback.
+    """
+    fields: dict[int, str] = {}
+    language = _first(patient.communication)
+    if language is not None:
+        value = reverse_cwe(language.language)
+        if value:
+            fields[15] = value
+    marital = reverse_cwe(patient.maritalStatus)
+    if marital:
+        fields[16] = marital
+    if patient.multipleBirthInteger is not None:
+        fields[25] = str(patient.multipleBirthInteger)
+    elif patient.multipleBirthBoolean is not None:
+        fields[24] = "Y" if patient.multipleBirthBoolean else "N"
+    if patient.deceasedDateTime is not None:
+        fields[29] = format_hl7_ts(patient.deceasedDateTime)
+    elif patient.deceasedBoolean is not None:
+        fields[30] = "Y" if patient.deceasedBoolean else "N"
+    return fields
 
 
 def build_xcn_from_practitioner(practitioner) -> str:
@@ -174,6 +205,59 @@ def reverse_pv1_doctor_fields(encounter, practitioners_by_id: dict) -> dict:
     return {num: "~".join(values) for num, values in fields.items()}
 
 
+def reverse_pv1_encounter_fields(encounter) -> dict[int, str]:
+    """The inverse of app.mappings.common.apply_pv1_encounter_fields -
+    Encounter.type/.serviceType/.hospitalization back to PV1-4/5/10/13/
+    14/15/16/38.
+
+    Shared by both PV1 builders for the same reason the forward half is:
+    the IG's PV1[Encounter] map is message-type agnostic, so an ORU or MDM
+    context encounter carries these fields exactly as an ADT one does.
+    Only the first entry of a repeating target is written back - the
+    source field these came from is 0..1 in every case but PV1-15, and a
+    second repetition there has no separate component to occupy.
+    """
+    fields: dict[int, str] = {}
+    hospitalization = encounter.hospitalization
+    sources = {
+        4: _first(encounter.type),
+        10: encounter.serviceType,
+        13: hospitalization.reAdmission if hospitalization else None,
+        14: hospitalization.admitSource if hospitalization else None,
+        15: _first(hospitalization.specialArrangement) if hospitalization else None,
+        16: _first(hospitalization.specialCourtesy) if hospitalization else None,
+        38: _first(hospitalization.dietPreference) if hospitalization else None,
+    }
+    for field_num, concept in sources.items():
+        value = reverse_cwe(concept)
+        if value:
+            fields[field_num] = value
+    preadmit = hospitalization.preAdmissionIdentifier if hospitalization else None
+    if preadmit is not None and preadmit.value:
+        fields[5] = reverse_cx(preadmit)
+    return fields
+
+
+def _first(values):
+    return values[0] if values else None
+
+
+def reverse_cx(identifier) -> str:
+    """Identifier -> a CX field, the inverse of
+    app.mappings.common.build_identifier_from_cx.
+
+    A local placeholder system reverses to an empty CX.4, the same way
+    reverse_cwe leaves CWE.3 empty for a CWE_FALLBACK_SYSTEM coding - it
+    was never in the source to begin with.
+    """
+    system = identifier.system or ""
+    authority = "" if system.startswith("urn:interop-tools:") else system
+    type_code = ""
+    if identifier.type and identifier.type.coding:
+        type_code = identifier.type.coding[0].code or ""
+    return "^".join([identifier.value or "", "", "", authority, type_code]).rstrip("^")
+
+
 def build_minimal_pv1(encounter, practitioners_by_id: dict | None = None) -> str | None:
     """The minimal PV1 shape app.mappings.common.build_minimal_encounter
     itself reads: class code, visit identifier, the PL location chain and
@@ -191,6 +275,7 @@ def build_minimal_pv1(encounter, practitioners_by_id: dict | None = None) -> str
     if class_code:
         fields[2] = CLASS_TO_PATIENT_CLASS.get(class_code, "O")
     fields.update(reverse_pv1_doctor_fields(encounter, practitioners_by_id or {}))
+    fields.update(reverse_pv1_encounter_fields(encounter))
     if encounter.identifier:
         visit_number = encounter.identifier[0].value
         if visit_number:

@@ -108,3 +108,65 @@ def test_calendar_invalid_date_does_not_crash():
     # flag.
     report = validate_hl7(read_fixture("validation_generic_pid7_invalid_calendar_date.hl7"))
     assert "generic.pid-7-unparseable" in [f.rule_id for f in report.findings]
+
+
+def _pid_message(fields: dict[int, str]) -> str:
+    pid = {1: "1", 3: "MRN1^^^HOSP^MR", 5: "Doe^Jane", 7: "19800101", 8: "F", **fields}
+    parts = ["PID"] + [""] * 30
+    for index, value in pid.items():
+        parts[index] = value
+    return "\r".join(
+        [
+            "MSH|^~\\&|A|B|C|D|20260101120000||ADT^A01|M1|P|2.5",
+            "EVN|A01|20260101120000",
+            "|".join(parts),
+            "PV1|1|I|W^101^A|||||||||||||||||V1|||||||||||||||||||||||20260101120000",
+        ]
+    )
+
+
+def _demographic_rule_ids(fields: dict[int, str]) -> set[str]:
+    return {f.rule_id for f in validate_hl7(_pid_message(fields)).findings}
+
+
+def test_death_date_before_birth_date_is_an_error():
+    findings = validate_hl7(_pid_message({29: "19700101120000"})).findings
+    finding = next(f for f in findings if f.rule_id == "generic.pid-29-before-birth")
+    assert finding.severity == "error"
+
+
+def test_death_date_with_a_not_deceased_indicator_is_flagged():
+    # The mapper resolves the pair by precedence, so without this the
+    # contradiction converts silently into a deceasedDateTime.
+    assert "generic.pid-29-contradicts-pid-30" in _demographic_rule_ids({29: "20200101120000", 30: "N"})
+
+
+def test_death_date_in_the_future_is_a_warning():
+    assert "generic.pid-29-in-future" in _demographic_rule_ids({29: "20990101120000"})
+
+
+def test_unparseable_death_date_is_a_warning_not_a_crash():
+    assert "generic.pid-29-unparseable" in _demographic_rule_ids({29: "not-a-date"})
+
+
+def test_birth_order_with_a_not_multiple_birth_indicator_is_flagged():
+    assert "generic.pid-25-contradicts-pid-24" in _demographic_rule_ids({24: "N", 25: "2"})
+
+
+def test_non_numeric_birth_order_is_a_warning():
+    rule_ids = _demographic_rule_ids({25: "second"})
+    assert "generic.pid-25-not-numeric" in rule_ids
+    # A value that isn't a number can't contradict the indicator either.
+    assert "generic.pid-25-contradicts-pid-24" not in rule_ids
+
+
+def test_unrecognized_yes_no_indicators_are_warnings():
+    rule_ids = _demographic_rule_ids({24: "X", 30: "Z"})
+    assert "generic.pid-24-unrecognized" in rule_ids
+    assert "generic.pid-30-unrecognized" in rule_ids
+
+
+def test_consistent_demographics_produce_no_findings():
+    rule_ids = _demographic_rule_ids({24: "Y", 25: "2", 29: "20200101120000"})
+    assert not any(rule_id.startswith(("generic.pid-24", "generic.pid-25", "generic.pid-29", "generic.pid-30")) for rule_id in rule_ids)
+

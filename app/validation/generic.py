@@ -6,7 +6,7 @@ composes them by concatenation."""
 from datetime import datetime, timezone
 
 from app.hl7.parser import field_str, optional_segment
-from app.validation.common import parse_comparable_datetime
+from app.validation.common import is_before, not_in_future, parse_comparable_datetime
 from app.validation.models import ValidationFinding
 
 _RECOGNIZED_SEX_CODES = {"M", "F", "O", "U", "A", "N"}
@@ -169,6 +169,120 @@ def _rule_pid_sex(pid) -> list[ValidationFinding]:
     return []
 
 
+def _rule_pid_death(pid, now: datetime) -> list[ValidationFinding]:
+    """PID-29 (death date) against PID-30 (death indicator) and PID-7.
+
+    The two fields are a choice pair the mapper resolves by precedence, so
+    a message can state both and mean two different things - which is the
+    contradiction worth surfacing, alongside the ordinary ordering checks
+    every other date in this app already gets.
+    """
+    findings: list[ValidationFinding] = []
+    raw_death = field_str(pid, 29)
+    indicator = field_str(pid, 30).strip().upper()
+    if raw_death and indicator == "N":
+        findings.append(
+            ValidationFinding(
+                severity="warning",
+                rule_id="generic.pid-29-contradicts-pid-30",
+                segment="PID",
+                field=30,
+                message="PID-29 carries a death date while PID-30 says the patient is not deceased.",
+            )
+        )
+    if indicator and indicator not in {"Y", "N"}:
+        findings.append(
+            ValidationFinding(
+                severity="warning",
+                rule_id="generic.pid-30-unrecognized",
+                segment="PID",
+                field=30,
+                message=f"PID-30 (patient death indicator) {indicator!r} is not a recognized Y/N value.",
+            )
+        )
+    if not raw_death:
+        return findings
+    death = parse_comparable_datetime(raw_death)
+    if death is None:
+        findings.append(
+            ValidationFinding(
+                severity="warning",
+                rule_id="generic.pid-29-unparseable",
+                segment="PID",
+                field=29,
+                message=f"PID-29 (death date/time) {raw_death!r} does not parse as a valid HL7 date/time.",
+            )
+        )
+        return findings
+    if not_in_future(raw_death, now) is False:
+        findings.append(
+            ValidationFinding(
+                severity="warning",
+                rule_id="generic.pid-29-in-future",
+                segment="PID",
+                field=29,
+                message="PID-29 (death date/time) is in the future.",
+            )
+        )
+    raw_birth = field_str(pid, 7)
+    birth = parse_comparable_datetime(raw_birth)
+    if birth is not None and is_before(raw_death, death, raw_birth, birth):
+        findings.append(
+            ValidationFinding(
+                severity="error",
+                rule_id="generic.pid-29-before-birth",
+                segment="PID",
+                field=29,
+                message="PID-29 (death date/time) is before PID-7 (date of birth).",
+            )
+        )
+    return findings
+
+
+def _rule_pid_multiple_birth(pid) -> list[ValidationFinding]:
+    """PID-25 (birth order) against PID-24 (multiple birth indicator).
+
+    A birth order with the indicator explicitly saying "no" states two
+    incompatible things about the same birth; the mapper resolves it by
+    the IG's precedence and reports multipleBirthInteger, so the
+    contradiction would otherwise pass silently.
+    """
+    findings: list[ValidationFinding] = []
+    indicator = field_str(pid, 24).strip().upper()
+    birth_order = field_str(pid, 25).strip()
+    if indicator and indicator not in {"Y", "N"}:
+        findings.append(
+            ValidationFinding(
+                severity="warning",
+                rule_id="generic.pid-24-unrecognized",
+                segment="PID",
+                field=24,
+                message=f"PID-24 (multiple birth indicator) {indicator!r} is not a recognized Y/N value.",
+            )
+        )
+    if birth_order and not birth_order.isdigit():
+        findings.append(
+            ValidationFinding(
+                severity="warning",
+                rule_id="generic.pid-25-not-numeric",
+                segment="PID",
+                field=25,
+                message=f"PID-25 (birth order) {birth_order!r} is not a number.",
+            )
+        )
+    elif birth_order and indicator == "N":
+        findings.append(
+            ValidationFinding(
+                severity="warning",
+                rule_id="generic.pid-25-contradicts-pid-24",
+                segment="PID",
+                field=24,
+                message="PID-25 carries a birth order while PID-24 says this was not a multiple birth.",
+            )
+        )
+    return findings
+
+
 def validate(message, trigger_event: str) -> list[ValidationFinding]:
     findings: list[ValidationFinding] = []
     now = datetime.now(timezone.utc)
@@ -188,5 +302,7 @@ def validate(message, trigger_event: str) -> list[ValidationFinding]:
         findings.extend(_rule_pid_presence(pid))
         findings.extend(_rule_pid_birth_date(pid, now))
         findings.extend(_rule_pid_sex(pid))
+        findings.extend(_rule_pid_death(pid, now))
+        findings.extend(_rule_pid_multiple_birth(pid))
 
     return findings

@@ -303,8 +303,12 @@ def random_result_status(rng: random.Random) -> str:
 def segment(name: str, fields: dict[int, str], count: int) -> str:
     """Build a segment as a list of positional fields joined with '|', the
     same programmatic construction used for every test fixture in this repo
-    - never hand-count pipe positions."""
-    parts = [name] + [""] * count
+    - never hand-count pipe positions.
+
+    `count` is the minimum width; a field beyond it extends the segment
+    rather than raising, since a caller naming a field has said it wants
+    one that far out."""
+    parts = [name] + [""] * max(count, *fields) if fields else [name] + [""] * count
     for idx, val in fields.items():
         parts[idx] = val
     return "|".join(parts)
@@ -325,12 +329,23 @@ def generate_msh_segment(rng: random.Random, message_type: str, trigger_event: s
     return text, dt
 
 
+def _random_patient_identifiers(rng: random.Random) -> str:
+    """PID-3 is 0..-1 and the mapper reads every repetition, so a second
+    identifier (a different type code, per HL7 table 0203) is generated
+    some of the time - without one nothing exercised the repeating half."""
+    identifiers = [f"{random_identifier(rng)}^^^{random_hospital_code(rng)}^MR"]
+    if maybe(rng, p=0.2):
+        identifiers.append(f"{random_identifier(rng)}^^^{random_hospital_code(rng)}^PI")
+    return "~".join(identifiers)
+
+
 def generate_pid_segment(rng: random.Random) -> str:
     sex = random_sex(rng) if maybe(rng) else None
     family, given = random_person_name(rng, sex=sex)
+    dob = None
     fields = {
         1: "1",
-        3: f"{random_identifier(rng)}^^^{random_hospital_code(rng)}^MR",
+        3: _random_patient_identifiers(rng),
         5: f"{family}^{given}",
     }
     if sex:
@@ -342,13 +357,73 @@ def generate_pid_segment(rng: random.Random) -> str:
         line1, city, state, zip_code = random_address(rng)
         fields[11] = f"{line1}^^{city}^{state}^{zip_code}^USA"
     if maybe(rng):
-        fields[13] = random_phone(rng)
-    return segment("PID", fields, 13)
+        phones = [random_phone(rng)]
+        if maybe(rng, p=0.25):
+            phones.append(random_phone(rng))
+        fields[13] = "~".join(phones)
+    fields.update(_random_demographics(rng, dob))
+    return segment("PID", fields, 30)
+
+
+# PID-15 Primary Language (table 0296), PID-16 Marital Status (0002) -
+# both CWE, both mapping to a real Patient field per the v2-to-FHIR
+# PID[Patient] map.
+_LANGUAGES = [("en", "English"), ("es", "Spanish"), ("zh", "Chinese"), ("fr", "French")]
+_MARITAL_STATUSES = [("M", "Married"), ("S", "Single"), ("D", "Divorced"), ("W", "Widowed")]
+
+
+def _random_demographics(rng: random.Random, dob) -> dict[int, str]:
+    """PID-15/16 and the two choice-type pairs, PID-24/25 (multiple birth)
+    and PID-29/30 (deceased).
+
+    Each pair is generated on both of its branches, since the mapper picks
+    a different FHIR field depending on which one is valued - generating
+    only the indicator would leave multipleBirthInteger/deceasedDateTime
+    untested.
+    """
+    fields: dict[int, str] = {}
+    if maybe(rng):
+        code, display = rng.choice(_LANGUAGES)
+        fields[15] = f"{code}^{display}^HL70296"
+    if maybe(rng):
+        code, display = rng.choice(_MARITAL_STATUSES)
+        fields[16] = f"{code}^{display}^HL70002"
+    if maybe(rng, p=0.2):
+        if maybe(rng):
+            fields[25] = str(rng.randint(1, 3))
+        else:
+            fields[24] = "Y"
+    elif maybe(rng, p=0.15):
+        fields[24] = "N"
+    if maybe(rng, p=0.15):
+        # A death date must not precede the birth date the same segment
+        # already carries, or the validator's own before-birth rule fires
+        # on a message the generator promises is clean.
+        earliest = -365 * 79 if dob is None else 0
+        death = random_datetime_near_now(rng, min_days=earliest, max_days=0)
+        if dob is None or death.date() >= dob.date():
+            fields[29] = format_hl7_datetime(death)
+    elif maybe(rng, p=0.15):
+        fields[30] = "N"
+    return fields
 
 
 # PV1-7 Attending, PV1-8 Referring, PV1-9 Consulting, PV1-17 Admitting -
 # every one of them XCN and 0..-1 per the v2-to-FHIR PV1[Encounter] map.
 _PV1_DOCTOR_FIELDS = (7, 8, 9, 17)
+
+# The coded PV1 fields the v2-to-FHIR map routes onto Encounter.type,
+# .serviceType and .hospitalization. Values are drawn from the real HL7
+# tables each field is bound to, so a generated message stays plausible.
+_PV1_CODED_POOLS = {
+    4: [("E", "Emergency"), ("R", "Routine"), ("U", "Urgent")],
+    10: [("SUR", "Surgery"), ("MED", "Medicine"), ("CAR", "Cardiology")],
+    13: [("R", "Re-admission")],
+    14: [("1", "Physician referral"), ("7", "Emergency room"), ("4", "Transfer from a hospital")],
+    15: [("A0", "No functional limitations"), ("B6", "Pregnant")],
+    16: [("Y", "VIP"), ("N", "Not a VIP")],
+    38: [("LF", "Low fat"), ("NAS", "No added salt"), ("REG", "Regular")],
+}
 
 
 def build_minimal_pv1_fields(rng: random.Random, patient_class: str) -> dict:
@@ -372,6 +447,12 @@ def build_minimal_pv1_fields(rng: random.Random, patient_class: str) -> dict:
         if maybe(rng, p=0.25):
             doctors.append(random_physician_xcn(rng))
         fields[field_num] = "~".join(doctors)
+    for field_num, pool in _PV1_CODED_POOLS.items():
+        if maybe(rng):
+            code, display = rng.choice(pool)
+            fields[field_num] = f"{code}^{display}^L"
+    if maybe(rng):
+        fields[5] = f"PRE{random_identifier(rng, 5)}^^^HOSP"
     if maybe(rng):
         fields[19] = f"V{random_identifier(rng, 4)}"
     return fields

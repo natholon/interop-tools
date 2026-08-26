@@ -41,6 +41,7 @@ from app.transform.hl7_common import (
     build_pid,
     reverse_pl_field,
     reverse_pv1_doctor_fields,
+    reverse_pv1_encounter_fields,
 )
 
 
@@ -68,6 +69,7 @@ def _build_pv1(encounter, locations_by_id: dict | None = None, practitioners_by_
             fields[3] = reverse_pl_field(current.location, locations_by_id)
 
     fields.update(reverse_pv1_doctor_fields(encounter, practitioners_by_id))
+    fields.update(reverse_pv1_encounter_fields(encounter))
 
     if encounter.identifier:
         visit_number = encounter.identifier[0].value
