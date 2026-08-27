@@ -53,13 +53,25 @@ STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS = {
 # way app/mappings/adt.py's PV1-44-vs-EVN-2 period.start resolution does,
 # so this function returns which one alongside the resolved CodeableConcept
 # rather than leaving the caller to guess.
-_STATUS_OBSERVATION_LOCATION = xpath_location(
-    "act", "entryRelationship[SUBJ]", "observation", "entryRelationship[REFR]", "observation", "value", "@code"
-)
+def _subject_base(index: int) -> str:
+    """`act/entryRelationship[SUBJ][index]` - a Concern Act may carry more
+    than one, and without the index both Conditions record the identical
+    location, so the second resolved against the next *act* instead of the
+    second relationship. Mirrors allergies.py's own MFST indexing."""
+    return xpath_location("act", f"entryRelationship[SUBJ][{index}]")
+
+
+def _status_observation_location(subject_index: int) -> str:
+    return xpath_location(
+        _subject_base(subject_index), "observation", "entryRelationship[REFR]", "observation", "value", "@code"
+    )
+
 _ACT_STATUS_LOCATION = xpath_location("act", "statusCode", "@code")
 
 
-def _resolve_clinical_status(act, problem_observation) -> tuple[CodeableConcept | None, str | None]:
+def _resolve_clinical_status(
+    act, problem_observation, subject_index: int = 0
+) -> tuple[CodeableConcept | None, str | None]:
     for status_observation in iter_nested_observations(problem_observation, "REFR"):
         code_element = find_child(status_observation, "code")
         if code_element is None or code_element.get("code") != STATUS_OBSERVATION_CODE:
@@ -68,7 +80,7 @@ def _resolve_clinical_status(act, problem_observation) -> tuple[CodeableConcept 
         value_code = value_element.get("code") if value_element is not None else None
         mapped = STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS.get(value_code) if value_code else None
         if mapped:
-            return CodeableConcept(coding=[Coding(system=_CLINICAL_STATUS_SYSTEM, code=mapped)]), _STATUS_OBSERVATION_LOCATION
+            return CodeableConcept(coding=[Coding(system=_CLINICAL_STATUS_SYSTEM, code=mapped)]), _status_observation_location(subject_index)
 
     status_code_element = find_child(act, "statusCode")
     act_status = status_code_element.get("code") if status_code_element is not None else None
@@ -87,7 +99,9 @@ def _resolve_clinical_status(act, problem_observation) -> tuple[CodeableConcept 
 # strings ("act/entryRelationship[...]/...") are accurate regardless of
 # which outer Act template wraps this identical inner entry shape (see
 # hospital_discharge_diagnosis.py's own docstring).
-def build_condition(act, problem_observation, patient_id: str, recorder=None) -> Condition | None:
+def build_condition(
+    act, problem_observation, patient_id: str, recorder=None, subject_index: int = 0
+) -> Condition | None:
     if problem_observation.get("negationInd") == "true":
         # "No known problem" pattern - disclosed limitation, not modeled as
         # its own resource this slice (see CLAUDE.md).
@@ -105,7 +119,7 @@ def build_condition(act, problem_observation, patient_id: str, recorder=None) ->
         code=code,
     )
     if recorder:
-        value_location = xpath_location("act", "entryRelationship[SUBJ]", "observation", "value")
+        value_location = xpath_location(_subject_base(subject_index), "observation", "value")
         code_value = value_element.get("code")
         display_value = value_element.get("displayName")
         if code_value:
@@ -122,13 +136,13 @@ def build_condition(act, problem_observation, patient_id: str, recorder=None) ->
         find_all(problem_observation, "id"),
         "urn:interop-tools:cda-problem-id",
         resource_id=condition_id,
-        location_prefix=xpath_location("act", "entryRelationship[SUBJ]", "observation", "id"),
+        location_prefix=xpath_location(_subject_base(subject_index), "observation", "id"),
         recorder=recorder,
     )
     if identifiers:
         condition.identifier = identifiers
 
-    clinical_status, status_location = _resolve_clinical_status(act, problem_observation)
+    clinical_status, status_location = _resolve_clinical_status(act, problem_observation, subject_index)
     if clinical_status:
         condition.clinicalStatus = clinical_status
         if recorder:
@@ -136,7 +150,7 @@ def build_condition(act, problem_observation, patient_id: str, recorder=None) ->
 
     effective_time = find_child(problem_observation, "effectiveTime")
     low, high = ivl_ts_bounds(effective_time)
-    effective_time_base = "act/entryRelationship[SUBJ]/observation/effectiveTime"
+    effective_time_base = xpath_location(_subject_base(subject_index), "observation", "effectiveTime")
     onset = parse_partial_ts(low)
     if onset:
         condition.onsetDateTime = onset
@@ -166,13 +180,18 @@ def build_conditions(section, patient_id: str, recorder=None) -> list[Condition]
         act = find_child(entry, "act")
         if act is None or not has_template_id(act, CONCERN_ACT_TEMPLATE_ID):
             continue
+        subject_index = 0
         for relationship in find_all(act, "entryRelationship"):
             if relationship.get("typeCode") != "SUBJ":
                 continue
+            # Counted over SUBJ relationships only, matching how the
+            # location's own [SUBJ][n] bracket is resolved.
+            index = subject_index
+            subject_index += 1
             observation = find_child(relationship, "observation")
             if observation is None or not has_template_id(observation, PROBLEM_OBSERVATION_TEMPLATE_ID):
                 continue
-            condition = build_condition(act, observation, patient_id, recorder=recorder)
+            condition = build_condition(act, observation, patient_id, recorder=recorder, subject_index=index)
             if condition is not None:
                 conditions.append(condition)
     return conditions

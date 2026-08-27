@@ -245,7 +245,7 @@ def test_ccd_effective_time_variants_records_bare_value_vs_low_high_shapes():
     # identical bare-value location, not a fabricated low/high one.
     bare_onset = by_path["Bundle.entry[1].resource.onsetDateTime"]
     assert bare_onset.source_location == xpath_location(
-        "act/entryRelationship[SUBJ]/observation/effectiveTime/@value"
+        "act/entryRelationship[SUBJ][0]/observation/effectiveTime/@value"
     )
     bare_abatement = by_path["Bundle.entry[1].resource.abatementDateTime"]
     assert bare_abatement.source_location == bare_onset.source_location
@@ -254,7 +254,7 @@ def test_ccd_effective_time_variants_records_bare_value_vs_low_high_shapes():
     # abatement fact at all (nullFlavor/absent high).
     low_only_onset = by_path["Bundle.entry[2].resource.onsetDateTime"]
     assert low_only_onset.source_location == xpath_location(
-        "act/entryRelationship[SUBJ]/observation/effectiveTime/low/@value"
+        "act/entryRelationship[SUBJ][0]/observation/effectiveTime/low/@value"
     )
     assert "Bundle.entry[2].resource.abatementDateTime" not in by_path
 
@@ -262,11 +262,11 @@ def test_ccd_effective_time_variants_records_bare_value_vs_low_high_shapes():
     # dedicated children.
     both_onset = by_path["Bundle.entry[3].resource.onsetDateTime"]
     assert both_onset.source_location == xpath_location(
-        "act/entryRelationship[SUBJ]/observation/effectiveTime/low/@value"
+        "act/entryRelationship[SUBJ][0]/observation/effectiveTime/low/@value"
     )
     both_abatement = by_path["Bundle.entry[3].resource.abatementDateTime"]
     assert both_abatement.source_location == xpath_location(
-        "act/entryRelationship[SUBJ]/observation/effectiveTime/high/@value"
+        "act/entryRelationship[SUBJ][0]/observation/effectiveTime/high/@value"
     )
 
     # nullFlavor entry (entry[4]) - fully unknown, no onset/abatement fact.
@@ -288,7 +288,7 @@ def test_ccd_problem_status_observation_overrides_act_status_records_nested_loca
     assert status_entry.value == "resolved"
     assert status_entry.source_location == xpath_location(
         "act",
-        "entryRelationship[SUBJ]",
+        "entryRelationship[SUBJ][0]",
         "observation",
         "entryRelationship[REFR]",
         "observation",

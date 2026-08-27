@@ -364,6 +364,22 @@ def _locate(source_locator, source_location: str, occurrence: int, scope_hint: s
     return source_locator.locate(source_location, occurrence)
 
 
+def _occurrence_carries_value(source_locator, entry, root_key, scope_hint, occurrence) -> bool | None:
+    """Whether `occurrence` really holds this fact's own value.
+
+    None when the question does not apply - the fact has no verbatim value
+    to check (the mapper transformed it), or the location does not resolve
+    there at all.
+    """
+    expected = entry.source_value if entry.source_value is not None else entry.value
+    if expected is None:
+        return None
+    span = _locate(source_locator, entry.source_location, occurrence, scope_hint)
+    if span is None:
+        return None
+    return source_locator.display_text[span[0]: span[1]] == expected
+
+
 def _content_matched_occurrence(
     source_locator,
     entry: ProvenanceEntry,
@@ -411,6 +427,17 @@ def _claim_fresh_occurrence(
     matched = _content_matched_occurrence(source_locator, entry, root_key, scope_hint, skip=used)
     if matched is not None:
         return matched
+    # Nothing unclaimed carries this value. A fact whose value *does* sit in
+    # an already-claimed occurrence belongs to that one, shared with
+    # whatever claimed it - several Observations built from one Results or
+    # Vitals organizer are exactly that, and their own location strings
+    # (component[N]) already say which member they are. Without this the
+    # second member skipped its real organizer because a sibling had
+    # claimed it, and resolved component[N] against the *next* organizer:
+    # a Hemoglobin row pointing at the Leukocytes text.
+    shared = _content_matched_occurrence(source_locator, entry, root_key, scope_hint)
+    if shared is not None:
+        return shared
     candidate = 0
     while candidate in used:
         candidate += 1
@@ -459,6 +486,19 @@ def _resolve_source_span(
         # an item-indexed fact always claims its own occurrence directly.
         if item_index is None and resource_id is not None:
             borrowed = _borrow_occurrence(resource_id, count_key, resource_claims, reference_map)
+            # Borrowing is a heuristic about relationships; the text is
+            # direct evidence. A Composition references nearly every
+            # resource in the Bundle, so it borrowed a narrative section's
+            # <code> and reported the document's own type against a
+            # section's code. Where the borrowed occurrence demonstrably
+            # does not carry this fact's value and another one does, the
+            # text wins.
+            if borrowed is not None and _occurrence_carries_value(
+                source_locator, entry, root_key, scope_hint, borrowed
+            ) is False:
+                matched = _content_matched_occurrence(source_locator, entry, root_key, scope_hint)
+                if matched is not None:
+                    borrowed = matched
         used = used_occurrences.setdefault(count_key, set())
         if borrowed is None and item_index is None and resource_id is not None:
             # Once every physical occurrence is claimed, a further resource
