@@ -124,10 +124,16 @@ header h1 {
 
 /* Running text stays at a readable measure regardless of how wide the
    page gets - only the data-heavy parts use the full width. */
-.page-intro,
 .panel > p,
 .unsupported-banner {
     max-width: var(--prose-width);
+}
+
+/* The crosswalk intro sits directly above the two panes and reads as a
+   caption for them, so it tracks their full width rather than the prose
+   cap - which left it as a narrow column against a 1440px page. */
+.page-intro {
+    max-width: none;
 }
 
 .field {
