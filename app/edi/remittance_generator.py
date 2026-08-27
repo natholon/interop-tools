@@ -9,11 +9,13 @@ from app.edi.generator import (
     PROVIDER_ORG_NAMES,
     EdiDraft,
     assemble_generated_interchange,
+    build_dmg,
     build_isa,
+    build_person_nm1,
     format_x12_date,
     format_x12_time,
 )
-from app.generators.base import maybe, random_datetime_near_now, random_identifier
+from app.generators.base import maybe, random_datetime_near_now, random_identifier, random_sex
 
 # CLP02 (Claim Status Code) - a representative subset (1=Processed as
 # Primary, 2=Secondary, 3=Tertiary, 4=Denied, 22=Reversal of Previous
@@ -24,6 +26,9 @@ _CLP_STATUS_CODES = ["1", "2", "3", "4", "22"]
 # CR=Correction.
 _CAS_GROUP_CODES = ["CO", "PR", "OA", "PI", "CR"]
 _CAS_REASON_CODES = ["45", "96", "97", "1", "2"]
+# CLP06 Claim Filing Indicator (X12 element 1032) - MC Medicaid, MB
+# Medicare Part B, CI Commercial, HM HMO, BL Blue Cross/Blue Shield.
+_CLAIM_FILING_INDICATORS = ["MC", "MB", "CI", "HM", "BL"]
 
 
 def _build_clp(rng: random.Random) -> tuple[list[str], Decimal]:
@@ -39,9 +44,21 @@ def _build_clp(rng: random.Random) -> tuple[list[str], Decimal]:
     paid = (charge * paid_fraction).quantize(Decimal("0.01"))
     responsibility = (charge - paid).quantize(Decimal("0.01"))
     segments = [
-        f"CLP*{claim_id}*{status}*{charge:.2f}*{paid:.2f}*{responsibility:.2f}*MC*"
+        f"CLP*{claim_id}*{status}*{charge:.2f}*{paid:.2f}*{responsibility:.2f}*"
+        f"{rng.choice(_CLAIM_FILING_INDICATORS)}*"
         f"PAYERCTRL{random_identifier(rng, digits=6)}*11*1~"
     ]
+    # The 2100 person loop. QC names the patient; IL alone is how an 835
+    # says the patient is the subscriber, and only one of them builds a
+    # ClaimResponse in either case - so both branches need generating, and
+    # a claim with neither has to occur too, since that is the one shape
+    # that produces no ClaimResponse at all.
+    if maybe(rng, 0.85):
+        sex = random_sex(rng)
+        entity_code = "QC" if maybe(rng, 0.75) else "IL"
+        segments.append(build_person_nm1(rng, entity_code, sex, include_id=True))
+        if maybe(rng, 0.5):
+            segments.append(build_dmg(rng, sex))
     # A CAS adjustment occurs ~80% of the time - direct fuzz coverage of
     # group_by_leader's CLP->CAS member association (deliberately not
     # mapped to any FHIR field this phase, see the module docstring, but

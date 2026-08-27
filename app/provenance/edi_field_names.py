@@ -124,7 +124,11 @@ SEGMENT_ELEMENT_NAMES: dict[str, dict[int, str]] = {
     "CLP": {
         1: "Patient Control Number",
         2: "Claim Status Code",
+        3: "Total Claim Charge Amount",
         4: "Total Claim Payment Amount",
+        5: "Patient Responsibility Amount",
+        6: "Claim Filing Indicator Code",
+        7: "Payer Claim Control Number",
     },
     "BPR": {
         2: "Total Actual Provider Payment Amount",

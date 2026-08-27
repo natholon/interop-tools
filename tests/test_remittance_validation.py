@@ -9,6 +9,9 @@ _835_BODY = [
     "N1*PR*ACME HEALTH PLAN*XV*PAYERID001~",
     "N1*PE*GENERAL HOSPITAL*XX*1234567890~",
     "CLP*PCN12345*1*500.00*150.00*350.00*MC*PAYERCTRL987*11*1~",
+    # The 2100 person loop: without it the claim builds no ClaimResponse,
+    # which is itself a finding.
+    "NM1*QC*1*DOE*JANE****MI*MEMBER001~",
 ]
 
 
@@ -143,3 +146,22 @@ def test_would_not_convert_is_error_when_payee_missing():
     finding = next(f for f in report.findings if f.rule_id == "edi.would-not-convert")
     assert finding.severity == "error"
     assert report.is_valid is False
+
+
+def test_835_claim_without_a_2100_person_loop_is_info():
+    # ClaimResponse.patient is 1..1, so a claim naming neither the patient
+    # nor the insured builds none - and with it goes the only place CLP03
+    # and CLP05 have to live.
+    body = [seg for seg in _835_BODY if not seg.startswith("NM1*QC")]
+    report = validate_interchange(parse_interchange(_build(body)))
+    finding = next(f for f in report.findings if f.rule_id == "edi.835-claim-missing-patient")
+    assert finding.severity == "info"
+    assert "PCN12345" in finding.message
+
+
+def test_835_claim_naming_only_the_insured_produces_no_finding():
+    # NM1*IL alone is how an 835 says the patient is the subscriber.
+    body = [seg.replace("NM1*QC", "NM1*IL") for seg in _835_BODY]
+    report = validate_interchange(parse_interchange(_build(body)))
+    assert not [f for f in report.findings if f.rule_id == "edi.835-claim-missing-patient"]
+

@@ -806,3 +806,52 @@ def test_edi_835_multi_claim_records_independently_indexed_details():
     assert detail1_id.value == "PCN33333"
     detail1_amount = by_path[f"Bundle.entry[{pr_index}].resource.detail[1].amount.value"]
     assert detail1_amount.value == "0.00"
+
+
+def test_edi_835_claim_response_records_the_claim_level_money():
+    # CLP03 and CLP05 had nowhere to go on PaymentReconciliationDetail, so
+    # the register reported them as lost money. They now land on a
+    # ClaimResponse, and each has to point back at its own CLP element.
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_835_basic.x12", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    claim_response_index = next(
+        i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "ClaimResponse"
+    )
+    by_path = {
+        e.fhir_path.split(".resource.")[-1]: e
+        for e in entries
+        if e.fhir_path.startswith(f"Bundle.entry[{claim_response_index}].resource.")
+    }
+    assert (by_path["total[0].amount.value"].source_location, by_path["total[0].amount.value"].value) == (
+        "CLP-3",
+        "500.00",
+    )
+    assert (by_path["total[2].amount.value"].source_location, by_path["total[2].amount.value"].value) == (
+        "CLP-5",
+        "350.00",
+    )
+    assert by_path["identifier[0].value"].source_location == "CLP-7"
+    assert by_path["subType.coding[0].code"].source_location == "CLP-6"
+    assert by_path["request.identifier.value"].source_location == "CLP-1"
+
+    # The four ClaimResponse fields FHIR requires and 835 carries no field
+    # for are inferred, never dressed up as read from somewhere.
+    for path in ("status", "use", "type.coding[0].code", "outcome"):
+        assert by_path[path].derivation == "inferred"
+        assert by_path[path].source_location is None
+
+
+def test_edi_835_each_claim_response_records_against_its_own_claim():
+    recorder = ProvenanceRecorder(source_format="EDI")
+    bundle = _build_bundle("edi_835_multi_claim.x12", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+    indices = [i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "ClaimResponse"]
+    charges = [
+        e.value
+        for i in indices
+        for e in entries
+        if e.fhir_path == f"Bundle.entry[{i}].resource.total[0].amount.value"
+    ]
+    assert charges == ["300.00", "100.00"]
+

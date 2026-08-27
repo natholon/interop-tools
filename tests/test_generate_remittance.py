@@ -3,8 +3,9 @@ from decimal import Decimal
 
 import pytest
 
+from app.edi.remittance_835 import CLP_MEMBER_SEGMENTS
 from app.edi.remittance_generator import generate_835
-from app.edi.parser import element, find_segment, first_transaction_set, parse_interchange
+from app.edi.parser import group_by_leader, element, find_segment, first_transaction_set, parse_interchange
 from app.edi.pipeline import convert_edi_to_bundle, validate_edi
 
 
@@ -47,14 +48,16 @@ def test_claim_count_varies_across_seeds():
 
 
 def test_cas_presence_varies_across_seeds():
+    # Grouped, not adjacent: the 2100 person loop sits between a claim and
+    # its CAS most of the time, and "the next segment is a CAS" stopped
+    # meaning "this claim has an adjustment" the moment that loop existed.
     with_cas = without_cas = 0
     for seed in range(60):
         transaction_set = _first_transaction_set(generate_835(random.Random(seed)))
-        for i, seg in enumerate(transaction_set.segments):
-            if seg[0] != "CLP":
-                continue
-            has_cas = i + 1 < len(transaction_set.segments) and transaction_set.segments[i + 1][0] == "CAS"
-            if has_cas:
+        for _clp, members in group_by_leader(
+            transaction_set.segments, "CLP", ["CAS", "SVC", "NM1", "DMG", "REF", "DTM", "AMT", "QTY"]
+        ):
+            if any(seg[0] == "CAS" for seg in members):
                 with_cas += 1
             else:
                 without_cas += 1
@@ -107,3 +110,31 @@ def test_generate_is_reproducible_with_same_seed():
 
 def test_generate_differs_across_seeds():
     assert generate_835(random.Random(1)) != generate_835(random.Random(2))
+
+
+def test_2100_person_loop_varies_across_seeds():
+    # QC names the patient, IL alone says the patient is the subscriber,
+    # and a claim with neither is the one shape producing no ClaimResponse
+    # - all three need generating.
+    shapes = set()
+    for seed in range(60):
+        transaction_set = _first_transaction_set(generate_835(random.Random(seed)))
+        for _clp, members in group_by_leader(transaction_set.segments, "CLP", CLP_MEMBER_SEGMENTS):
+            codes = {element(seg, 1) for seg in members if seg[0] == "NM1"}
+            shapes.add("QC" if "QC" in codes else "IL" if "IL" in codes else "none")
+    assert shapes == {"QC", "IL", "none"}
+
+
+def test_every_claim_with_a_person_loop_builds_a_claim_response():
+    for seed in range(40):
+        raw = generate_835(random.Random(seed))
+        transaction_set = _first_transaction_set(raw)
+        with_patient = sum(
+            1
+            for _clp, members in group_by_leader(transaction_set.segments, "CLP", CLP_MEMBER_SEGMENTS)
+            if any(seg[0] == "NM1" and element(seg, 1) in ("QC", "IL") for seg in members)
+        )
+        bundle = convert_edi_to_bundle(raw)
+        built = sum(1 for e in bundle.entry if e.resource.get_resource_type() == "ClaimResponse")
+        assert built == with_patient, f"seed={seed}"
+

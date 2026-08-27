@@ -2634,3 +2634,46 @@ def test_ccd_round_trip_keeps_a_second_race_on_the_sdtc_repeat():
     assert 'xmlns:sdtc="urn:hl7-org:sdtc"' in document
     assert '<sdtc:raceCode code="2108-9"' in document
 
+
+def test_edi_835_round_trip_preserves_the_claim_level_money():
+    # CLP03 and CLP05 had no FHIR-side home and were regenerated as
+    # placeholders; they now come back off the ClaimResponse the forward
+    # direction built, along with CLP06 and CLP07.
+    raw = (Path(__file__).parent / "fixtures" / "edi_835_multi_claim.x12").read_text()
+    bundle = convert_to_bundle(raw)
+    round_tripped = convert_to_bundle(build_message_from_bundle(bundle, "EDI", "835", ""))
+
+    def snapshot(b):
+        out = []
+        for entry in b.entry:
+            resource = entry.resource
+            if resource.get_resource_type() != "ClaimResponse":
+                continue
+            out.append(
+                (
+                    resource.identifier[0].value,
+                    resource.subType.coding[0].code,
+                    resource.request.identifier.value,
+                    sorted((t.category.coding[0].code, str(t.amount.value)) for t in resource.total),
+                )
+            )
+        return sorted(out)
+
+    assert snapshot(round_tripped) == snapshot(bundle)
+    assert ("submitted", "300.00") in snapshot(bundle)[0][3]
+
+
+def test_edi_835_round_trip_preserves_each_claims_patient():
+    raw = (Path(__file__).parent / "fixtures" / "edi_835_basic.x12").read_text()
+    bundle = convert_to_bundle(raw)
+    message = build_message_from_bundle(bundle, "EDI", "835", "")
+    # The forward direction reads NM1*QC first, so regenerating QC
+    # re-resolves to the same patient regardless of which the source used.
+    assert "NM1*QC*1*DOE*JANE" in message
+    assert "DMG*D8*19800101*F" in message
+
+    patient = next(
+        e.resource for e in convert_to_bundle(message).entry if e.resource.get_resource_type() == "Patient"
+    )
+    assert (patient.name[0].family, str(patient.birthDate), patient.gender) == ("DOE", "1980-01-01", "female")
+

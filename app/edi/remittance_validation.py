@@ -9,7 +9,8 @@ style `Edi835Builder.build_bundle()` itself uses. `app/edi/validation.py`'s
 
 from datetime import datetime
 
-from app.edi.parser import Segment, TransactionSet, element, find_segment, parse_decimal
+from app.edi.parser import Segment, TransactionSet, element, find_segment, group_by_leader, parse_decimal
+from app.edi.remittance_835 import CLP_MEMBER_SEGMENTS, find_2100_patient_nm1
 from app.validation.common import not_in_future
 from app.validation.models import ValidationFinding
 
@@ -112,6 +113,35 @@ def _rule_835_claim_paid_exceeds_charge(transaction_set: TransactionSet) -> list
     return []
 
 
+def _rule_835_claim_missing_patient(transaction_set: TransactionSet) -> list[ValidationFinding]:
+    """A claim with no 2100 person loop builds no ClaimResponse.
+
+    ClaimResponse.patient is 1..1, so a claim naming neither the patient
+    (NM1*QC) nor the insured (NM1*IL) has nothing to point it at - and the
+    ClaimResponse is where the charge and patient-responsibility amounts
+    live, since PaymentReconciliationDetail has room for only one amount.
+    So this is not cosmetic: those two amounts are silently not carried.
+    Walked through the same grouping the mapper uses, so the rule can
+    never see a different set of claims than conversion does.
+    """
+    findings = []
+    for clp, members in group_by_leader(transaction_set.segments, "CLP", CLP_MEMBER_SEGMENTS):
+        if find_2100_patient_nm1(members) is not None:
+            continue
+        findings.append(
+            ValidationFinding(
+                severity="info",
+                rule_id="edi.835-claim-missing-patient",
+                segment="2100/CLP",
+                message=(
+                    f"Claim {element(clp, 1)!r} names no patient (NM1*QC) or insured (NM1*IL), so no "
+                    "ClaimResponse is built and its CLP03 charge and CLP05 patient responsibility are not carried."
+                ),
+            )
+        )
+    return findings
+
+
 def validate_835(transaction_set: TransactionSet, now: datetime) -> list[ValidationFinding]:
     return (
         _rule_835_bpr02_total_mismatch(transaction_set)
@@ -119,4 +149,5 @@ def validate_835(transaction_set: TransactionSet, now: datetime) -> list[Validat
         + _rule_835_missing_payer_name(transaction_set)
         + _rule_835_missing_payee_name(transaction_set)
         + _rule_835_claim_paid_exceeds_charge(transaction_set)
+        + _rule_835_claim_missing_patient(transaction_set)
     )

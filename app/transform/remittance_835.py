@@ -25,15 +25,18 @@ populated by the forward mapper and there's no third organization/HL
 loop to disambiguate against.
 
 **Disclosed round-trip fidelity gaps**: `BPR01`/`BPR03`/`BPR04` (Handling
-Code/Credit-Debit Flag/Payment Method) and `CLP03`/`CLP05`/`CLP06`/`CLP07`
-(charge amount/patient responsibility/filing indicator/payer control
-number) have no FHIR-side home at all - the forward mapper never reads
-any of them into `PaymentReconciliation`/`.detail[]` - so each gets a
-fixed, disclosed placeholder value on the way back out (`CLP03` mirrors
-`CLP04`'s own paid amount, the closest available real number, rather than
-a fabricated one), the same "no source field, disclosed placeholder"
-precedent every earlier reverse slice already established. `CAS`
-(claim-level adjustments) and `SVC` (service-line detail) are never
+Code/Credit-Debit Flag/Payment Method) have no FHIR-side home at all, so
+each gets a fixed, disclosed placeholder on the way back out.
+
+`CLP03`/`CLP05`/`CLP06`/`CLP07` and the 2100 person loop all come back off
+the `ClaimResponse` the forward direction built for that claim, resolved
+through `detail.response`. `CLP03` still falls back to mirroring `CLP04`
+when a claim has no ClaimResponse (one with no patient loop), which is
+what this builder did for every claim before the charge had anywhere to
+live. Which of `NM1*QC`/`NM1*IL` the source used is not recoverable -
+the forward direction reads QC first and falls back to IL - so QC is
+always regenerated, which re-resolves to the same patient either way.
+`CAS` (claim-level adjustments) and `SVC` (service-line detail) are never
 regenerated either, matching the forward mapper's own disclosed
 "not modeled this phase" scope limit for both."""
 
@@ -45,7 +48,11 @@ from app.edi.remittance_835 import (
     ADJUSTMENT_PAYMENT_TYPE,
     CAS_GROUP_SYSTEM,
     CAS_REASON_SYSTEM,
+    ADJUDICATION_SYSTEM,
     CLP_STATUS_SYSTEM,
+    PATIENT_RESPONSIBILITY_CODE,
+    PATIENT_RESPONSIBILITY_SYSTEM,
+    SUBMITTED_ADJUDICATION,
     N1_ID_FALLBACK_SYSTEM,
     PAYMENT_TYPE_SYSTEM,
 )
@@ -54,9 +61,12 @@ from app.transform.base import MessageBuilder
 from app.transform.common import find_resource
 from app.transform.edi_common import (
     DEFAULT_ST_CONTROL,
+    build_dmg,
     build_envelope_segments,
+    build_person_nm1,
     build_trailer_segments,
     envelope_datetime,
+    resolve_by_reference,
     sanitize_x12_text,
 )
 
@@ -140,7 +150,23 @@ def _build_cas_segment(detail) -> str:
     return "CAS*" + "*".join([group_code, reason_code, amount]) + "~"
 
 
-def _build_clp_segment(detail) -> str:
+def _total_amount(claim_response, system: str, code: str) -> str:
+    for total in (claim_response.total if claim_response else None) or []:
+        for coding in (total.category.coding if total.category else None) or []:
+            if coding.system == system and coding.code == code and total.amount:
+                return f"{total.amount.value:.2f}"
+    return ""
+
+
+def _build_claim_segments(detail, bundle) -> list[str]:
+    """One CLP and, when the claim has a patient, its 2100 person loop.
+
+    CLP03 and CLP05 come back off the ClaimResponse the forward direction
+    built for this claim, which is where the charge and the patient
+    responsibility live - PaymentReconciliationDetail has room for only
+    one amount. `.response` is how the two are tied together.
+    """
+    claim_response = resolve_by_reference(bundle, detail.response)
     claim_id = sanitize_x12_text(detail.identifier.value) if detail.identifier and detail.identifier.value else ""
     status_code = ""
     if detail.type and detail.type.coding:
@@ -149,12 +175,34 @@ def _build_clp_segment(detail) -> str:
                 status_code = coding.code
     # See _build_bpr_segment's own comment above for why :.2f, not str().
     paid_amount = f"{detail.amount.value:.2f}" if detail.amount else "0.00"
-    # CLP03 (charge amount) has no FHIR-side home - mirrors CLP04's own
-    # paid amount as the closest available real number, disclosed rather
-    # than fabricated. CLP05-07 (patient responsibility/filing indicator/
-    # payer control number) are left empty for the same reason.
-    fields = [claim_id, status_code, paid_amount, paid_amount, "", "", ""]
-    return "CLP*" + "*".join(fields) + "~"
+    # CLP03 falls back to the paid amount only when no ClaimResponse
+    # carries the real charge - a disclosed placeholder, not a fabricated
+    # number, and the same choice this builder made for every claim before
+    # the charge had anywhere to live.
+    charge_amount = _total_amount(claim_response, ADJUDICATION_SYSTEM, SUBMITTED_ADJUDICATION) or paid_amount
+    responsibility = _total_amount(claim_response, PATIENT_RESPONSIBILITY_SYSTEM, PATIENT_RESPONSIBILITY_CODE)
+    filing_indicator = ""
+    control_number = ""
+    if claim_response is not None:
+        if claim_response.subType and claim_response.subType.coding:
+            filing_indicator = sanitize_x12_text(claim_response.subType.coding[0].code or "")
+        if claim_response.identifier and claim_response.identifier[0].value:
+            control_number = sanitize_x12_text(claim_response.identifier[0].value)
+
+    fields = [claim_id, status_code, charge_amount, paid_amount, responsibility, filing_indicator, control_number]
+    segments = ["CLP*" + "*".join(fields).rstrip("*") + "~"]
+
+    # The forward direction reads NM1*QC first and NM1*IL only as a
+    # fallback, so regenerating QC always re-resolves to the same patient
+    # - which of the two the source used is not recoverable, and does not
+    # change the Bundle either way.
+    patient = resolve_by_reference(bundle, claim_response.patient) if claim_response is not None else None
+    if patient is not None:
+        segments.append(build_person_nm1("QC", patient, include_id=True))
+        dmg = build_dmg(patient)
+        if dmg:
+            segments.append(dmg)
+    return segments
 
 
 class Edi835Builder(MessageBuilder):
@@ -206,7 +254,7 @@ class Edi835Builder(MessageBuilder):
         details = payment_reconciliation.detail or []
         payments = [d for d in details if not _is_adjustment(d)]
         adjustments = [d for d in details if _is_adjustment(d)]
-        body_segments = [_build_clp_segment(detail) for detail in payments]
+        body_segments = [seg for detail in payments for seg in _build_claim_segments(detail, bundle)]
         # Adjustments are emitted after the first claim. The forward
         # direction cannot record which claim (or service line) a CAS
         # belonged to - PaymentReconciliation has no service-line concept
@@ -214,11 +262,12 @@ class Edi835Builder(MessageBuilder):
         # Re-parsing this output yields the identical flat list, so the
         # round trip is stable at the Bundle level even though the original
         # segment placement is not reproduced.
-        if adjustments and body_segments:
+        if adjustments and payments:
+            first_claim = _build_claim_segments(payments[0], bundle)
             body_segments = (
-                body_segments[:1]
+                body_segments[: len(first_claim)]
                 + [_build_cas_segment(detail) for detail in adjustments]
-                + body_segments[1:]
+                + body_segments[len(first_claim) :]
             )
 
         trailer_segments = build_trailer_segments(header_segments, body_segments)

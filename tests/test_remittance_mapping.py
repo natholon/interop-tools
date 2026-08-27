@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.edi.parser import first_transaction_set, parse_interchange
+from app.edi.pipeline import convert_edi_to_bundle
 from app.edi.remittance_835 import Edi835Builder
 from app.hl7.errors import MappingError, MissingSegmentError
 
@@ -241,3 +242,81 @@ def test_each_claims_adjustments_are_all_carried():
         for d in _adjustments(pr)
     ]
     assert reasons == ["45", "96"]
+
+
+def _claim_responses(bundle):
+    return [e.resource for e in bundle.entry if e.resource.get_resource_type() == "ClaimResponse"]
+
+
+def _total(claim_response, code: str):
+    for total in claim_response.total or []:
+        if total.category.coding[0].code == code:
+            return str(total.amount.value)
+    return None
+
+
+def test_claim_money_lands_on_a_claim_response():
+    # R4 PaymentReconciliationDetail carries one amount and a claim has
+    # three, so the charge and the patient responsibility go where FHIR
+    # models adjudication totals.
+    bundle = convert_edi_to_bundle(read_fixture("edi_835_basic.x12"))
+    claim_response = _claim_responses(bundle)[0]
+    assert _total(claim_response, "submitted") == "500.00"
+    assert _total(claim_response, "benefit") == "150.00"
+    assert _total(claim_response, "patient-responsibility") == "350.00"
+
+
+def test_claim_response_carries_the_payer_control_number_and_filing_indicator():
+    bundle = convert_edi_to_bundle(read_fixture("edi_835_basic.x12"))
+    claim_response = _claim_responses(bundle)[0]
+    assert claim_response.identifier[0].value == "PAYERCTRL987"
+    assert claim_response.subType.coding[0].code == "MC"
+    # The submitted Claim is not in this Bundle - an 835 stands alone - so
+    # CLP01 comes back as a reference by identifier.
+    assert claim_response.request.identifier.value == "PCN12345"
+
+
+def test_claim_response_references_the_2100_patient_and_the_payer():
+    bundle = convert_edi_to_bundle(read_fixture("edi_835_basic.x12"))
+    claim_response = _claim_responses(bundle)[0]
+    by_id = {e.resource.id: e.resource for e in bundle.entry}
+    patient = by_id[claim_response.patient.reference.removeprefix("urn:uuid:")]
+    assert patient.name[0].family == "DOE"
+    assert str(patient.birthDate) == "1980-01-01"
+    assert by_id[claim_response.insurer.reference.removeprefix("urn:uuid:")].name == "ACME HEALTH PLAN"
+
+
+def test_payment_detail_points_at_its_own_claim_response():
+    bundle = convert_edi_to_bundle(read_fixture("edi_835_multi_claim.x12"))
+    reconciliation = next(
+        e.resource for e in bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation"
+    )
+    by_id = {c.id: c for c in _claim_responses(bundle)}
+    claims = [d for d in reconciliation.detail if d.response is not None]
+    assert [by_id[d.response.reference.removeprefix("urn:uuid:")].identifier[0].value for d in claims] == [
+        "PAYERCTRL111",
+        "PAYERCTRL222",
+    ]
+    # A CAS adjustment is not a claim, so it gets no response.
+    assert any(d.response is None for d in reconciliation.detail)
+
+
+def test_insured_loop_is_used_when_no_patient_loop_is_present():
+    # NM1*IL alone is how an 835 says the patient is the subscriber.
+    bundle = convert_edi_to_bundle(read_fixture("edi_835_multi_claim.x12"))
+    patients = [e.resource for e in bundle.entry if e.resource.get_resource_type() == "Patient"]
+    assert sorted(p.name[0].family for p in patients) == ["BROWN", "SMITH"]
+
+
+def test_claim_without_a_2100_person_loop_builds_no_claim_response():
+    # ClaimResponse.patient is 1..1 - there would be nothing to point it
+    # at, so the claim keeps its PaymentReconciliation detail and no more.
+    raw = read_fixture("edi_835_basic.x12")
+    stripped = raw.replace("NM1*QC*1*DOE*JANE****MI*MEMBER001~", "").replace("DMG*D8*19800101*F~", "")
+    bundle = convert_edi_to_bundle(stripped)
+    assert _claim_responses(bundle) == []
+    reconciliation = next(
+        e.resource for e in bundle.entry if e.resource.get_resource_type() == "PaymentReconciliation"
+    )
+    assert all(d.response is None for d in reconciliation.detail)
+

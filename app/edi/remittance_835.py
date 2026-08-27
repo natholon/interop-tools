@@ -1,5 +1,5 @@
 """X12 835 (Health Care Claim Payment/Advice - Electronic Remittance
-Advice) -> FHIR PaymentReconciliation.
+Advice) -> FHIR PaymentReconciliation, plus a ClaimResponse per claim.
 
 **835 has no HL segments at all** - a genuine structural break from every
 other EDI family here. The 005010X221 TR3's sequence is
@@ -40,10 +40,38 @@ service-line ("correlates a payment amount to the adjudicated claim
 amounts", per the R4 spec). Per `CLP` group: `.type` = CLP02 on a
 disclosed local system (no free authoritative CLP02 table exists the way
 x12.org publishes STC's), `.identifier` = CLP01, `.amount` = CLP04.
-`.request`/`.response` stay unset - a standalone 835 has no
-`Claim`/`ClaimResponse` in its Bundle to reference, and unlike 271's
-`.request` there is no identifier fallback, since `.identifier` is
-already spoken for by CLP01.
+
+**A claim carries three amounts and `detail` has room for one**, so the
+other two ride on a `ClaimResponse` per claim - where FHIR models
+adjudication totals, and what CARIN BB and Da Vinci PDex both do. R4
+`PaymentReconciliationDetail` has no charge field at all (nor does R5's
+`allocation`), so CLP03 was the one place in this app real money was
+dropped. `detail.response` points at the ClaimResponse, which is what
+that field is for.
+
+    CLP03 -> total[submitted]   CLP06 -> subType (example binding)
+    CLP04 -> total[benefit]     CLP07 -> identifier
+    CLP05 -> total[patient responsibility, disclosed local code]
+    CLP01 -> request, by identifier - the submitted Claim is not here
+
+`ClaimResponse.patient` is 1..1, so this needs the 2100 person loop:
+`NM1*QC` names the patient, and `NM1*IL` alone is how an 835 says the
+patient is the subscriber. A claim with neither builds no ClaimResponse
+and keeps only its `detail` - reported by
+`edi.835-claim-missing-patient` rather than left silent, since the charge
+and patient responsibility go with it.
+
+`.status`, `.type` and `.outcome` are required and 835 carries a source
+field for none of them, so each is a disclosed default recorded as
+inferred; `.use` is genuinely fixed, an 835 remitting a submitted claim
+rather than a preauthorization.
+
+**BPR01/03/04 (transaction handling, credit-debit flag, payment method)
+have no R4 target and are deliberately unmapped.** R5 added `.method` and
+`.kind` for exactly these; R4B has neither, and this app does not ship an
+R5-to-R4 backport extension it cannot verify resolves - the same call
+made for C-CDA's own `ED`-typed values. They report as drops citing the
+absent X12-to-FHIR crosswalk, like every other unmapped EDI element.
 
 **CAS adjustments each become their own `detail[]`.** One CAS carries a
 group code plus up to six (reason, amount, quantity) triplets, and each
@@ -71,6 +99,7 @@ against the CLP04 already carried on the claim's own detail."""
 import uuid
 
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
+from fhir.resources.R4B.claimresponse import ClaimResponse, ClaimResponseTotal
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.identifier import Identifier
@@ -81,7 +110,7 @@ from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.resource import Resource
 
 from app.edi.base import EdiTransactionBuilder
-from app.edi.common import resolve_id_qualifier_system
+from app.edi.common import build_patient_from_nm1_dmg, resolve_id_qualifier_system
 from app.edi.parser import Delimiters, Segment, TransactionSet, element, find_segment, group_by_leader, parse_decimal
 from app.fhir_models.builders import parse_hl7_date
 from app.hl7.errors import MappingError, MissingSegmentError
@@ -102,6 +131,57 @@ N1_ID_FALLBACK_SYSTEM = "urn:interop-tools:x12-n1-id"
 # local system for PaymentReconciliationDetail.type, same category as
 # claim_status.py's own STC-derived Coding systems.
 CLP_STATUS_SYSTEM = "urn:interop-tools:x12-clp-status-code"
+
+# The claim-level money. R4 PaymentReconciliationDetail carries only
+# `.amount` - there is nowhere on it for a charge or a patient
+# responsibility (R5's `allocation` has no such field either), so the
+# amounts ride on a ClaimResponse per claim, which is where FHIR models
+# adjudication totals and what CARIN BB and Da Vinci PDex both do.
+#
+# `total.category` binds at *example* strength, so the two base R4
+# adjudication codes are used where they fit exactly and a disclosed local
+# code covers the one that has none:
+#   CLP03 -> submitted ("The total submitted amount for the claim", verbatim)
+#   CLP04 -> benefit   ("Amount payable under the coverage")
+#   CLP05 -> patient responsibility, which base R4 has no aggregate code
+#           for - it offers copay and deductible, both narrower than CLP05.
+ADJUDICATION_SYSTEM = "http://terminology.hl7.org/CodeSystem/adjudication"
+SUBMITTED_ADJUDICATION = "submitted"
+BENEFIT_ADJUDICATION = "benefit"
+PATIENT_RESPONSIBILITY_SYSTEM = "urn:interop-tools:x12-clp-patient-responsibility"
+PATIENT_RESPONSIBILITY_CODE = "patient-responsibility"
+
+# CLP07 (Payer Claim Control Number) identifies the payer's own
+# adjudication of the claim, which is what a ClaimResponse is.
+PAYER_CLAIM_CONTROL_SYSTEM = "urn:interop-tools:x12-payer-claim-control-number"
+# CLP06 (Claim Filing Indicator Code, X12 element 1032) classifies the
+# coverage the claim was filed under - MC Medicaid, MB Medicare Part B, CI
+# Commercial, and so on. ClaimResponse.subType ("more granular claim
+# type") binds at *example* strength, so the raw code is conformant there;
+# X12 publishes no free authoritative table, hence a disclosed local
+# system, the same footing as CLP_STATUS_SYSTEM.
+CLAIM_FILING_INDICATOR_SYSTEM = "urn:interop-tools:x12-claim-filing-indicator"
+CLP01_CLAIM_IDENTIFIER_SYSTEM = "urn:interop-tools:x12-claim-submitter-identifier"
+
+# ClaimResponse requires all four, and an 835 carries a source field for
+# none of them. `use` is genuinely fixed: an 835 remits a submitted claim,
+# never a preauthorization or predetermination. The others are disclosed
+# defaults, recorded as inferred.
+_DEFAULT_CLAIM_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/claim-type"
+_DEFAULT_CLAIM_TYPE = "professional"
+_CLAIM_RESPONSE_USE = "claim"
+_CLAIM_RESPONSE_OUTCOME = "complete"
+
+# 2100 person loops. QC is the patient; IL is the insured, used only when
+# no QC is present - which is how an 835 spells "the patient is the
+# subscriber".
+# Public - app/edi/remittance_validation.py walks the identical claim
+# groups, so the two can never disagree about which segments belong to a
+# claim or which NM1 names its patient.
+CLP_MEMBER_SEGMENTS = ["CAS", "SVC", "NM1", "DMG", "REF", "DTM", "AMT", "QTY"]
+
+_NM1_PATIENT = "QC"
+_NM1_INSURED = "IL"
 
 # CAS adjustments. `adjustment` is FHIR's own code for exactly this - the
 # R4 payment-type CodeSystem is payment|adjustment|advance - and
@@ -197,6 +277,136 @@ def _build_detail(clp: Segment, index: int, resource_id: str | None = None, reco
             recorder.record(resource_id, f"{detail_path}.amount.value", edi_location("CLP", 4), claim_paid_raw)
 
     return detail
+
+
+def find_2100_patient_nm1(members) -> Segment | None:
+    """The 2100 loop's patient NM1, preferring QC over IL.
+
+    Both are person loops; QC names the patient directly, and IL names the
+    insured, which an 835 uses alone when the patient is the subscriber.
+    """
+    by_code = {}
+    for segment in members:
+        if segment[0] != "NM1":
+            continue
+        by_code.setdefault(element(segment, 1).strip().upper(), segment)
+    return by_code.get(_NM1_PATIENT) or by_code.get(_NM1_INSURED)
+
+
+def _build_total(category: Coding, amount: Money) -> ClaimResponseTotal:
+    return ClaimResponseTotal(category=CodeableConcept(coding=[category]), amount=amount)
+
+
+def _build_claim_response(
+    clp: Segment,
+    patient_id: str,
+    payer_id: str,
+    payee_id: str,
+    created,
+    recorder=None,
+) -> ClaimResponse:
+    """One CLP -> one ClaimResponse, carrying the claim-level money.
+
+    R4 PaymentReconciliationDetail has room for one amount and this claim
+    has three, so the charge (CLP03), the payment (CLP04) and the patient
+    responsibility (CLP05) go where FHIR models adjudication totals. The
+    PaymentReconciliation's own detail then references this by urn:uuid
+    rather than leaving `.response` unset.
+    """
+    claim_response_id = str(uuid.uuid4())
+    totals = []
+    for field_num, coding in (
+        (3, Coding(system=ADJUDICATION_SYSTEM, code=SUBMITTED_ADJUDICATION)),
+        (4, Coding(system=ADJUDICATION_SYSTEM, code=BENEFIT_ADJUDICATION)),
+        (5, Coding(system=PATIENT_RESPONSIBILITY_SYSTEM, code=PATIENT_RESPONSIBILITY_CODE)),
+    ):
+        raw = element(clp, field_num)
+        amount = _parse_money(raw)
+        if amount is None:
+            continue
+        totals.append(_build_total(coding, amount))
+        if recorder:
+            index = len(totals) - 1
+            recorder.record(
+                claim_response_id,
+                f"total[{index}].amount.value",
+                edi_location("CLP", field_num),
+                raw,
+            )
+
+    claim_response = ClaimResponse(
+        id=claim_response_id,
+        status="active",
+        type=CodeableConcept(coding=[Coding(system=_DEFAULT_CLAIM_TYPE_SYSTEM, code=_DEFAULT_CLAIM_TYPE)]),
+        use=_CLAIM_RESPONSE_USE,
+        patient=Reference(reference=f"urn:uuid:{patient_id}"),
+        created=created,
+        insurer=Reference(reference=f"urn:uuid:{payer_id}"),
+        outcome=_CLAIM_RESPONSE_OUTCOME,
+    )
+    claim_response.requestor = Reference(reference=f"urn:uuid:{payee_id}")
+    if totals:
+        claim_response.total = totals
+
+    control_number = element(clp, 7)
+    if control_number:
+        claim_response.identifier = [
+            Identifier(system=PAYER_CLAIM_CONTROL_SYSTEM, value=control_number)
+        ]
+        if recorder:
+            recorder.record(
+                claim_response_id, "identifier[0].value", edi_location("CLP", 7), control_number
+            )
+
+    filing_indicator = element(clp, 6)
+    if filing_indicator:
+        claim_response.subType = CodeableConcept(
+            coding=[Coding(system=CLAIM_FILING_INDICATOR_SYSTEM, code=filing_indicator)]
+        )
+        if recorder:
+            recorder.record(
+                claim_response_id,
+                "subType.coding[0].code",
+                edi_location("CLP", 6),
+                filing_indicator,
+            )
+
+    # The submitted Claim is not in this Bundle - an 835 stands alone - so
+    # it is referenced by identifier, the same shape 271 uses for its own
+    # unresolvable .request.
+    claim_id = element(clp, 1)
+    if claim_id:
+        claim_response.request = Reference(
+            identifier=Identifier(system=CLP01_CLAIM_IDENTIFIER_SYSTEM, value=claim_id)
+        )
+        if recorder:
+            recorder.record(
+                claim_response_id,
+                "request.identifier.value",
+                edi_location("CLP", 1),
+                claim_id,
+            )
+
+    if recorder:
+        for path, reason, value in (
+            ("status", "Every ClaimResponse this app builds from an 835 has status=\"active\" - no X12 field carries one.", "active"),
+            ("use", "An 835 remits a submitted claim, never a preauthorization or predetermination, so use is fixed.", _CLAIM_RESPONSE_USE),
+            (
+                "type.coding[0].code",
+                "ClaimResponse.type is required and 835 carries no claim-type field, so it defaults to the "
+                "dominant real-world value.",
+                _DEFAULT_CLAIM_TYPE,
+            ),
+            (
+                "outcome",
+                "An 835 reports a completed adjudication. CLP02 has no free authoritative code table to "
+                "crosswalk from, and is carried verbatim on PaymentReconciliationDetail.type.",
+                _CLAIM_RESPONSE_OUTCOME,
+            ),
+        ):
+            recorder.record_inferred(claim_response_id, path, reason, value)
+
+    return claim_response
 
 
 def _build_adjustment_details(
@@ -381,11 +591,31 @@ class Edi835Builder(EdiTransactionBuilder):
         # group_by_leader is needed again here (rather than the flat CLP
         # scan this used to do) because a CAS belongs to whichever claim
         # precedes it - including one nested under that claim's SVC lines.
-        clp_groups = group_by_leader(segments, "CLP", ["CAS", "SVC", "NM1", "REF", "DTM", "AMT", "QTY"])
+        clp_groups = group_by_leader(segments, "CLP", CLP_MEMBER_SEGMENTS)
         details = [
             _build_detail(clp, i, resource_id=payment_reconciliation_id, recorder=recorder)
             for i, (clp, _members) in enumerate(clp_groups)
         ]
+
+        # One ClaimResponse per claim, carrying the money R4
+        # PaymentReconciliationDetail has nowhere to put (see
+        # _build_claim_response). A claim with no resolvable 2100 person
+        # loop gets none: ClaimResponse.patient is 1..1, so there would be
+        # nothing to point it at.
+        claim_responses: list[Resource] = []
+        patients: list[Resource] = []
+        for detail, (clp, members) in zip(details, clp_groups):
+            patient_nm1 = find_2100_patient_nm1(members)
+            if patient_nm1 is None:
+                continue
+            dmg = next((seg for seg in members if seg[0] == "DMG"), None)
+            patient = build_patient_from_nm1_dmg(patient_nm1, dmg, recorder=recorder)
+            claim_response = _build_claim_response(
+                clp, patient.id, payer.id, payee.id, payment_date, recorder=recorder
+            )
+            patients.append(patient)
+            claim_responses.append(claim_response)
+            detail.response = Reference(reference=f"urn:uuid:{claim_response.id}")
         for _clp, members in clp_groups:
             details.extend(
                 _build_adjustment_details(
@@ -398,5 +628,5 @@ class Edi835Builder(EdiTransactionBuilder):
         if details:
             payment_reconciliation.detail = details
 
-        resources: list[Resource] = [payer, payee, payment_reconciliation]
+        resources: list[Resource] = [payer, payee, *patients, *claim_responses, payment_reconciliation]
         return _assemble_835_bundle(trace_number, *resources, recorder=recorder)

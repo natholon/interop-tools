@@ -327,6 +327,37 @@ def _locate(source_locator, source_location: str, occurrence: int, scope_hint: s
     return source_locator.locate(source_location, occurrence)
 
 
+def _content_matched_occurrence(
+    source_locator,
+    entry: ProvenanceEntry,
+    root_key: str,
+    scope_hint: str | None,
+    skip: set[int] | None = None,
+) -> int | None:
+    """The occurrence whose own text at this location equals the fact's
+    recorded value, or None when nothing matches.
+
+    `skip` excludes already-claimed occurrences, which is what a fresh
+    claim wants. A resource that has to *share* an occurrence passes
+    nothing, since every occurrence is already spoken for by then and the
+    question is which one to share, not whether one is free.
+    """
+    expected = entry.source_value if entry.source_value is not None else entry.value
+    if expected is None:
+        return None
+    total = _occurrence_count(source_locator, root_key, scope_hint)
+    for candidate in range(total):
+        if skip is not None and candidate in skip:
+            continue
+        span = _locate(source_locator, entry.source_location, candidate, scope_hint)
+        if span is None:
+            continue
+        start, end = span
+        if source_locator.display_text[start:end] == expected:
+            return candidate
+    return None
+
+
 def _claim_fresh_occurrence(
     source_locator,
     entry: ProvenanceEntry,
@@ -340,18 +371,9 @@ def _claim_fresh_occurrence(
     verification can't apply. See this module's own docstring for the real
     837P/837I/837D bug this exists to fix, and why the fallback is safe for
     every case the original scheme already got right."""
-    expected = entry.source_value if entry.source_value is not None else entry.value
-    if expected is not None:
-        total = _occurrence_count(source_locator, root_key, scope_hint)
-        for candidate in range(total):
-            if candidate in used:
-                continue
-            span = _locate(source_locator, entry.source_location, candidate, scope_hint)
-            if span is None:
-                continue
-            start, end = span
-            if source_locator.display_text[start:end] == expected:
-                return candidate
+    matched = _content_matched_occurrence(source_locator, entry, root_key, scope_hint, skip=used)
+    if matched is not None:
+        return matched
     candidate = 0
     while candidate in used:
         candidate += 1
@@ -415,7 +437,19 @@ def _resolve_source_span(
                     resource_id, count_key, resource_claims, reference_map, allow_relayed=True
                 )
                 if borrowed is None:
-                    borrowed = min(used)
+                    # Every occurrence is claimed, so this resource must
+                    # share one - but which. An 835 builds a ClaimResponse
+                    # per CLP, and each is a *different* claim, so
+                    # collapsing them all onto the lowest occurrence made
+                    # every claim past the first highlight the first CLP's
+                    # text. Content matching picks the right one to share;
+                    # min(used) stays the fallback for a value that was
+                    # transformed on the way through and so matches no
+                    # physical text (the C-CDA panel case this branch was
+                    # originally written for).
+                    borrowed = _content_matched_occurrence(source_locator, entry, root_key, scope_hint)
+                    if borrowed is None:
+                        borrowed = min(used)
         if borrowed is not None:
             occurrence, is_original = borrowed, False
         else:

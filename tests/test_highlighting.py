@@ -524,17 +524,24 @@ def test_835_multi_claim_details_each_resolve_to_their_own_clp_segment():
     bundle, report, _ = convert_with_provenance(raw)
     payload = build_highlighting_payload(bundle, report, raw, report.source_format)
     by_path = _match_by_path(report, payload)
+    # Located rather than hardcoded: the 835 Bundle gained a Patient and a
+    # ClaimResponse per claim, which shifted every entry index after the
+    # payer/payee pair.
+    reconciliation = next(
+        i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "PaymentReconciliation"
+    )
+    base = f"Bundle.entry[{reconciliation}].resource"
 
-    first_id_entry, first_id_match = by_path["Bundle.entry[2].resource.detail[0].identifier.value"]
-    second_id_entry, second_id_match = by_path["Bundle.entry[2].resource.detail[1].identifier.value"]
+    first_id_entry, first_id_match = by_path[f"{base}.detail[0].identifier.value"]
+    second_id_entry, second_id_match = by_path[f"{base}.detail[1].identifier.value"]
     assert first_id_entry.value == "PCN22222"
     assert second_id_entry.value == "PCN33333"
     assert _resolved_source_text(payload, first_id_match) == "PCN22222"
     assert _resolved_source_text(payload, second_id_match) == "PCN33333"
     assert first_id_match.source_span != second_id_match.source_span
 
-    first_amount_entry, first_amount_match = by_path["Bundle.entry[2].resource.detail[0].amount.value"]
-    second_amount_entry, second_amount_match = by_path["Bundle.entry[2].resource.detail[1].amount.value"]
+    first_amount_entry, first_amount_match = by_path[f"{base}.detail[0].amount.value"]
+    second_amount_entry, second_amount_match = by_path[f"{base}.detail[1].amount.value"]
     assert first_amount_entry.value == "250.00"
     assert second_amount_entry.value == "0.00"
     assert _resolved_source_text(payload, first_amount_match) == "250.00"
