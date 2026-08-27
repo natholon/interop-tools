@@ -2,6 +2,93 @@
 
 A healthcare interoperability toolkit - transformation, FHIR conversion, validation, and synthetic test-data generation across HL7v2, C-CDA, and X12 EDI.
 
+## Disclaimer — read this before using interop-tools with real data
+
+**interop-tools is provided as-is, without warranty of any kind**, under the
+[Apache License 2.0](LICENSE) — see its "Disclaimer of Warranty" (section 7)
+and "Limitation of Liability" (section 8), which govern. It is an open-source
+engineering tool for exploring, prototyping, and inspecting healthcare data
+transformation. It is not certified, accredited, or independently validated
+software.
+
+Deciding whether this tool is appropriate for your purpose is your
+responsibility, not the author's. That decision should be based on your own
+evaluation against the source specifications and your trading partners'
+requirements — not on this README.
+
+### What it is not
+
+- **Not certified or conformance-tested.** No ONC Health IT certification, no
+  HIPAA compliance attestation, no conformance testing against any
+  implementation guide's official test suite.
+- **Not a clinical system.** Nothing it produces should be used for clinical
+  decision-making, diagnosis, treatment, or patient care.
+- **Not a billing or claims system.** Do not submit X12 output to a payer or
+  clearinghouse without independent validation. Incorrectly submitted claims
+  can carry financial and legal consequences.
+- **Not a substitute** for a certified interface engine, a licensed X12
+  translator, or a validated FHIR server.
+
+### How the mappings are derived, and where they are not authoritative
+
+The whole point of the Data Specification crosswalk is that you do not have
+to take any mapping on trust — every field decision is shown, sourced, and
+reviewable. Use it. In particular:
+
+- **HL7v2 and C-CDA** follow HL7's free, ballot-published
+  [v2-to-FHIR](https://build.fhir.org/ig/HL7/v2-to-fhir/) and
+  [C-CDA on FHIR](https://build.fhir.org/ig/HL7/ccda-on-fhir/) guides wherever
+  a mapping is published for the field in question. *Ballot-published is not
+  the same as normative and final* — these guides are still changing.
+- **X12 EDI has no free, official X12-to-FHIR crosswalk.** The TR3
+  Implementation Guides are commercial. Every X12 mapping here is this
+  project's own documented judgment, checked against free X12.org examples,
+  free companion guides, and the base FHIR specification. **A reasonable
+  implementer could map these differently, and your trading partner may
+  expect something different.**
+- Where a standard is silent, or the tool has to choose a default, that
+  choice is recorded as `inferred` and surfaced in the crosswalk rather than
+  hidden. Those rows are the ones worth reading first.
+- **Coverage is deliberately partial.** Each module documents its own scope
+  limits — unmapped fields, lossy joins, "first transaction set only", and so
+  on — in [CLAUDE.md](CLAUDE.md), next to the code they apply to.
+
+### What it does not check
+
+- **No FHIR profile or implementation-guide conformance validation.** The
+  underlying `fhir.resources` library validates structure, not terminology
+  bindings: it will happily accept a code that is not in a required value set.
+- **No terminology validation.** There is no LOINC, SNOMED CT, RxNorm, CPT, or
+  CDT licence behind this tool and no terminology server. Codes are carried
+  through and, where a system OID is recognized, relabelled — never verified.
+- **The built-in validator is not a conformance validator.** It reports
+  structural completeness and data-quality plausibility (a birth date in the
+  future, a discharge before an admit). Passing it says nothing about whether
+  a message conforms to any standard.
+- **Round trips are lossy in documented places.** Converting to FHIR and back
+  will not always reproduce the original message byte-for-byte; where it
+  cannot, the reason is documented.
+
+### Data handling
+
+- The application runs locally and processes input in-process. It does not
+  persist messages, and makes no outbound network calls at runtime.
+- **How you deploy it is your responsibility.** Logs, reverse proxies, browser
+  history, and the hosting environment are outside this project's control. Do
+  not paste PHI into an instance you do not control.
+- Generated sample data is synthetic and contains no real patient
+  information. Do not treat it as clinically or financially meaningful.
+
+### Your responsibility
+
+Complying with HIPAA and any other applicable law, regulation, contract, or
+trading-partner agreement is entirely yours. Validate output independently
+before relying on it for anything that matters.
+
+*This disclaimer is a good-faith description of what the software does and
+does not do. It is not legal advice, and it is not a substitute for having a
+lawyer review your own use of it.*
+
 ## Status
 
 **Implemented:**
@@ -17,7 +104,7 @@ A healthcare interoperability toolkit - transformation, FHIR conversion, validat
 - **Bidirectional transformation (FHIR Bundle → source-format text)** — the reverse of every conversion pillar above, at full family-level breadth: every HL7v2 trigger event this app converts *to* FHIR (all ADT/SIU/ORU/MDM triggers, including all three cancel triggers) is also a reverse target; all three C-CDA document types convert back out, with both Discharge-Summary-specific sections reversing via their own real category markers (Hospital Discharge Diagnosis via `Condition.category`, Discharge Medications via `MedicationRequest.category`); and every X12 EDI transaction-set family above, including all three 837 variants, round-trips back to X12 text.
 - A **synthetic test-data generator** covering every combination above, with realistic field-level randomization (required fields always populated, optional fields randomly included or omitted), selectable from a dropdown in the web UI or via the JSON API.
 - A **message validator**, independent of conversion — checks any message or document (supported for conversion or not) and returns a report of `error`/`warning`/`info` findings, each pointing at the offending location, covering structural correctness (required fields, well-formed values) as well as healthcare data-quality plausibility (a birth date in the future, a discharge before an admit, an appointment ending before it starts, a lab value outside its own reference range).
-- **Data Specification** — a field-level provenance crosswalk shown alongside the conversion it came from, showing exactly which source field (e.g. `PID-5`, a C-CDA XPath-like location such as `recordTarget/patientRole/patient/name[0]/family`, or an X12 element like `NM1-9`) produced which FHIR R4 field (e.g. `Patient.name[0].family`) for an actual converted message, including an honest explanation for fields with no single source field to point at (a trigger-event-driven status, internal UUID wiring). Fully instrumented for all four HL7v2 message types this app converts - ADT (all 9 triggers), SIU (all 6 triggers), ORU (all 5 triggers), and MDM (all 6 triggers) - for every X12 EDI family this app converts (270, 271, 276, 277, 278, 835, 837P, 837I, 837D - the complete "big five" HIPAA EDI suite) - and for every general-purpose C-CDA section this app recognizes (document header, Problems, Medications, Allergies, Immunizations, Vital Signs, Results, Procedures), every narrative-only section either document type requires, and the real structured entries Plan of Treatment/Social History/Family History can carry beneath their own narrative text. All three C-CDA document types are reported fully supported, alongside every HL7v2 message type and EDI family. A **mapping-decision register** sits above the crosswalk: every value the conversion inferred, and every source element it did not map, computed rather than hand-listed, each reviewable and rejectable for the message at hand. The dropped-data half covers HL7v2 and X12 EDI; C-CDA reports its inferred decisions only.
+- **Data Specification** — a field-level provenance crosswalk shown alongside the conversion it came from, showing exactly which source field (e.g. `PID-5`, a C-CDA XPath-like location such as `recordTarget/patientRole/patient/name[0]/family`, or an X12 element like `NM1-9`) produced which FHIR R4 field (e.g. `Patient.name[0].family`) for an actual converted message, including an honest explanation for fields with no single source field to point at (a trigger-event-driven status, internal UUID wiring). Fully instrumented for all four HL7v2 message types this app converts - ADT (all 9 triggers), SIU (all 6 triggers), ORU (all 5 triggers), and MDM (all 6 triggers) - for every X12 EDI family this app converts (270, 271, 276, 277, 278, 835, 837P, 837I, 837D - the complete "big five" HIPAA EDI suite) - and for every general-purpose C-CDA section this app recognizes (document header, Problems, Medications, Allergies, Immunizations, Vital Signs, Results, Procedures), every narrative-only section either document type requires, and the real structured entries Plan of Treatment/Social History/Family History can carry beneath their own narrative text. All three C-CDA document types are reported fully supported, alongside every HL7v2 message type and EDI family. A **mapping-decision register** sits above the crosswalk: every value the conversion inferred, and every source element it did not map, computed rather than hand-listed, each reviewable and rejectable for the message at hand. The dropped-data half covers all three formats, and every drop carries a citation checked against the source specification.
 
 Conversion, generation, validation, deduplication, bidirectional transformation, and the Data Specification crosswalk are all available for every input format, through the same web UI and JSON API.
 

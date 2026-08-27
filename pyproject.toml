@@ -7,6 +7,12 @@ name = "interop-tools"
 version = "0.1.0"
 description = "Healthcare interoperability toolkit - HL7v2/C-CDA/EDI to FHIR transformation, validation, and test-data generation"
 requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
