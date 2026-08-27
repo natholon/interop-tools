@@ -70,6 +70,12 @@ OID_TO_FHIR_SYSTEM = {
     # are the same ones FHIR's marital-status value set draws on, so the
     # IG's "transform" row is a system rewrite, not a code map.
     "2.16.840.1.113883.5.2": "http://terminology.hl7.org/CodeSystem/v3-MaritalStatus",
+    # CVX (Vaccine Administered). Confirmed against HL7's own terminology
+    # server: CodeSystem-v2-0292 carries url http://hl7.org/fhir/sid/cvx
+    # and identifier urn:oid:2.16.840.1.113883.12.292. Without it every
+    # vaccine code landed on the urn:oid: fallback rather than the
+    # canonical system FHIR's own vaccine-code value set draws on.
+    "2.16.840.1.113883.12.292": "http://hl7.org/fhir/sid/cvx",
 }
 CD_FALLBACK_SYSTEM = "urn:interop-tools:coded-value"
 

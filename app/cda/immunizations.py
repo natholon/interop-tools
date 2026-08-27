@@ -53,6 +53,7 @@ import uuid
 from fhir.resources.R4B.dosage import Dosage, DosageDoseAndRate
 from fhir.resources.R4B.immunization import Immunization
 from fhir.resources.R4B.medicationrequest import MedicationRequest
+from fhir.resources.R4B.period import Period
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.timing import Timing, TimingRepeat
 
@@ -384,10 +385,48 @@ def _build_request_dosage(substance_administration, request_id: str, recorder=No
         )
         populated = True
 
+    # effectiveTime -> timing.repeat.boundsPeriod, the same row
+    # app/cda/medications.py already implements from the same
+    # MedicationRequest table - a planned immunization's own scheduled
+    # window was read on the EVN side and dropped on this one.
+    effective_time = find_child(substance_administration, "effectiveTime")
+    low, high = ivl_ts_bounds(effective_time)
+    bounds_start, bounds_end = parse_partial_ts(low), parse_partial_ts(high)
+    if bounds_start or bounds_end:
+        period = Period()
+        base = xpath_location(_ENTRY_BASE, "effectiveTime")
+        if bounds_start:
+            period.start = bounds_start
+            if recorder:
+                recorder.record(
+                    request_id,
+                    "dosageInstruction[0].timing.repeat.boundsPeriod.start",
+                    effective_time_location(base, effective_time, "low"),
+                    bounds_start,
+                    source_value=low,
+                )
+        if bounds_end:
+            period.end = bounds_end
+            if recorder:
+                recorder.record(
+                    request_id,
+                    "dosageInstruction[0].timing.repeat.boundsPeriod.end",
+                    effective_time_location(base, effective_time, "high"),
+                    bounds_end,
+                    source_value=high,
+                )
+        dosage.timing = Timing(repeat=TimingRepeat(boundsPeriod=period))
+        populated = True
+
     repeat_element = find_child(substance_administration, "repeatNumber")
     repeat_value = (repeat_element.get("value") or "").strip() if repeat_element is not None else ""
     if repeat_value.isdigit():
-        dosage.timing = Timing(repeat=TimingRepeat(count=int(repeat_value)))
+        # repeatNumber and effectiveTime both land on timing.repeat, so
+        # keep whichever bounds are already there rather than replacing
+        # the whole Timing.
+        repeat = dosage.timing.repeat if dosage.timing else TimingRepeat()
+        repeat.count = int(repeat_value)
+        dosage.timing = Timing(repeat=repeat)
         if recorder:
             recorder.record(
                 request_id,

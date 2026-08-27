@@ -46,6 +46,9 @@ from app.provenance.cda_locator import CdaLocator
 from app.provenance.edi_locator import EdiLocator
 from app.provenance.hl7_locator import Hl7Locator
 from app.provenance.json_locator import locate_json_paths
+from app.cda.discharge_medications import CATEGORY_CODE as DISCHARGE_CATEGORY_CODE
+from app.cda.discharge_medications import CATEGORY_SYSTEM as DISCHARGE_CATEGORY_SYSTEM
+from app.cda.common import OID_TO_FHIR_SYSTEM
 from app.provenance.models import CrosswalkReport, ProvenanceEntry
 from app.provenance.position_index import build_fhir_position_index, build_source_position_index
 
@@ -131,6 +134,28 @@ def _resource_for_entry(fhir_path: str, bundle: Bundle):
     return bundle.entry[index].resource
 
 
+CVX_SYSTEM = OID_TO_FHIR_SYSTEM["2.16.840.1.113883.12.292"]
+
+
+def _is_cvx_coded(resource) -> bool:
+    """A vaccine, not a medication - the Immunizations section's own
+    INT-mood entries build a MedicationRequest too, and CVX is the only
+    thing on the resource that tells them apart."""
+    concept = getattr(resource, "medicationCodeableConcept", None)
+    for coding in (concept.coding if concept else None) or []:
+        if coding.system == CVX_SYSTEM:
+            return True
+    return False
+
+
+def _is_discharge_medication(resource) -> bool:
+    for concept in resource.category or []:
+        for coding in concept.coding or []:
+            if coding.system == DISCHARGE_CATEGORY_SYSTEM and coding.code == DISCHARGE_CATEGORY_CODE:
+                return True
+    return False
+
+
 class _CdaScopeResolver:
     """Precomputes, once per Bundle, the two Bundle-graph signals
     `_resolve_scope_hint` needs to tell apart an Observation built by
@@ -162,6 +187,18 @@ class _CdaScopeResolver:
         if resource_type == "AllergyIntolerance":
             return "allergies"
         if resource_type == "MedicationRequest":
+            # Three sections build a MedicationRequest from a
+            # <substanceAdministration>, so the resource type alone says
+            # nothing about which one. Discharge Medications carries the
+            # same .category marker the reverse builder splits on (a plain
+            # Medications entry never populates .category at all); an
+            # INT-mood Immunization is CVX-coded, which no medication is.
+            # Anything else is Medications, which is what every
+            # MedicationRequest resolved to before.
+            if _is_discharge_medication(resource):
+                return "discharge_medications"
+            if _is_cvx_coded(resource):
+                return "immunizations"
             return "medications"
         if resource_type == "Immunization":
             return "immunizations"

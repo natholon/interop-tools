@@ -13,6 +13,7 @@
             <textarea id="hl7_text" name="hl7_text" rows="14" spellcheck="false" placeholder="MSH|^~\&amp;|... or &lt;ClinicalDocument xmlns=&quot;urn:hl7-org:v3&quot;&gt;... or ISA*00*...">{{ hl7_text or "" }}</textarea>
             <pre id="source-highlighted" class="xwalk-pre" hidden><code id="source-highlighted-code"></code></pre>
             <button type="button" id="edit-source-btn" class="btn-link" style="margin-top: 0.4rem;" hidden>&larr; Edit source</button>
+            <button type="button" id="back-to-highlights-btn" class="btn-link" style="margin-top: 0.4rem;" hidden>Back to highlights &rarr;</button>
             {# Caret position readout - filled in by app.js once a crosswalk
                has been generated, since the index comes from the server. #}
             <p class="caret-readout" id="source-caret" aria-live="polite"></p>

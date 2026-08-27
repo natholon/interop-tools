@@ -202,6 +202,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const sourcePre = document.getElementById("source-highlighted");
     const sourceCode = document.getElementById("source-highlighted-code");
     const editSourceBtn = document.getElementById("edit-source-btn");
+    const backToHighlightsBtn = document.getElementById("back-to-highlights-btn");
+    // The exact text the current highlights describe. Editing away from
+    // it makes them stale, so "Back to highlights" stops being offered.
+    let highlightedSourceText = null;
     const fhirPlaceholder = document.getElementById("fhir-placeholder");
     const fhirPre = document.getElementById("fhir-highlighted");
     const fhirCode = document.getElementById("fhir-highlighted-code");
@@ -518,22 +522,46 @@ document.addEventListener("DOMContentLoaded", () => {
         resetConversionOutput();
     }
 
+    function highlightsAreCurrent() {
+        return highlightedSourceText !== null && textarea !== null && textarea.value === highlightedSourceText;
+    }
+
     function showEditableSource() {
         if (textarea) textarea.hidden = false;
         if (sourcePre) sourcePre.hidden = true;
         if (editSourceBtn) editSourceBtn.hidden = true;
+        if (backToHighlightsBtn) backToHighlightsBtn.hidden = !highlightsAreCurrent();
     }
 
     function showHighlightedSource() {
         if (textarea) textarea.hidden = true;
         if (sourcePre) sourcePre.hidden = false;
         if (editSourceBtn) editSourceBtn.hidden = false;
+        if (backToHighlightsBtn) backToHighlightsBtn.hidden = true;
+        highlightedSourceText = textarea ? textarea.value : null;
     }
 
     if (editSourceBtn) {
         editSourceBtn.addEventListener("click", () => {
             showEditableSource();
             if (textarea) textarea.focus();
+        });
+    }
+
+    if (backToHighlightsBtn) {
+        backToHighlightsBtn.addEventListener("click", () => {
+            showHighlightedSource();
+        });
+    }
+
+    if (textarea) {
+        // Typing invalidates the highlights - they describe the text as it
+        // was converted, so offering to go "back" to them would show marks
+        // pointing at offsets the edited text no longer has.
+        textarea.addEventListener("input", () => {
+            if (backToHighlightsBtn && !backToHighlightsBtn.hidden && !highlightsAreCurrent()) {
+                backToHighlightsBtn.hidden = true;
+            }
         });
     }
 

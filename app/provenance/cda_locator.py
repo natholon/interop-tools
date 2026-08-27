@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 from app.cda.allergies import ALLERGY_CONCERN_ACT_TEMPLATE_ID
 from app.cda.hospital_discharge_diagnosis import HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID
 from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID
+from app.cda.discharge_medications import DISCHARGE_MEDICATION_ACT_TEMPLATE_ID
 from app.cda.medications import MEDICATION_ACTIVITY_TEMPLATE_ID
 from app.cda.problems import CONCERN_ACT_TEMPLATE_ID
 from app.cda.procedures import PROCEDURE_TEMPLATE_ID
@@ -68,10 +69,25 @@ _SCOPE_TEMPLATE_IDS = {
     "hospital_discharge_diagnosis": HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID,
     "allergies": ALLERGY_CONCERN_ACT_TEMPLATE_ID,
     "medications": MEDICATION_ACTIVITY_TEMPLATE_ID,
+    "discharge_medications": MEDICATION_ACTIVITY_TEMPLATE_ID,
     "immunizations": IMMUNIZATION_ACTIVITY_TEMPLATE_ID,
     "procedures": PROCEDURE_TEMPLATE_ID,
     "results": RESULTS_ORGANIZER_TEMPLATE_ID,
     "vitals": VITALS_ORGANIZER_TEMPLATE_ID,
+}
+
+# scope_hint -> (ancestor template ID, must it be present).
+#
+# Medications and Discharge Medications wrap the *identical* Medication
+# Activity, so unlike Problems/Hospital Discharge Diagnosis (different act
+# templateIds) the element's own templateId cannot tell them apart - only
+# the Discharge Medication Act one level up can. Without this both
+# sections' entries shared one occurrence pool and a Discharge Medications
+# resource claimed a plain Medications entry, which then reported that
+# entry's own values as dropped.
+_SCOPE_ANCESTORS = {
+    "medications": (DISCHARGE_MEDICATION_ACT_TEMPLATE_ID, False),
+    "discharge_medications": (DISCHARGE_MEDICATION_ACT_TEMPLATE_ID, True),
 }
 
 
@@ -338,6 +354,7 @@ class CdaLocator:
         if self._root is None:
             return []
         template_id = _SCOPE_TEMPLATE_IDS.get(scope_hint) if scope_hint else None
+        ancestor = _SCOPE_ANCESTORS.get(scope_hint) if scope_hint else None
 
         # An absolute location names the document root, which is not a
         # child of anything and so is invisible to the walk below. It is
@@ -351,13 +368,18 @@ class CdaLocator:
 
         found: list[_ElementNode] = []
 
-        def walk(node: _ElementNode) -> None:
+        def walk(node: _ElementNode, within_ancestor: bool) -> None:
             for child in node.children:
-                if child.tag == root_tag and (template_id is None or _has_template_id(child, template_id)):
+                child_within = within_ancestor or (
+                    ancestor is not None and _has_template_id(child, ancestor[0])
+                )
+                matches_scope = template_id is None or _has_template_id(child, template_id)
+                matches_ancestor = ancestor is None or child_within == ancestor[1]
+                if child.tag == root_tag and matches_scope and matches_ancestor:
                     found.append(child)
-                walk(child)
+                walk(child, child_within)
 
-        walk(self._root)
+        walk(self._root, False)
         return found
 
     def occurrence_count(self, root_tag: str, scope_hint: str | None = None) -> int:
