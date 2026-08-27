@@ -65,6 +65,10 @@ _CODE_ATTR_NAMES: dict[str, str] = {
     "routeCode": "Route of Administration",
     "statusCode": "Status Code",
     "targetSiteCode": "Target Site",
+    "maritalStatusCode": "Marital Status",
+    "raceCode": "Race",
+    "ethnicGroupCode": "Ethnic Group",
+    "languageCode": "Language",
 }
 
 # "@value" alone is ambiguous the same way - keyed by parent tag. Several
@@ -82,6 +86,7 @@ _VALUE_ATTR_NAMES: dict[str, str] = {
     "rateQuantity": "Rate Quantity",
     "telecom": "Contact Point",
     "value": "Value",  # e.g. Family History's own onsetAge value
+    "preferenceInd": "Preferred Language Indicator",
 }
 
 # A bare trailing tag ("descend into this child, take its own text
@@ -99,6 +104,9 @@ _TEXT_TAG_NAMES: dict[str, str] = {
     "title": "Title",
     "id": "ID",
     "lotNumberText": "Lot Number",
+    "name": "Name",
+    "manufacturerModelName": "Model Name",
+    "softwareName": "Software Name",
 }
 
 # A bare trailing tag carrying its own typeCode/classCode bracket filter

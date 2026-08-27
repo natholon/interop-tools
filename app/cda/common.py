@@ -16,9 +16,11 @@ from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.contactpoint import ContactPoint
 from fhir.resources.R4B.device import Device, DeviceDeviceName
 from fhir.resources.R4B.encounter import Encounter
+from fhir.resources.R4B.extension import Extension
 from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.identifier import Identifier
-from fhir.resources.R4B.patient import Patient
+from fhir.resources.R4B.organization import Organization
+from fhir.resources.R4B.patient import Patient, PatientCommunication, PatientContact
 from fhir.resources.R4B.period import Period
 from fhir.resources.R4B.quantity import Quantity
 from fhir.resources.R4B.practitioner import Practitioner
@@ -64,6 +66,10 @@ OID_TO_FHIR_SYSTEM = {
     # administrativeGenderCode reused as a real CodeableConcept elsewhere,
     # e.g. FamilyMemberHistory.sex).
     "2.16.840.1.113883.5.1": "http://hl7.org/fhir/administrative-gender",
+    # HL7 v3 MaritalStatus - the codes C-CDA's maritalStatusCode carries
+    # are the same ones FHIR's marital-status value set draws on, so the
+    # IG's "transform" row is a system rewrite, not a code map.
+    "2.16.840.1.113883.5.2": "http://terminology.hl7.org/CodeSystem/v3-MaritalStatus",
 }
 CD_FALLBACK_SYSTEM = "urn:interop-tools:coded-value"
 
@@ -387,7 +393,10 @@ def _build_patient_identifiers(patient_role, resource_id: str | None = None, rec
     )
 
 
-def _build_patient_names(patient_element, resource_id: str | None = None, recorder=None) -> list[HumanName]:
+_PATIENT_ROLE_BASE = "recordTarget/patientRole"
+
+
+def _build_patient_names(patient_element, resource_id: str | None = None, recorder=None, base_path: str = _PATIENT_ROLE_BASE, relative_prefix: str = "name") -> list[HumanName]:
     names = []
     for i, name_element in enumerate(find_all(patient_element, "name")):
         family_element = find_child(name_element, "family")
@@ -405,13 +414,13 @@ def _build_patient_names(patient_element, resource_id: str | None = None, record
         mapped_use = _NAME_USE_MAP.get(source_use)
         name = HumanName(use=mapped_use or ("official" if i == 0 else "old"))
         if recorder and resource_id:
-            location = xpath_location("recordTarget", "patientRole", "patient", f"name[{i}]", "@use")
+            location = xpath_location(base_path, "patient", f"name[{i}]", "@use")
             if mapped_use:
-                recorder.record(resource_id, f"name[{name_index}].use", location, name.use, source_value=source_use)
+                recorder.record(resource_id, f"{relative_prefix}[{name_index}].use", location, name.use, source_value=source_use)
             else:
                 recorder.record_inferred(
                     resource_id,
-                    f"name[{name_index}].use",
+                    f"{relative_prefix}[{name_index}].use",
                     f"No usable name use code{f' ({source_use!r} has no FHIR counterpart)' if source_use else ''}; "
                     "the first name is taken as the official one.",
                     name.use,
@@ -421,8 +430,8 @@ def _build_patient_names(patient_element, resource_id: str | None = None, record
             if recorder and resource_id:
                 recorder.record(
                     resource_id,
-                    f"name[{name_index}].family",
-                    xpath_location("recordTarget", "patientRole", "patient", f"name[{i}]", "family"),
+                    f"{relative_prefix}[{name_index}].family",
+                    xpath_location(base_path, "patient", f"name[{i}]", "family"),
                     family,
                 )
         if given_parts:
@@ -431,15 +440,15 @@ def _build_patient_names(patient_element, resource_id: str | None = None, record
                 for j, given in enumerate(given_parts):
                     recorder.record(
                         resource_id,
-                        f"name[{name_index}].given[{j}]",
-                        xpath_location("recordTarget", "patientRole", "patient", f"name[{i}]", f"given[{j}]"),
+                        f"{relative_prefix}[{name_index}].given[{j}]",
+                        xpath_location(base_path, "patient", f"name[{i}]", f"given[{j}]"),
                         given,
                     )
         names.append(name)
     return names
 
 
-def _build_patient_addresses(patient_role, resource_id: str | None = None, recorder=None) -> list[Address]:
+def _build_patient_addresses(patient_role, resource_id: str | None = None, recorder=None, base_path: str = _PATIENT_ROLE_BASE, relative_prefix: str = "address") -> list[Address]:
     addresses = []
     for i, addr_element in enumerate(find_all(patient_role, "addr")):
         # (source_index, text) pairs, not just text - streetAddressLine
@@ -470,8 +479,8 @@ def _build_patient_addresses(patient_role, resource_id: str | None = None, recor
             if recorder and resource_id:
                 recorder.record(
                     resource_id,
-                    f"address[{addr_index}].use",
-                    xpath_location("recordTarget", "patientRole", f"addr[{i}]", "@use"),
+                    f"{relative_prefix}[{addr_index}].use",
+                    xpath_location(base_path, f"addr[{i}]", "@use"),
                     address_use,
                     source_value=addr_element.get("use"),
                 )
@@ -481,8 +490,8 @@ def _build_patient_addresses(patient_role, resource_id: str | None = None, recor
                 for j, (src_i, text) in enumerate(line_pairs):
                     recorder.record(
                         resource_id,
-                        f"address[{addr_index}].line[{j}]",
-                        xpath_location("recordTarget", "patientRole", f"addr[{i}]", f"streetAddressLine[{src_i}]"),
+                        f"{relative_prefix}[{addr_index}].line[{j}]",
+                        xpath_location(base_path, f"addr[{i}]", f"streetAddressLine[{src_i}]"),
                         text,
                     )
         if city:
@@ -490,8 +499,8 @@ def _build_patient_addresses(patient_role, resource_id: str | None = None, recor
             if recorder and resource_id:
                 recorder.record(
                     resource_id,
-                    f"address[{addr_index}].city",
-                    xpath_location("recordTarget", "patientRole", f"addr[{i}]", "city"),
+                    f"{relative_prefix}[{addr_index}].city",
+                    xpath_location(base_path, f"addr[{i}]", "city"),
                     city,
                 )
         if state:
@@ -499,8 +508,8 @@ def _build_patient_addresses(patient_role, resource_id: str | None = None, recor
             if recorder and resource_id:
                 recorder.record(
                     resource_id,
-                    f"address[{addr_index}].state",
-                    xpath_location("recordTarget", "patientRole", f"addr[{i}]", "state"),
+                    f"{relative_prefix}[{addr_index}].state",
+                    xpath_location(base_path, f"addr[{i}]", "state"),
                     state,
                 )
         if postal_code:
@@ -508,8 +517,8 @@ def _build_patient_addresses(patient_role, resource_id: str | None = None, recor
             if recorder and resource_id:
                 recorder.record(
                     resource_id,
-                    f"address[{addr_index}].postalCode",
-                    xpath_location("recordTarget", "patientRole", f"addr[{i}]", "postalCode"),
+                    f"{relative_prefix}[{addr_index}].postalCode",
+                    xpath_location(base_path, f"addr[{i}]", "postalCode"),
                     postal_code,
                 )
         if country:
@@ -517,15 +526,15 @@ def _build_patient_addresses(patient_role, resource_id: str | None = None, recor
             if recorder and resource_id:
                 recorder.record(
                     resource_id,
-                    f"address[{addr_index}].country",
-                    xpath_location("recordTarget", "patientRole", f"addr[{i}]", "country"),
+                    f"{relative_prefix}[{addr_index}].country",
+                    xpath_location(base_path, f"addr[{i}]", "country"),
                     country,
                 )
         addresses.append(address)
     return addresses
 
 
-def _build_patient_telecoms(patient_role, resource_id: str | None = None, recorder=None) -> list[ContactPoint]:
+def _build_patient_telecoms(patient_role, resource_id: str | None = None, recorder=None, base_path: str = _PATIENT_ROLE_BASE, relative_prefix: str = "telecom") -> list[ContactPoint]:
     telecoms = []
     for i, telecom_element in enumerate(find_all(patient_role, "telecom")):
         raw_value = telecom_element.get("value")
@@ -537,8 +546,8 @@ def _build_patient_telecoms(patient_role, resource_id: str | None = None, record
         if recorder and resource_id:
             recorder.record(
                 resource_id,
-                f"telecom[{telecom_index}].value",
-                xpath_location("recordTarget", "patientRole", f"telecom[{i}]", "@value"),
+                f"{relative_prefix}[{telecom_index}].value",
+                xpath_location(base_path, f"telecom[{i}]", "@value"),
                 contact_point.value,
                 source_value=raw_value,
             )
@@ -551,8 +560,8 @@ def _build_patient_telecoms(patient_role, resource_id: str | None = None, record
             if recorder and resource_id:
                 recorder.record(
                     resource_id,
-                    f"telecom[{telecom_index}].use",
-                    xpath_location("recordTarget", "patientRole", f"telecom[{i}]", "@use"),
+                    f"{relative_prefix}[{telecom_index}].use",
+                    xpath_location(base_path, f"telecom[{i}]", "@use"),
                     use,
                     source_value=telecom_element.get("use"),
                 )
@@ -588,7 +597,267 @@ def build_contact_point_from_telecom(telecom_element) -> ContactPoint | None:
     return contact_point
 
 
-def build_patient_from_header(document, recorder=None) -> Patient:
+# US Core race/ethnicity. Both are complex extensions: `text` is 1..1 and
+# every coding goes under either `ombCategory` or `detailed`, decided by
+# whether the code is one of the OMB categories the extension's own
+# ombCategory slice is bound to. Anything else is a CDC detailed code.
+US_CORE_RACE_EXTENSION = "http://hl7.org/fhir/us/core/StructureDefinition/us-core-race"
+US_CORE_ETHNICITY_EXTENSION = "http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity"
+_OMB_RACE_CATEGORIES = {"1002-5", "2028-9", "2054-5", "2076-8", "2106-3"}
+_OMB_ETHNICITY_CATEGORIES = {"2135-2", "2186-5"}
+_SDTC_NAMESPACE = "urn:hl7-org:sdtc"
+
+
+def _sdtc_children(element, tag: str):
+    """C-CDA repeats raceCode/ethnicGroupCode through an sdtc-namespaced
+    sibling, which find_all cannot reach - it resolves the CDA namespace
+    only. Clark notation is how ElementTree names the other one."""
+    return element.findall(f"{{{_SDTC_NAMESPACE}}}{tag}")
+
+
+def _build_race_or_ethnicity_extension(elements, url: str, omb_categories: set[str]) -> Extension | None:
+    codings = [c for c in (build_codeable_concept_from_cd(e) for e in elements) if c and c.coding]
+    if not codings:
+        return None
+    parts = []
+    for concept in codings:
+        coding = concept.coding[0]
+        slice_name = "ombCategory" if coding.code in omb_categories else "detailed"
+        parts.append(Extension(url=slice_name, valueCoding=coding))
+    # `text` is 1..1, so it is built from whatever display the source
+    # actually carried rather than left out - a code with no displayName
+    # falls back to the code itself, which is still true.
+    text = ", ".join(
+        concept.coding[0].display or concept.coding[0].code or "" for concept in codings
+    ).strip(", ")
+    parts.append(Extension(url="text", valueString=text or "Unknown"))
+    return Extension(url=url, extension=parts)
+
+
+def _apply_race_and_ethnicity(patient, patient_element, recorder=None) -> None:
+    for tag, url, categories in (
+        ("raceCode", US_CORE_RACE_EXTENSION, _OMB_RACE_CATEGORIES),
+        ("ethnicGroupCode", US_CORE_ETHNICITY_EXTENSION, _OMB_ETHNICITY_CATEGORIES),
+    ):
+        elements = find_all(patient_element, tag) + _sdtc_children(patient_element, tag)
+        extension = _build_race_or_ethnicity_extension(elements, url, categories)
+        if extension is None:
+            continue
+        index = len(patient.extension or [])
+        patient.extension = (patient.extension or []) + [extension]
+        if not recorder:
+            continue
+        for part_index, (part, source) in enumerate(zip(extension.extension, elements)):
+            if part.valueCoding is None:
+                continue
+            base = f"extension[{index}].extension[{part_index}].valueCoding"
+            location = xpath_location("recordTarget", "patientRole", "patient", f"{tag}[{part_index}]")
+            recorder.record(patient.id, f"{base}.code", f"{location}/@code", part.valueCoding.code)
+            if part.valueCoding.display:
+                recorder.record(
+                    patient.id,
+                    f"{base}.display",
+                    f"{location}/@displayName",
+                    part.valueCoding.display,
+                )
+        recorder.record_inferred(
+            patient.id,
+            f"extension[{index}].extension[{len(extension.extension) - 1}].valueString",
+            f"US Core requires a text value on {url.rsplit('/', 1)[-1]}; it is built from the codes' own displays.",
+            extension.extension[-1].valueString,
+        )
+
+
+def _apply_language_communication(patient, patient_element, recorder=None) -> None:
+    """languageCommunication -> Patient.communication.
+
+    languageCode carries a plain IETF/ISO language tag with no codeSystem
+    of its own, so it is coded against BCP-47 rather than run through
+    build_codeable_concept_from_cd's OID lookup.
+    """
+    communications = []
+    base = xpath_location("recordTarget", "patientRole", "patient")
+    for index, element in enumerate(find_all(patient_element, "languageCommunication")):
+        code_element = find_child(element, "languageCode")
+        code = (code_element.get("code") or "").strip() if code_element is not None else ""
+        if not code:
+            continue
+        communication = PatientCommunication(
+            language=CodeableConcept(coding=[Coding(system=LANGUAGE_SYSTEM, code=code)])
+        )
+        location = xpath_location(base, f"languageCommunication[{index}]")
+        preference = find_child(element, "preferenceInd")
+        if preference is not None and preference.get("value") in ("true", "false"):
+            communication.preferred = preference.get("value") == "true"
+        communications.append(communication)
+        if not recorder:
+            continue
+        position = len(communications) - 1
+        recorder.record(
+            patient.id,
+            f"communication[{position}].language.coding[0].code",
+            f"{location}/languageCode/@code",
+            code,
+        )
+        if communication.preferred is not None:
+            recorder.record(
+                patient.id,
+                f"communication[{position}].preferred",
+                f"{location}/preferenceInd/@value",
+                str(communication.preferred),
+            )
+    if communications:
+        patient.communication = communications
+
+
+def _apply_guardians(patient, patient_element, recorder=None) -> None:
+    """guardian -> Patient.contact.
+
+    A guardian can be a person, an organization, or both; the IG maps the
+    person's name to .contact.name and the organization to
+    .contact.organization, so an organization-only guardian still becomes
+    a contact rather than being dropped for having no name.
+    """
+    contacts = []
+    extra: list = []
+    base = xpath_location("recordTarget", "patientRole", "patient")
+    for index, element in enumerate(find_all(patient_element, "guardian")):
+        location = xpath_location(base, f"guardian[{index}]")
+        contact = PatientContact()
+        relationship = build_codeable_concept_from_cd(find_child(element, "code"))
+        if relationship is not None:
+            contact.relationship = [relationship]
+        person = find_child(element, "guardianPerson")
+        names = _build_patient_names(person) if person is not None else []
+        if names:
+            contact.name = names[0]
+        addresses = _build_patient_addresses(element)
+        if addresses:
+            contact.address = addresses[0]
+        telecoms = _build_patient_telecoms(element)
+        if telecoms:
+            contact.telecom = telecoms
+        organization_element = find_child(element, "guardianOrganization")
+        organization = None
+        if organization_element is not None:
+            organization = _build_organization_from_element(
+                organization_element, recorder, xpath_location(location, "guardianOrganization")
+            )
+        if organization is not None:
+            extra.append(organization)
+            contact.organization = Reference(reference=f"urn:uuid:{organization.id}")
+        if contact.relationship is None and contact.name is None and organization is None:
+            continue
+        contacts.append(contact)
+        if not recorder:
+            continue
+        position = len(contacts) - 1
+        _record_contact_details(recorder, patient.id, position, contact, element, location)
+        if relationship is not None:
+            record_coding(
+                recorder,
+                patient.id,
+                f"contact[{position}].relationship[0]",
+                xpath_location(location, "code"),
+                relationship,
+            )
+        if organization is not None and organization.name:
+            recorder.record(
+                organization.id,
+                "name",
+                xpath_location(location, "guardianOrganization", "name"),
+                organization.name,
+            )
+    if contacts:
+        patient.contact = contacts
+    return extra
+
+
+def _record_contact_details(recorder, patient_id, position, contact, element, location) -> None:
+    """Patient.contact.name and .address are singular, unlike the repeating
+    patient-level fields the same builders produce, so their facts are
+    recorded here rather than by those builders - an indexed path would
+    point at a field the Bundle does not have."""
+    base = f"contact[{position}]"
+    name_location = xpath_location(location, "guardianPerson", "name[0]")
+    if contact.name is not None:
+        if contact.name.family:
+            recorder.record(patient_id, f"{base}.name.family", xpath_location(name_location, "family"), contact.name.family)
+        for index, given in enumerate(contact.name.given or []):
+            recorder.record(
+                patient_id, f"{base}.name.given[{index}]", xpath_location(name_location, f"given[{index}]"), given
+            )
+    if contact.address is not None:
+        address_location = xpath_location(location, "addr[0]")
+        if contact.address.use:
+            recorder.record(
+                patient_id, f"{base}.address.use", xpath_location(address_location, "@use"), contact.address.use
+            )
+        for index, line in enumerate(contact.address.line or []):
+            recorder.record(
+                patient_id,
+                f"{base}.address.line[{index}]",
+                xpath_location(address_location, f"streetAddressLine[{index}]"),
+                line,
+            )
+        for field, tag in (("city", "city"), ("state", "state"), ("postalCode", "postalCode"), ("country", "country")):
+            value = getattr(contact.address, field)
+            if value:
+                recorder.record(patient_id, f"{base}.address.{field}", xpath_location(address_location, tag), value)
+    for index, telecom in enumerate(contact.telecom or []):
+        recorder.record(
+            patient_id,
+            f"{base}.telecom[{index}].value",
+            xpath_location(location, f"telecom[{index}]", "@value"),
+            telecom.value,
+        )
+        if telecom.use:
+            recorder.record(
+                patient_id,
+                f"{base}.telecom[{index}].use",
+                xpath_location(location, f"telecom[{index}]", "@use"),
+                telecom.use,
+            )
+
+
+def _build_organization_from_element(element, recorder=None, location: str = ""):
+    """A CDA organization element (guardianOrganization, providerOrganization)
+    -> Organization. Both carry the same id/name/telecom/addr shape."""
+    organization = Organization(id=str(uuid.uuid4()))
+    identifiers = build_identifiers(
+        find_all(element, "id"),
+        ORGANIZATION_ID_FALLBACK_SYSTEM,
+        resource_id=organization.id,
+        location_prefix=xpath_location(location, "id"),
+        recorder=recorder,
+    )
+    if identifiers:
+        organization.identifier = identifiers
+    name_element = find_child(element, "name")
+    if name_element is not None and (name_element.text or "").strip():
+        organization.name = name_element.text.strip()
+    telecoms = _build_patient_telecoms(
+        element, resource_id=organization.id, recorder=recorder, base_path=location, relative_prefix="telecom"
+    )
+    if telecoms:
+        organization.telecom = telecoms
+    addresses = _build_patient_addresses(
+        element, resource_id=organization.id, recorder=recorder, base_path=location, relative_prefix="address"
+    )
+    if addresses:
+        organization.address = addresses
+    if organization.identifier is None and organization.name is None:
+        return None
+    if recorder and organization.name:
+        recorder.record(organization.id, "name", xpath_location(location, "name"), organization.name)
+    return organization
+
+
+ORGANIZATION_ID_FALLBACK_SYSTEM = "urn:interop-tools:cda-organization-id"
+LANGUAGE_SYSTEM = "urn:ietf:bcp:47"
+
+
+def build_patient_from_header(document, recorder=None, extra_resources: list | None = None) -> Patient:
     """recordTarget/patientRole/patient -> Patient. Raises
     MissingSegmentError when the header lacks a patientRole/patient at
     all - reused from app.hl7.errors since the meaning ("a required
@@ -649,6 +918,34 @@ def build_patient_from_header(document, recorder=None) -> Patient:
     telecoms = _build_patient_telecoms(patient_role, resource_id=patient_id, recorder=recorder)
     if telecoms:
         patient.telecom = telecoms
+
+    marital_status = build_codeable_concept_from_cd(find_child(patient_element, "maritalStatusCode"))
+    if marital_status is not None:
+        patient.maritalStatus = marital_status
+        if recorder:
+            record_coding(
+                recorder,
+                patient_id,
+                "maritalStatus",
+                xpath_location("recordTarget", "patientRole", "patient", "maritalStatusCode"),
+                marital_status,
+            )
+
+    _apply_language_communication(patient, patient_element, recorder)
+    _apply_race_and_ethnicity(patient, patient_element, recorder)
+
+    # guardianOrganization and providerOrganization become real resources,
+    # so they are only built when the caller has somewhere to put them -
+    # a Reference to a resource absent from the Bundle would dangle.
+    if extra_resources is not None:
+        extra_resources.extend(_apply_guardians(patient, patient_element, recorder))
+        provider_element = find_child(patient_role, "providerOrganization")
+        if provider_element is not None:
+            location = xpath_location("recordTarget", "patientRole", "providerOrganization")
+            provider = _build_organization_from_element(provider_element, recorder, location)
+            if provider is not None:
+                extra_resources.append(provider)
+                patient.managingOrganization = Reference(reference=f"urn:uuid:{provider.id}")
 
     return patient
 
@@ -875,9 +1172,14 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
 
     from app.cda.composition import build_composition
 
-    patient = build_patient_from_header(document, recorder=recorder)
+    header_resources: list = []
+    patient = build_patient_from_header(document, recorder=recorder, extra_resources=header_resources)
     encounter = build_encounter_from_header(document, patient.id, recorder=recorder)
     resources = [encounter] if encounter is not None else []
+    # The guardian and provider Organizations the patient header
+    # materialises - Patient.contact.organization and .managingOrganization
+    # both reference them, so they have to reach the Bundle.
+    resources.extend(header_resources)
     # (source index, section element, what it produced) - Composition.section
     # references exactly its own section's resources, so the association has
     # to be kept here where both are in scope.

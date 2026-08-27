@@ -1648,10 +1648,94 @@ def _random_patient(rng: random.Random) -> str:
         # comment for why this lower bound on patient age matters.
         dob = random_datetime_near_now(rng, min_days=-365 * 80, max_days=-365)
         birth_time = f'<birthTime value="{dob.strftime("%Y%m%d")}"/>'
+    marital = ""
+    if maybe(rng, 0.5):
+        code, display = rng.choice(_MARITAL_STATUSES)
+        marital = (
+            f'<maritalStatusCode code="{code}" codeSystem="2.16.840.1.113883.5.2" displayName="{display}"/>'
+        )
     return (
         f"<recordTarget><patientRole>{ids}{addr}{telecom}"
-        f"<patient>{names}{gender}{birth_time}</patient>"
+        f"<patient>{names}{gender}{birth_time}{marital}"
+        f"{_random_race_and_ethnicity(rng)}{_random_guardian(rng)}"
+        f"{_random_language_communications(rng)}</patient>"
+        f"{_random_provider_organization(rng)}"
         "</patientRole></recordTarget>"
+    )
+
+
+# HL7 v3 MaritalStatus, CDC Race & Ethnicity (OMB categories and one
+# detailed code each, so both slices of the US Core extension occur), and
+# the guardian RoleCode relationships.
+_MARITAL_STATUSES = [("M", "Married"), ("S", "Never Married"), ("D", "Divorced"), ("W", "Widowed")]
+_OMB_RACES = [("2106-3", "White"), ("2054-5", "Black or African American"), ("2028-9", "Asian")]
+_DETAILED_RACES = [("2108-9", "European"), ("2058-6", "African American"), ("2039-0", "Japanese")]
+_ETHNICITIES = [("2186-5", "Not Hispanic or Latino"), ("2135-2", "Hispanic or Latino")]
+_DETAILED_ETHNICITIES = [("2148-5", "Mexican"), ("2180-8", "Puerto Rican")]
+_GUARDIAN_RELATIONSHIPS = [("MTH", "Mother"), ("FTH", "Father"), ("SPS", "Spouse"), ("GUARD", "Guardian")]
+_LANGUAGES = [("en", "English"), ("es", "Spanish"), ("fr", "French"), ("zh", "Chinese")]
+_RACE_CODE_SYSTEM = "2.16.840.1.113883.6.238"
+
+
+def _random_race_and_ethnicity(rng: random.Random) -> str:
+    """raceCode/ethnicGroupCode, with the sdtc-namespaced repeat some of
+    the time - the only way a second race reaches the document, and the
+    only thing that exercises the extension's `detailed` slice alongside
+    its `ombCategory` one."""
+    parts = []
+    for tag, categories, detailed in (
+        ("raceCode", _OMB_RACES, _DETAILED_RACES),
+        ("ethnicGroupCode", _ETHNICITIES, _DETAILED_ETHNICITIES),
+    ):
+        if not maybe(rng, 0.55):
+            continue
+        code, display = rng.choice(categories)
+        parts.append(f'<{tag} code="{code}" codeSystem="{_RACE_CODE_SYSTEM}" displayName="{display}"/>')
+        if maybe(rng, 0.3):
+            code, display = rng.choice(detailed)
+            parts.append(f'<sdtc:{tag} code="{code}" codeSystem="{_RACE_CODE_SYSTEM}" displayName="{display}"/>')
+    return "".join(parts)
+
+
+def _random_guardian(rng: random.Random) -> str:
+    if not maybe(rng, 0.3):
+        return ""
+    code, display = rng.choice(_GUARDIAN_RELATIONSHIPS)
+    family, given = random_person_name(rng)
+    person = f"<guardianPerson><name><given>{given}</given><family>{family}</family></name></guardianPerson>"
+    # An organization-only guardian is a real shape, so the person is
+    # dropped some of the time rather than always present.
+    if maybe(rng, 0.2):
+        person = f"<guardianOrganization><name>{rng.choice(_ORGANIZATION_NAMES)}</name></guardianOrganization>"
+    addr = _random_addr_element(rng, "HP") if maybe(rng, 0.5) else ""
+    telecom = _random_telecom_element(rng, "HP") if maybe(rng, 0.5) else ""
+    return (
+        f'<guardian><code code="{code}" codeSystem="2.16.840.1.113883.5.111" '
+        f'displayName="{display}"/>{addr}{telecom}{person}</guardian>'
+    )
+
+
+def _random_language_communications(rng: random.Random) -> str:
+    if not maybe(rng, 0.5):
+        return ""
+    parts = []
+    for code, _ in rng.sample(_LANGUAGES, rng.choice((1, 1, 2))):
+        preference = ""
+        if maybe(rng, 0.6):
+            preference = f'<preferenceInd value="{str(maybe(rng)).lower()}"/>'
+        parts.append(f'<languageCommunication><languageCode code="{code}"/>{preference}</languageCommunication>')
+    return "".join(parts)
+
+
+def _random_provider_organization(rng: random.Random) -> str:
+    if not maybe(rng, 0.5):
+        return ""
+    identifier = _random_id_element(rng) if maybe(rng, 0.7) else ""
+    telecom = _random_telecom_element(rng, "WP") if maybe(rng, 0.5) else ""
+    addr = _random_addr_element(rng, "WP") if maybe(rng, 0.5) else ""
+    return (
+        f"<providerOrganization>{identifier}"
+        f"<name>{rng.choice(_ORGANIZATION_NAMES)}</name>{telecom}{addr}</providerOrganization>"
     )
 
 
@@ -1734,7 +1818,10 @@ def _generate_sectioned_document(
 
     xml_text = (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        '<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
+        # sdtc is how C-CDA spells a repeated raceCode/ethnicGroupCode;
+        # an unbound prefix is a parse error, so it is always declared.
+        ' xmlns:sdtc="urn:hl7-org:sdtc">'
         f'<templateId root="{_US_HEADER_TEMPLATE_ID}"/><templateId root="{document_template_id}"/>'
         f"{ids}"
         f'<code code="{doc_code}" codeSystem="2.16.840.1.113883.6.1" displayName="{doc_code_display}"/>'

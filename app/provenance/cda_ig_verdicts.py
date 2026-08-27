@@ -268,6 +268,41 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
         "The disclosed Plan of Treatment status map has no row for this code, so the CarePlan "
         "activity status fell back to unknown.",
     ),
+    "2.16.840.1.113883.10.20.22.4.41|statusCode": (
+        UNRECOGNIZED,
+        "The disclosed Plan of Treatment status map has no row for this code, so the CarePlan "
+        "activity status fell back to unknown.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.40|statusCode": (
+        UNRECOGNIZED,
+        "The disclosed Plan of Treatment status map has no row for this code, so the CarePlan "
+        "activity status fell back to unknown.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.42|statusCode": (
+        UNRECOGNIZED,
+        "The disclosed Plan of Treatment status map has no row for this code, so the CarePlan "
+        "activity status fell back to unknown.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.120|statusCode": (
+        UNRECOGNIZED,
+        "The disclosed Plan of Treatment status map has no row for this code, so the CarePlan "
+        "activity status fell back to unknown.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.43|statusCode": (
+        UNRECOGNIZED,
+        "The disclosed Plan of Treatment status map has no row for this code, so the CarePlan "
+        "activity status fell back to unknown.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.146|statusCode": (
+        UNRECOGNIZED,
+        "The disclosed Plan of Treatment status map has no row for this code, so the CarePlan "
+        "activity status fell back to unknown.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.20|statusCode": (
+        UNRECOGNIZED,
+        "The disclosed Plan of Treatment status map has no row for this code, so the CarePlan "
+        "activity status fell back to unknown.",
+    ),
     # Social History and its specialisations fix the FHIR status, so the
     # source statusCode is never consulted.
     "2.16.840.1.113883.10.20.22.4.38|statusCode": (

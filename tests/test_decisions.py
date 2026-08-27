@@ -1108,7 +1108,10 @@ def test_namespace_declarations_are_never_reported_as_dropped():
     from app.cda.generator import generate_history_and_physical
 
     raw = generate_history_and_physical(random.Random(6))
-    assert 'xmlns:ns2="urn:hl7-org:sdtc"' in raw, "fixture assumption: the generator emits a prefixed namespace"
+    # The prefix genuinely is arbitrary, so match the binding by its URI -
+    # pinning "ns2" made this test depend on how many namespaces happened
+    # to precede it in the document.
+    assert re.search(r'xmlns:\w+="urn:hl7-org:sdtc"', raw), "fixture assumption: the generator emits a prefixed namespace"
 
     locations = [d.source_location or "" for d in _cda_decisions_for_text(raw) if d.kind == "dropped"]
     leaked = [loc for loc in locations if re.search(r"@(xmlns|ns\d+|xsi|sdtc|voc)", loc)]

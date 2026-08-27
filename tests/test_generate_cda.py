@@ -1,4 +1,5 @@
 import random
+import re
 
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.discharge_summary import DISCHARGE_SUMMARY_TEMPLATE_ID
@@ -1425,3 +1426,37 @@ def test_social_history_patient_extensions_vary_across_seeds():
             and e.resource.code.coding[0].code in ("76689-9", "76691-5")
         ]
     assert birthsex > 0 and gender_identity > 0 and neither > 0
+
+
+def test_patient_header_demographics_vary_across_seeds():
+    # Each of these has a real target in the IG's Patient table, so each
+    # needs to occur both present and absent for the mapping to be fuzzed.
+    for tag in ("maritalStatusCode", "raceCode", "ethnicGroupCode", "guardian", "languageCommunication", "providerOrganization"):
+        values = {f"<{tag}" in generate_ccd(random.Random(seed)) for seed in range(40)}
+        assert values == {True, False}, f"{tag} never varies"
+
+
+def test_race_occurs_as_both_an_omb_category_and_a_detailed_code():
+    # The us-core-race extension slices its codings, and only the sdtc
+    # repeat can carry a second one - without it the detailed slice is
+    # never exercised.
+    codes = set()
+    for seed in range(80):
+        document = generate_ccd(random.Random(seed))
+        # The sdtc prefix is arbitrary - the generator self-checks through
+        # ElementTree, which renames it - so match any prefix.
+        codes.update(re.findall(r'<(?:\w+:)?raceCode code="([^"]+)"', document))
+    assert codes & {"2106-3", "2054-5", "2028-9"}, "no OMB category generated"
+    assert codes & {"2108-9", "2058-6", "2039-0"}, "no detailed race code generated"
+
+
+def test_guardian_occurs_with_a_person_and_with_an_organization():
+    # An organization-only guardian is a real shape - a contact built only
+    # from one has no name at all, which the builder must not skip.
+    shapes = set()
+    for seed in range(80):
+        document = generate_ccd(random.Random(seed))
+        for guardian in re.findall(r"<guardian>.*?</guardian>", document, re.S):
+            shapes.add("guardianPerson" if "guardianPerson" in guardian else "guardianOrganization")
+    assert shapes == {"guardianPerson", "guardianOrganization"}
+

@@ -898,3 +898,103 @@ def test_document_without_an_author_stays_a_collection():
     bundle = convert_cda_to_bundle(read_fixture("ccd_minimal.xml"))
     assert bundle.type == "collection"
     assert "Composition" not in _entries_by_type(bundle)
+
+
+_HEADER_DOC = """<?xml version="1.0"?>
+<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:sdtc="urn:hl7-org:sdtc">
+  <templateId root="2.16.840.1.113883.10.20.22.1.2"/>
+  <id root="1.2.3" extension="DOC1"/>
+  <code code="34133-9" codeSystem="2.16.840.1.113883.6.1" displayName="Summary of episode note"/>
+  <title>CCD</title>
+  <effectiveTime value="20260101120000"/>
+  <recordTarget><patientRole>
+    <id root="1.2.3.4" extension="MRN1"/>
+    <patient>
+      <name use="L"><given>Jane</given><family>Doe</family></name>
+      <birthTime value="19800101"/>
+      <maritalStatusCode code="M" codeSystem="2.16.840.1.113883.5.2" displayName="Married"/>
+      <raceCode code="2106-3" codeSystem="2.16.840.1.113883.6.238" displayName="White"/>
+      <sdtc:raceCode code="2108-9" codeSystem="2.16.840.1.113883.6.238" displayName="European"/>
+      <ethnicGroupCode code="2186-5" codeSystem="2.16.840.1.113883.6.238" displayName="Not Hispanic or Latino"/>
+      <guardian>
+        <code code="MTH" codeSystem="2.16.840.1.113883.5.111" displayName="Mother"/>
+        <addr use="HP"><streetAddressLine>2 Oak Ave</streetAddressLine><city>Boston</city></addr>
+        <telecom use="HP" value="tel:+16175550111"/>
+        <guardianPerson><name><given>Mary</given><family>Doe</family></name></guardianPerson>
+        <guardianOrganization><name>Family Services</name></guardianOrganization>
+      </guardian>
+      <languageCommunication><languageCode code="en"/><preferenceInd value="true"/></languageCommunication>
+      <languageCommunication><languageCode code="es"/><preferenceInd value="false"/></languageCommunication>
+    </patient>
+    <providerOrganization>
+      <id root="2.16.840.1.113883.4.6" extension="1234567893"/>
+      <name>Community Health Center</name>
+    </providerOrganization>
+  </patientRole></recordTarget>
+</ClinicalDocument>"""
+
+
+def _header_patient():
+    bundle = convert_cda_to_bundle(_HEADER_DOC)
+    return bundle, next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Patient")
+
+
+def test_marital_status_maps_with_the_v3_code_system():
+    _, patient = _header_patient()
+    assert patient.maritalStatus.coding[0].code == "M"
+    # The IG's "transform" row is a system rewrite - C-CDA's own codes are
+    # the ones FHIR's marital-status value set draws on.
+    assert patient.maritalStatus.coding[0].system == "http://terminology.hl7.org/CodeSystem/v3-MaritalStatus"
+
+
+def test_language_communication_maps_language_and_preference():
+    _, patient = _header_patient()
+    assert [(c.language.coding[0].code, c.preferred) for c in patient.communication] == [("en", True), ("es", False)]
+
+
+def test_race_splits_omb_categories_from_detailed_codes():
+    # The us-core-race extension slices its codings; an OMB category and a
+    # CDC detailed code are not interchangeable, and `text` is 1..1.
+    _, patient = _header_patient()
+    race = next(e for e in patient.extension if e.url.endswith("us-core-race"))
+    assert [(x.url, x.valueCoding.code) for x in race.extension if x.valueCoding] == [
+        ("ombCategory", "2106-3"),
+        ("detailed", "2108-9"),
+    ]
+    assert race.extension[-1].url == "text"
+    assert race.extension[-1].valueString == "White, European"
+
+
+def test_ethnicity_maps_to_its_own_extension():
+    _, patient = _header_patient()
+    ethnicity = next(e for e in patient.extension if e.url.endswith("us-core-ethnicity"))
+    assert [x.valueCoding.code for x in ethnicity.extension if x.valueCoding] == ["2186-5"]
+
+
+def test_guardian_becomes_a_contact_with_its_own_organization():
+    bundle, patient = _header_patient()
+    contact = patient.contact[0]
+    assert contact.relationship[0].coding[0].code == "MTH"
+    assert contact.name.family == "Doe"
+    assert contact.address.city == "Boston"
+    assert [t.value for t in contact.telecom] == ["+16175550111"]
+    organizations = {e.resource.id: e.resource for e in bundle.entry if e.resource.get_resource_type() == "Organization"}
+    assert organizations[contact.organization.reference.removeprefix("urn:uuid:")].name == "Family Services"
+
+
+def test_provider_organization_becomes_the_managing_organization():
+    bundle, patient = _header_patient()
+    organizations = {e.resource.id: e.resource for e in bundle.entry if e.resource.get_resource_type() == "Organization"}
+    managing = organizations[patient.managingOrganization.reference.removeprefix("urn:uuid:")]
+    assert managing.name == "Community Health Center"
+    assert managing.identifier[0].value == "1234567893"
+
+
+def test_header_organizations_reach_the_bundle():
+    # A Reference to a resource the Bundle does not carry would dangle.
+    bundle, _ = _header_patient()
+    assert sorted(e.resource.name for e in bundle.entry if e.resource.get_resource_type() == "Organization") == [
+        "Community Health Center",
+        "Family Services",
+    ]
+

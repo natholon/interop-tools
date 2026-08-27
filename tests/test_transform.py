@@ -2595,3 +2595,42 @@ def test_adt_round_trip_preserves_patient_demographics_and_repetitions():
     assert patient.multipleBirthBoolean is None
     assert patient.deceasedBoolean is None
 
+
+def test_ccd_round_trip_preserves_the_patient_header_demographics():
+    # Marital status, languages, race/ethnicity, guardians and the provider
+    # organization all have a real target in the IG's Patient table; each
+    # needs a source element regenerated for it or the next forward pass
+    # loses it.
+    from tests.test_ccd_mapping import _HEADER_DOC
+
+    bundle = convert_to_bundle(_HEADER_DOC)
+    round_tripped = convert_to_bundle(build_message_from_bundle(bundle, "CDA", "CCD", ""))
+
+    def snapshot(b):
+        patient = next(e.resource for e in b.entry if e.resource.get_resource_type() == "Patient")
+        return (
+            patient.maritalStatus.coding[0].code,
+            [(c.language.coding[0].code, c.preferred) for c in patient.communication],
+            [
+                (x.url, x.valueCoding.code if x.valueCoding else x.valueString)
+                for e in patient.extension
+                for x in e.extension
+            ],
+            [(c.relationship[0].coding[0].code, c.name.family, bool(c.organization)) for c in patient.contact],
+            sorted(e.resource.name for e in b.entry if e.resource.get_resource_type() == "Organization"),
+        )
+
+    assert snapshot(round_tripped) == snapshot(bundle)
+
+
+def test_ccd_round_trip_keeps_a_second_race_on_the_sdtc_repeat():
+    # A second raceCode only reaches the document through the sdtc-prefixed
+    # sibling, and an unbound prefix is a parse error - so the reverse
+    # builder has to declare the namespace whether it uses one or not.
+    from tests.test_ccd_mapping import _HEADER_DOC
+
+    bundle = convert_to_bundle(_HEADER_DOC)
+    document = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    assert 'xmlns:sdtc="urn:hl7-org:sdtc"' in document
+    assert '<sdtc:raceCode code="2108-9"' in document
+

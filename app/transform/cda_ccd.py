@@ -37,7 +37,13 @@ from app.cda.allergies import CATEGORY_MAP as ALLERGY_CATEGORY_MAP
 from app.cda.allergies import TYPE_MAP as ALLERGY_TYPE_MAP
 from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
 from app.cda.ccd import CCD_TEMPLATE_ID
-from app.cda.common import CD_FALLBACK_SYSTEM, OID_TO_FHIR_SYSTEM, RECOGNIZED_ENCOUNTER_CLASSES
+from app.cda.common import (
+    CD_FALLBACK_SYSTEM,
+    OID_TO_FHIR_SYSTEM,
+    RECOGNIZED_ENCOUNTER_CLASSES,
+    US_CORE_ETHNICITY_EXTENSION,
+    US_CORE_RACE_EXTENSION,
+)
 from app.cda.immunizations import IMMUNIZATION_ACTIVITY_TEMPLATE_ID
 from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_TEMPLATE_ID
 from app.cda.results import ORGANIZER_TEMPLATE_ID as RESULTS_ORGANIZER_TEMPLATE_ID
@@ -194,7 +200,115 @@ def _reverse_identifier_root(identifier) -> str:
     return _PLACEHOLDER_ROOT
 
 
-def _build_patient_role(patient) -> str:
+def _build_addr_element(address) -> str:
+    if address is None:
+        return ""
+    lines = "".join(f"<streetAddressLine>{_esc(line)}</streetAddressLine>" for line in (address.line or []))
+    city = f"<city>{_esc(address.city)}</city>" if address.city else ""
+    state = f"<state>{_esc(address.state)}</state>" if address.state else ""
+    postal_code = f"<postalCode>{_esc(address.postalCode)}</postalCode>" if address.postalCode else ""
+    country = f"<country>{_esc(address.country)}</country>" if address.country else ""
+    return f"<addr>{lines}{city}{state}{postal_code}{country}</addr>"
+
+
+def _build_telecom_elements(telecoms) -> str:
+    parts = []
+    for contact_point in telecoms or []:
+        if not contact_point.value:
+            continue
+        scheme = "mailto" if contact_point.system == "email" else "tel"
+        parts.append(f'<telecom value="{_esc(f"{scheme}:{contact_point.value}")}"/>')
+    return "".join(parts)
+
+
+def _build_name_element(human_name, tag: str = "name") -> str:
+    if human_name is None:
+        return ""
+    family = f"<family>{_esc(human_name.family)}</family>" if human_name.family else ""
+    given = "".join(f"<given>{_esc(g)}</given>" for g in (human_name.given or []))
+    return f"<{tag}>{given}{family}</{tag}>" if given or family else ""
+
+
+def _build_race_and_ethnicity(patient) -> str:
+    """The us-core-race/us-core-ethnicity extensions back to raceCode and
+    ethnicGroupCode.
+
+    Only the first coding keeps the plain tag; every further one takes the
+    sdtc-namespaced repeat, which is how C-CDA spells a second race. The
+    `text` sub-extension has no source element of its own - the forward
+    direction builds it from the codes' own displays - so it is not
+    regenerated.
+    """
+    parts = []
+    for url, tag in (
+        (US_CORE_RACE_EXTENSION, "raceCode"),
+        (US_CORE_ETHNICITY_EXTENSION, "ethnicGroupCode"),
+    ):
+        extension = next((e for e in (patient.extension or []) if e.url == url), None)
+        if extension is None:
+            continue
+        codings = [part.valueCoding for part in (extension.extension or []) if part.valueCoding is not None]
+        for index, coding in enumerate(codings):
+            name = tag if index == 0 else f"sdtc:{tag}"
+            parts.append(f"<{name} {_build_coding_attrs(coding)}/>")
+    return "".join(parts)
+
+
+def _build_coding_attrs(coding) -> str:
+    oid = _reverse_code_system(coding.system)
+    system = f' codeSystem="{_esc(oid)}"' if oid else ""
+    display = f' displayName="{_esc(coding.display)}"' if coding.display else ""
+    return f'code="{_esc(coding.code)}"{system}{display}'
+
+
+def _build_language_communications(patient) -> str:
+    parts = []
+    for communication in patient.communication or []:
+        coding = communication.language.coding[0] if communication.language and communication.language.coding else None
+        if coding is None or not coding.code:
+            continue
+        preference = ""
+        if communication.preferred is not None:
+            preference = f'<preferenceInd value="{str(communication.preferred).lower()}"/>'
+        parts.append(
+            f'<languageCommunication><languageCode code="{_esc(coding.code)}"/>{preference}</languageCommunication>'
+        )
+    return "".join(parts)
+
+
+def _build_guardians(patient, organizations_by_id: dict) -> str:
+    parts = []
+    for contact in patient.contact or []:
+        code = ""
+        if contact.relationship and contact.relationship[0].coding:
+            code = f"<code {_build_coding_attrs(contact.relationship[0].coding[0])}/>"
+        person = _build_name_element(contact.name)
+        organization = ""
+        if contact.organization is not None and contact.organization.reference:
+            resolved = organizations_by_id.get(contact.organization.reference.removeprefix("urn:uuid:"))
+            if resolved is not None:
+                organization = f"<guardianOrganization>{_build_organization_body(resolved)}</guardianOrganization>"
+        if not (code or person or organization):
+            continue
+        person_element = f"<guardianPerson>{person}</guardianPerson>" if person else ""
+        parts.append(
+            f"<guardian>{code}{_build_addr_element(contact.address)}"
+            f"{_build_telecom_elements(contact.telecom)}{person_element}{organization}</guardian>"
+        )
+    return "".join(parts)
+
+
+def _build_organization_body(organization) -> str:
+    ids = "".join(
+        f'<id root="{_reverse_identifier_root(identifier)}" extension="{_esc(identifier.value)}"/>'
+        for identifier in (organization.identifier or [])
+    )
+    name = f"<name>{_esc(organization.name)}</name>" if organization.name else ""
+    address = organization.address[0] if organization.address else None
+    return f"{ids}{name}{_build_telecom_elements(organization.telecom)}{_build_addr_element(address)}"
+
+
+def _build_patient_role(patient, organizations_by_id: dict | None = None) -> str:
     ids = "".join(
         f'<id root="{_reverse_identifier_root(identifier)}" extension="{_esc(identifier.value)}"/>'
         for identifier in (patient.identifier or [])
@@ -211,24 +325,26 @@ def _build_patient_role(patient) -> str:
         if code:
             gender = f'<administrativeGenderCode code="{code}" codeSystem="2.16.840.1.113883.5.1"/>'
     birth_time = f'<birthTime value="{format_hl7_date(patient.birthDate)}"/>' if patient.birthDate else ""
-    addr = ""
-    if patient.address:
-        address = patient.address[0]
-        lines = "".join(f"<streetAddressLine>{_esc(line)}</streetAddressLine>" for line in (address.line or []))
-        city = f"<city>{_esc(address.city)}</city>" if address.city else ""
-        state = f"<state>{_esc(address.state)}</state>" if address.state else ""
-        postal_code = f"<postalCode>{_esc(address.postalCode)}</postalCode>" if address.postalCode else ""
-        country = f"<country>{_esc(address.country)}</country>" if address.country else ""
-        addr = f"<addr>{lines}{city}{state}{postal_code}{country}</addr>"
-    telecom = ""
-    if patient.telecom:
-        contact_point = patient.telecom[0]
-        scheme = "tel" if contact_point.system == "phone" else "mailto" if contact_point.system == "email" else "tel"
-        telecom = f'<telecom value="{_esc(f"{scheme}:{contact_point.value}")}"/>'
+    addr = _build_addr_element(patient.address[0] if patient.address else None)
+    telecom = _build_telecom_elements(patient.telecom[:1] if patient.telecom else [])
+    marital = ""
+    if patient.maritalStatus and patient.maritalStatus.coding:
+        marital = f"<maritalStatusCode {_build_coding_attrs(patient.maritalStatus.coding[0])}/>"
+
+    organizations_by_id = organizations_by_id or {}
+    provider = ""
+    if patient.managingOrganization is not None and patient.managingOrganization.reference:
+        resolved = organizations_by_id.get(patient.managingOrganization.reference.removeprefix("urn:uuid:"))
+        if resolved is not None:
+            provider = f"<providerOrganization>{_build_organization_body(resolved)}</providerOrganization>"
 
     return (
         f'<recordTarget><patientRole>{ids}{addr}{telecom}'
-        f'<patient>{name}{gender}{birth_time}</patient>'
+        f"<patient>{name}{gender}{birth_time}{marital}"
+        f"{_build_race_and_ethnicity(patient)}"
+        f"{_build_guardians(patient, organizations_by_id)}"
+        f"{_build_language_communications(patient)}</patient>"
+        f"{provider}"
         "</patientRole></recordTarget>"
     )
 
@@ -1883,7 +1999,11 @@ def build_sectioned_document(
 
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        '<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
+        # sdtc is how C-CDA spells a repeated raceCode/ethnicGroupCode,
+        # so the prefix has to be bound whether or not this document
+        # happens to use one - an unbound prefix is a parse error.
+        ' xmlns:sdtc="urn:hl7-org:sdtc">'
         f'<templateId root="{_US_HEADER_TEMPLATE_ID}"/><templateId root="{template_id}"/>'
         f'<id root="{document_root}" extension="{document_id}"/>'
         f'<code code="{doc_code}" codeSystem="2.16.840.1.113883.6.1" displayName="{doc_code_display}"/>'
@@ -1894,7 +2014,7 @@ def build_sectioned_document(
         f"{set_id}"
         # CDA's header is a sequence: recordTarget, author, custodian,
         # the authenticators, then componentOf.
-        f"{_build_patient_role(patient)}{header_participations}{_build_component_of(encounter)}{body}"
+        f"{_build_patient_role(patient, organizations_by_id)}{header_participations}{_build_component_of(encounter)}{body}"
         "</ClinicalDocument>"
     )
 
