@@ -118,10 +118,14 @@ def build_address_segments(rng: random.Random) -> str:
     """N3/N4, and sometimes PER - every party in every 837 can carry them,
     and each maps to a real Address/ContactPoint, so both present and
     absent need generating."""
+    parts = []
+    # REF*EI is the party's own tax ID, which maps to a real Identifier.
+    if maybe(rng, 0.4):
+        parts.append(f"REF*EI*{random_identifier(rng, digits=9)}~")
     if not maybe(rng, 0.7):
-        return ""
+        return "".join(parts)
     line, city, state, zip_code = random_address(rng)
-    segments = [f"N3*{line.upper()}~", f"N4*{city.upper()}*{state}*{zip_code}~"]
+    segments = parts + [f"N3*{line.upper()}~", f"N4*{city.upper()}*{state}*{zip_code}~"]
     if maybe(rng, 0.35):
         _, given = random_person_name(rng)
         segments.append(f"PER*IC*{given.upper()}*TE*{random_identifier(rng, digits=10)}~")
@@ -134,13 +138,19 @@ def build_org_nm1(rng: random.Random, entity_code: str, names_pool: list[str]) -
     return f"NM1*{entity_code}*2*{name}*****XX*{identifier}~" + build_address_segments(rng)
 
 
+_NAME_SUFFIXES = ["JR", "SR", "III", "II"]
+
+
 def build_person_nm1(rng: random.Random, entity_code: str, sex: str, include_id: bool) -> str:
     family, given = random_person_name(rng, sex=sex)
-    address = build_address_segments(rng)
+    # NM105 middle name and NM107 suffix both map to HumanName, so both
+    # need to occur and to be absent.
+    middle = rng.choice("ABCDEFGHJKLMNPRSTW") if maybe(rng, 0.4) else ""
+    suffix = rng.choice(_NAME_SUFFIXES) if maybe(rng, 0.2) else ""
+    fields = [entity_code, "1", family, given, middle, "", suffix]
     if include_id:
-        identifier = random_identifier(rng, digits=8)
-        return f"NM1*{entity_code}*1*{family}*{given}****MI*{identifier}~" + address
-    return f"NM1*{entity_code}*1*{family}*{given}~" + address
+        fields += ["MI", random_identifier(rng, digits=8)]
+    return "NM1*" + "*".join(fields).rstrip("*") + "~" + build_address_segments(rng)
 
 
 def build_dmg(rng: random.Random, sex: str) -> str:

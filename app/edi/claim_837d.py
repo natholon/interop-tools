@@ -57,6 +57,7 @@ from fhir.resources.R4B.resource import Resource
 
 from app.edi.base import EdiTransactionBuilder
 from app.edi.common import (
+    build_taxonomy_qualification,
     DTP_SERVICE_DATE,
     assemble_bundle,
     build_coverage,
@@ -485,6 +486,19 @@ class Edi837dBuilder(EdiTransactionBuilder):
                     role=CodeableConcept(coding=[Coding(system=_CARE_TEAM_ROLE_SYSTEM, code=_RENDERING_PROVIDER_ROLE)]),
                 )
             ]
+            # PRV*..*PXC*<taxonomy> beside the provider's own NM1 -> the
+            # care team entry's qualification. Claim.careTeam.qualification
+            # binds at example strength, so a NUCC code is conformant.
+            qualification = build_taxonomy_qualification(rendering_nm1_members)
+            if qualification is not None:
+                claim.careTeam[0].qualification = qualification
+                if recorder:
+                    recorder.record(
+                        claim_id,
+                        "careTeam[0].qualification.coding[0].code",
+                        edi_location("PRV", 3),
+                        qualification.coding[0].code,
+                    )
             if recorder:
                 recorder.record_inferred(
                     claim_id,

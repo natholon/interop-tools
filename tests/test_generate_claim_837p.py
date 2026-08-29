@@ -139,9 +139,15 @@ def test_generate_differs_across_seeds():
 
 def test_party_address_and_contact_vary_across_seeds():
     # Both map to a real Address/ContactPoint, so each needs to occur
-    # present and absent for the mapping to be fuzzed at all.
-    for segment_id in ("N3", "N4", "PER"):
-        seen = {any(s.startswith(segment_id) for s in generate_837p(random.Random(seed)).split("~"))
-                for seed in range(40)}
-        assert seen == {True, False}, f"{segment_id} never varies"
+    # present and absent *per party* for the mapping to be fuzzed at all.
+    # Counted rather than merely detected: a claim has several parties, so
+    # "some N3 appears somewhere" is true of essentially every message and
+    # would pass without exercising the absent branch at all.
+    for segment_id in ("N3", "N4", "PER", "REF*EI"):
+        counts = {
+            sum(s.startswith(segment_id) for s in generate_837p(random.Random(seed)).split("~"))
+            for seed in range(40)
+        }
+        assert len(counts) > 1, f"{segment_id} count never varies: {counts}"
+        assert min(counts) < max(counts), segment_id
 

@@ -402,7 +402,9 @@ def test_edi_repeated_segments_get_distinct_locations_and_ids():
     # first one's id. Asserted over whatever actually repeats rather than a
     # named segment: this pinned N3/N4 until those gained a real Address
     # mapping and stopped being drops at all.
-    decisions = [d for d in _edi_decisions("edi_837p_basic.x12") if d.kind == "dropped"]
+    # 837I, because 837P no longer drops any repeating segment - the ones it
+    # had (N3/N4, SV1-03) all gained real mappings.
+    decisions = [d for d in _edi_decisions("edi_837i_basic.x12") if d.kind == "dropped"]
     indexed = [d for d in decisions if re.search(r"\[\d+\]", d.source_location or "")]
     assert indexed, "fixture assumption: some segment occurs more than once"
     assert len({d.id for d in decisions}) == len(decisions)

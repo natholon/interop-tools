@@ -43,8 +43,10 @@ from app.transform.edi_common import (
     build_trailer_segments,
     envelope_datetime,
     build_pat_segment,
+    build_prv_segment,
     build_sbr_segment,
     org_or_person_nm1,
+    reverse_quantity_unit,
     resolve_by_reference,
     resolve_subscriber_and_dependent,
     sanitize_x12_text,
@@ -91,7 +93,7 @@ def _build_sv2_segment(item) -> str:
         _resolve_revenue_code(item),
         _reverse_procedure_composite(item),
         f"{item.unitPrice.value:.2f}" if item.unitPrice else "0.00",
-        "UN",
+        reverse_quantity_unit(item),
         str(item.quantity.value) if item.quantity else "1",
     ]
     return "SV2*" + "*".join(fields) + "~"
@@ -202,6 +204,9 @@ class Edi837iBuilder(MessageBuilder):
             st_to_hl_segments.append(hi_segment)
         if attending_provider is not None:
             st_to_hl_segments.append(org_or_person_nm1("71", attending_provider))
+            prv = build_prv_segment(claim, "AT")
+            if prv:
+                st_to_hl_segments.append(prv)
 
         for sequence, item in enumerate(claim.item or [], start=1):
             st_to_hl_segments.extend(_build_service_line_segments(sequence, item))

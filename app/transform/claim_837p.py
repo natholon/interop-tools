@@ -45,8 +45,10 @@ from app.transform.edi_common import (
     build_trailer_segments,
     envelope_datetime,
     build_pat_segment,
+    build_prv_segment,
     build_sbr_segment,
     org_or_person_nm1,
+    reverse_quantity_unit,
     resolve_by_reference,
     resolve_subscriber_and_dependent,
     sanitize_x12_text,
@@ -76,7 +78,7 @@ def _build_sv1_segment(item) -> str:
     charge = f"{item.unitPrice.value:.2f}" if item.unitPrice else "0.00"
     quantity = str(item.quantity.value) if item.quantity else "1"
     pointer_composite = ":".join(str(p) for p in (item.diagnosisSequence or [1])[:_MAX_DIAGNOSIS_POINTERS])
-    fields = [procedure_composite, charge, "UN", quantity, "", "", pointer_composite]
+    fields = [procedure_composite, charge, reverse_quantity_unit(item), quantity, "", "", pointer_composite]
     return "SV1*" + "*".join(fields) + "~"
 
 
@@ -171,6 +173,9 @@ class Edi837pBuilder(MessageBuilder):
             st_to_hl_segments.append(hi_segment)
         if rendering_provider is not None:
             st_to_hl_segments.append(org_or_person_nm1("82", rendering_provider))
+            prv = build_prv_segment(claim, "PE")
+            if prv:
+                st_to_hl_segments.append(prv)
 
         for sequence, item in enumerate(claim.item or [], start=1):
             st_to_hl_segments.extend(_build_service_line_segments(sequence, item))

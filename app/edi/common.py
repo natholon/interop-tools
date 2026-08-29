@@ -700,6 +700,14 @@ def apply_address_and_telecom(resource, members: list[Segment], recorder=None) -
     if telecoms:
         resource.telecom = telecoms
         _record_telecoms(resource.id, telecoms, recorder)
+    ein = build_ein_identifier(members)
+    if ein is not None:
+        existing = list(resource.identifier or [])
+        resource.identifier = existing + [ein]
+        if recorder:
+            recorder.record(
+                resource.id, f"identifier[{len(existing)}].value", edi_location("REF", 2), ein.value
+            )
 
 
 def build_organization_from_nm1(nm1: Segment, recorder=None, members: list[Segment] | None = None) -> Organization:
@@ -723,13 +731,21 @@ def build_organization_from_nm1(nm1: Segment, recorder=None, members: list[Segme
 def _build_person_name(nm1: Segment) -> HumanName | None:
     family = element(nm1, 3)
     given = element(nm1, 4)
+    # NM105 is the middle name, which HumanName carries as a second entry
+    # in .given - FHIR has no separate middle-name field.
+    middle = element(nm1, 5)
+    suffix = element(nm1, 7)
     if not family and not given:
         return None
     name = HumanName()
+    # NM107 is the generational/professional suffix (Jr, Sr, III), which
+    # HumanName.suffix takes as-is - it is a plain string list, not coded.
+    if suffix:
+        name.suffix = [suffix]
     if family:
         name.family = family
     if given:
-        name.given = [given]
+        name.given = [given] + ([middle] if middle else [])
     return name
 
 
@@ -740,6 +756,10 @@ def _record_person_name(resource_id: str, name: HumanName | None, recorder) -> N
         recorder.record(resource_id, "name[0].family", edi_location("NM1", 3), name.family)
     if name.given:
         recorder.record(resource_id, "name[0].given[0]", edi_location("NM1", 4), name.given[0])
+    if name.given and len(name.given) > 1:
+        recorder.record(resource_id, "name[0].given[1]", edi_location("NM1", 5), name.given[1])
+    if name.suffix:
+        recorder.record(resource_id, "name[0].suffix[0]", edi_location("NM1", 7), name.suffix[0])
 
 
 def build_practitioner_from_nm1(nm1: Segment, recorder=None, members: list[Segment] | None = None) -> Practitioner:
@@ -827,6 +847,56 @@ RELATIONSHIP_CODE_TO_COVERAGE_RELATIONSHIP = {
 # remittance_835.py imports it back for its own CLP06.
 CLAIM_FILING_INDICATOR_SYSTEM = "urn:interop-tools:x12-claim-filing-indicator"
 SUBSCRIBER_RELATIONSHIP_SYSTEM = "http://terminology.hl7.org/CodeSystem/subscriber-relationship"
+
+# PRV03 carries a Health Care Provider Taxonomy code when PRV02 says "PXC".
+# The canonical system is FHIR R4's own named identifier system for NUCC,
+# and Claim.careTeam.qualification binds at *example* strength, so carrying
+# it there is conformant rather than a stretch.
+NUCC_TAXONOMY_SYSTEM = "http://nucc.org/provider-taxonomy"
+_PRV_TAXONOMY_QUALIFIER = "PXC"
+
+# REF*EI is the party's Employer's Identification Number (a US TIN). The
+# OID is FHIR's own USEIN naming system, confirmed by direct fetch.
+EIN_IDENTIFIER_SYSTEM = "urn:oid:2.16.840.1.113883.4.4"
+_REF_EIN_QUALIFIER = "EI"
+
+# SV103 (Professional/Dental) and SV204 (Institutional) both carry X12's
+# Unit or Basis for Measurement Code (element 355) for the quantity beside
+# them - UN units, DA days, MJ minutes. Quantity.code needs a system and
+# X12 publishes no canonical URI for element 355, so it takes a disclosed
+# local one, the same treatment every other X12-only code list here gets.
+UNIT_OF_MEASURE_SYSTEM = "urn:interop-tools:x12-unit-of-measure"
+
+
+def build_taxonomy_qualification(members: list[Segment]) -> CodeableConcept | None:
+    """PRV*..*PXC*<taxonomy> -> a NUCC-coded CodeableConcept.
+
+    Only a PXC-qualified PRV03 is read: PRV02 names which code list PRV03
+    is drawn from, and taxonomy is the only one with a canonical FHIR
+    system to map onto.
+    """
+    prv = find_segment(members, "PRV")
+    if prv is None or element(prv, 2).strip().upper() != _PRV_TAXONOMY_QUALIFIER:
+        return None
+    taxonomy = element(prv, 3)
+    if not taxonomy:
+        return None
+    return CodeableConcept(coding=[Coding(system=NUCC_TAXONOMY_SYSTEM, code=taxonomy)])
+
+
+def build_ein_identifier(members: list[Segment]) -> Identifier | None:
+    """REF*EI*<tin> -> an Identifier on FHIR's own USEIN naming system.
+
+    Other REF qualifiers name code lists with no canonical FHIR system and
+    are left alone rather than pushed onto a placeholder.
+    """
+    for segment in members:
+        if segment[0] != "REF" or element(segment, 1).strip().upper() != _REF_EIN_QUALIFIER:
+            continue
+        value = element(segment, 2)
+        if value:
+            return Identifier(system=EIN_IDENTIFIER_SYSTEM, value=value)
+    return None
 
 def build_coverage(
     patient: Resource,

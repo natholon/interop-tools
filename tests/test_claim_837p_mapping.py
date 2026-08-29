@@ -405,3 +405,65 @@ def test_unknown_payer_responsibility_leaves_order_unset():
     raw = read_fixture("edi_837p_basic.x12").replace("SBR*P********CI~", "SBR*U********CI~")
     assert _coverage(raw).order is None
 
+
+def test_nm1_middle_name_and_suffix_map_onto_the_human_name():
+    # NM105 is the middle name, which FHIR carries as a second .given
+    # entry - it has no separate middle-name field - and NM107 the suffix.
+    raw = read_fixture("edi_837p_basic.x12").replace(
+        "NM1*IL*1*SMITH*JANE****MI*111223333~", "NM1*IL*1*SMITH*JANE*Q**JR*MI*111223333~"
+    )
+    patient = next(
+        e.resource for e in convert_edi_to_bundle(raw).entry if e.resource.get_resource_type() == "Patient"
+    )
+    assert patient.name[0].given == ["JANE", "Q"]
+    assert patient.name[0].suffix == ["JR"]
+
+
+def test_ref_ei_maps_to_a_tax_id_identifier_beside_the_npi():
+    # REF*EI is the party's Employer Identification Number, on FHIR's own
+    # USEIN naming system - it must sit alongside the NPI, not replace it.
+    billing = next(
+        e.resource
+        for e in convert_edi_to_bundle(read_fixture("edi_837p_basic.x12")).entry
+        if e.resource.get_resource_type() == "Practitioner"
+    )
+    systems = {i.system: i.value for i in billing.identifier}
+    assert systems["http://hl7.org/fhir/sid/us-npi"] == "1999996666"
+    assert systems["urn:oid:2.16.840.1.113883.4.4"] == "123456789"
+
+
+def test_sv1_unit_of_measure_lands_on_the_quantity():
+    claim = next(
+        e.resource
+        for e in convert_edi_to_bundle(read_fixture("edi_837p_basic.x12")).entry
+        if e.resource.get_resource_type() == "Claim"
+    )
+    assert claim.item[0].quantity.code == "UN"
+    assert claim.item[0].quantity.system == "urn:interop-tools:x12-unit-of-measure"
+
+
+def test_prv_taxonomy_lands_on_the_care_team_qualification():
+    # Only a PXC-qualified PRV03 is read - PRV02 names which code list
+    # PRV03 is drawn from, and taxonomy is the only one with a canonical
+    # FHIR system.
+    raw = read_fixture("edi_837p_basic.x12").replace(
+        "NM1*82*1*KILDARE*BEN****XX*1999996666~",
+        "NM1*82*1*KILDARE*BEN****XX*1999996666~PRV*PE*PXC*207Q00000X~",
+    )
+    claim = next(
+        e.resource for e in convert_edi_to_bundle(raw).entry if e.resource.get_resource_type() == "Claim"
+    )
+    assert claim.careTeam[0].qualification.coding[0].system == "http://nucc.org/provider-taxonomy"
+    assert claim.careTeam[0].qualification.coding[0].code == "207Q00000X"
+
+
+def test_a_non_taxonomy_prv_is_left_alone():
+    raw = read_fixture("edi_837p_basic.x12").replace(
+        "NM1*82*1*KILDARE*BEN****XX*1999996666~",
+        "NM1*82*1*KILDARE*BEN****XX*1999996666~PRV*PE*ZZ*SOMETHING~",
+    )
+    claim = next(
+        e.resource for e in convert_edi_to_bundle(raw).entry if e.resource.get_resource_type() == "Claim"
+    )
+    assert claim.careTeam[0].qualification is None
+

@@ -63,6 +63,8 @@ from fhir.resources.R4B.resource import Resource
 
 from app.edi.base import EdiTransactionBuilder
 from app.edi.common import (
+    build_taxonomy_qualification,
+    UNIT_OF_MEASURE_SYSTEM,
     DTP_SERVICE_DATE,
     assemble_bundle,
     build_coverage,
@@ -192,6 +194,17 @@ def _build_service_line_item(
     quantity_value = parse_decimal(quantity_raw)
     if quantity_value is not None:
         item.quantity = Quantity(value=quantity_value)
+        # SV1-03 names the basis the quantity is measured in
+        # (UN units, DA days, MJ minutes). X12 publishes no canonical URI
+        # for element 355, so it takes a disclosed local system.
+        unit_code = element(sv1, 3)
+        if unit_code:
+            item.quantity.system = UNIT_OF_MEASURE_SYSTEM
+            item.quantity.code = unit_code
+            if recorder:
+                recorder.record(
+                    resource_id, f"{item_path}.quantity.code", edi_location("SV1", 3), unit_code
+                )
         if recorder and resource_id:
             recorder.record(resource_id, f"{item_path}.quantity.value", edi_location("SV1", 4), quantity_raw)
 
@@ -353,6 +366,19 @@ class Edi837pBuilder(EdiTransactionBuilder):
                     role=CodeableConcept(coding=[Coding(system=_CARE_TEAM_ROLE_SYSTEM, code=_RENDERING_PROVIDER_ROLE)]),
                 )
             ]
+            # PRV*..*PXC*<taxonomy> beside the provider's own NM1 -> the
+            # care team entry's qualification. Claim.careTeam.qualification
+            # binds at example strength, so a NUCC code is conformant.
+            qualification = build_taxonomy_qualification(rendering_nm1_members)
+            if qualification is not None:
+                claim.careTeam[0].qualification = qualification
+                if recorder:
+                    recorder.record(
+                        claim_id,
+                        "careTeam[0].qualification.coding[0].code",
+                        edi_location("PRV", 3),
+                        qualification.coding[0].code,
+                    )
             if recorder:
                 recorder.record_inferred(
                     claim_id,

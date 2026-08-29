@@ -22,9 +22,13 @@ merging them would be a lossy guess. `Device` is excluded too - this app's
 Devices represent scheduling/booking context (see `siu.py`'s AIG handling),
 not a stable identity.
 
-**Identity key**: the frozenset of `(system, value)` identifier pairs when
-any exist - two resources sharing one real identifier are the same entity
-by construction. Otherwise a name-only fallback: `Patient`/`Practitioner`
+**Identity key**: *any* shared `(system, value)` identifier pair - two
+resources sharing one real identifier are the same entity by construction,
+so they merge even when one carries identifiers the other does not. That
+is the whole motivating case: an 837's billing loop routinely carries a
+tax ID beside the NPI while the rendering loop carries the NPI alone, and
+keying on the *set* of identifiers rather than the overlap kept those two
+apart. Otherwise a name-only fallback: `Patient`/`Practitioner`
 key off the first `HumanName`'s `(family, tuple(given))`,
 `Organization`/`Location` off their bare `.name` string, case-folded. A
 resource with neither is never merged - not enough signal to guess."""
@@ -117,6 +121,51 @@ def _rewrite_references(node, uuid_remap: dict[str, str]) -> None:
             _rewrite_references(item, uuid_remap)
 
 
+def _group_by_identity(bundle: Bundle) -> dict:
+    """Entries grouped by identity, merging on *any* shared identifier
+    pair rather than on the whole set being equal.
+
+    An identifier-keyed resource joins the first existing group it shares
+    a pair with, and absorbs that group's pairs so a later resource
+    matching either one lands in the same place - a small union-find, in
+    Bundle order so the first occurrence stays canonical.
+    """
+    groups: dict[tuple[str, tuple], list] = {}
+    # (resource_type, pair) -> the group key that pair already belongs to.
+    pair_owner: dict[tuple, tuple] = {}
+
+    for entry in bundle.entry or []:
+        resource_type = entry.resource.get_resource_type()
+        if resource_type not in _IDENTITY_RESOURCE_TYPES:
+            continue
+        key = _identity_key(entry.resource, resource_type)
+        if key is None:
+            continue
+        if key[0] != "identifier":
+            groups.setdefault((resource_type, key), []).append(entry)
+            continue
+
+        pairs = key[1]
+        owned = {pair_owner[(resource_type, pair)] for pair in pairs if (resource_type, pair) in pair_owner}
+        if owned:
+            # Any of them identifies the same entity, so fold them all
+            # into the earliest group rather than picking arbitrarily.
+            group_key = sorted(owned, key=lambda k: list(groups).index(k))[0]
+            for other in owned - {group_key}:
+                groups[group_key].extend(groups.pop(other))
+                for pair, owner in list(pair_owner.items()):
+                    if owner == other:
+                        pair_owner[pair] = group_key
+        else:
+            group_key = (resource_type, key)
+            groups.setdefault(group_key, [])
+        groups[group_key].append(entry)
+        for pair in pairs:
+            pair_owner[(resource_type, pair)] = group_key
+
+    return groups
+
+
 def deduplicate_bundle(bundle: Bundle) -> DedupResult:
     """Merge duplicate Patient/Practitioner/Organization/Location entries
     within `bundle` (see module docstring for the identity-matching rules
@@ -126,12 +175,7 @@ def deduplicate_bundle(bundle: Bundle) -> DedupResult:
     record of what was merged, for a caller to report back to the user.
     Entry order among surviving resources is preserved from the original
     Bundle - only removed duplicates' entries drop out."""
-    groups: dict[tuple[str, tuple], list] = {}
-    for entry in bundle.entry or []:
-        resource_type = entry.resource.get_resource_type()
-        key = _identity_key(entry.resource, resource_type) if resource_type in _IDENTITY_RESOURCE_TYPES else None
-        if key is not None:
-            groups.setdefault((resource_type, key), []).append(entry)
+    groups = _group_by_identity(bundle)
 
     uuid_remap: dict[str, str] = {}
     merges: list[ResourceMerge] = []

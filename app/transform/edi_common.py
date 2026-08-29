@@ -16,6 +16,7 @@ import datetime
 from fhir.resources.R4B.bundle import Bundle
 
 from app.edi.common import (
+    EIN_IDENTIFIER_SYSTEM,
     HI_QUALIFIER_SYSTEM,
     NM1_ID_QUALIFIER_SYSTEM,
     SBR_RESPONSIBILITY_TO_ORDER,
@@ -97,6 +98,10 @@ def build_address_segments(party) -> str:
     describe, which is where X12 expects them and where the forward
     direction reads them from."""
     parts = []
+    for identifier in getattr(party, "identifier", None) or []:
+        if identifier.system == EIN_IDENTIFIER_SYSTEM and identifier.value:
+            parts.append(f"REF*EI*{sanitize_x12_text(identifier.value)}~")
+            break
     address = party.address[0] if getattr(party, "address", None) else None
     if address is not None:
         lines = [sanitize_x12_text(line) for line in (address.line or []) if line]
@@ -129,8 +134,8 @@ def build_address_segments(party) -> str:
 
 def build_org_nm1(entity_code: str, organization) -> str:
     name = sanitize_x12_text(organization.name) or "UNKNOWN"
-    identifier = organization.identifier[0] if organization.identifier else None
-    if identifier and identifier.value:
+    identifier = _first_nm1_identifier(organization)
+    if identifier is not None and identifier.value:
         qualifier = reverse_nm1_qualifier(identifier)
         return f"NM1*{entity_code}*2*{name}*****{qualifier}*{sanitize_x12_text(identifier.value)}~"
     return f"NM1*{entity_code}*2*{name}~"
@@ -138,13 +143,27 @@ def build_org_nm1(entity_code: str, organization) -> str:
 
 def build_person_nm1(entity_code: str, person, include_id: bool) -> str:
     name = person.name[0] if person.name else None
+    given_names = (name.given if name and name.given else []) or []
     family = sanitize_x12_text(name.family) if name and name.family else ""
-    given = sanitize_x12_text(name.given[0]) if name and name.given else ""
-    identifier = person.identifier[0] if person.identifier else None
-    if include_id and identifier and identifier.value:
-        qualifier = reverse_nm1_qualifier(identifier)
-        return f"NM1*{entity_code}*1*{family}*{given}****{qualifier}*{sanitize_x12_text(identifier.value)}~"
-    return f"NM1*{entity_code}*1*{family}*{given}~"
+    given = sanitize_x12_text(given_names[0]) if given_names else ""
+    # NM105 is the middle name - HumanName's second .given entry - and
+    # NM107 the suffix.
+    middle = sanitize_x12_text(given_names[1]) if len(given_names) > 1 else ""
+    suffix = sanitize_x12_text(name.suffix[0]) if name and name.suffix else ""
+    identifier = _first_nm1_identifier(person)
+    fields = [entity_code, "1", family, given, middle, "", suffix]
+    if include_id and identifier is not None and identifier.value:
+        fields += [reverse_nm1_qualifier(identifier), sanitize_x12_text(identifier.value)]
+    return "NM1*" + "*".join(fields).rstrip("*") + "~"
+
+
+def _first_nm1_identifier(resource):
+    """The identifier NM108/09 should carry - never the EIN, which has its
+    own REF*EI segment and would otherwise displace the real one."""
+    for identifier in resource.identifier or []:
+        if identifier.system != EIN_IDENTIFIER_SYSTEM and identifier.value:
+            return identifier
+    return None
 
 
 def build_dmg(person) -> str:
@@ -229,6 +248,29 @@ def build_pat_segment(coverage) -> str:
     code = COVERAGE_RELATIONSHIP_TO_RELATIONSHIP_CODE.get(coverage.relationship.coding[0].code, "")
     return f"PAT*{code}~" if code else ""
 
+
+
+
+def build_prv_segment(claim, role_code: str) -> str:
+    """Claim.careTeam[0].qualification -> PRV*<role>*PXC*<taxonomy>.
+
+    PRV02 is fixed to PXC because that is the only code list this app maps
+    the qualification from - see app.edi.common.build_taxonomy_qualification.
+    """
+    care_team = (claim.careTeam or [None])[0]
+    qualification = care_team.qualification if care_team is not None else None
+    if qualification is None or not qualification.coding or not qualification.coding[0].code:
+        return ""
+    return f"PRV*{role_code}*PXC*{sanitize_x12_text(qualification.coding[0].code)}~"
+
+def reverse_quantity_unit(item, default: str = "UN") -> str:
+    """Claim.item.quantity.code -> the X12 unit-of-measure element.
+
+    Defaults to "UN" (units) only when the Bundle carries no code, which
+    is what this builder emitted for every line before the code had
+    anywhere to come from."""
+    quantity = getattr(item, "quantity", None)
+    return sanitize_x12_text(quantity.code) if quantity is not None and quantity.code else default
 
 def org_or_person_nm1(entity_code: str, resource, include_id: bool = True) -> str:
     """Dispatches to build_org_nm1/build_person_nm1 by the resolved

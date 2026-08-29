@@ -57,6 +57,7 @@ from app.transform.edi_common import (
     build_trailer_segments,
     envelope_datetime,
     build_pat_segment,
+    build_prv_segment,
     build_sbr_segment,
     org_or_person_nm1,
     resolve_by_reference,
@@ -236,6 +237,9 @@ class Edi837dBuilder(MessageBuilder):
             st_to_hl_segments.append(hi_segment)
         if rendering_provider is not None:
             st_to_hl_segments.append(org_or_person_nm1("82", rendering_provider))
+            prv = build_prv_segment(claim, "PE")
+            if prv:
+                st_to_hl_segments.append(prv)
 
         for sequence, item in enumerate(claim.item or [], start=1):
             st_to_hl_segments.extend(_build_service_line_segments(sequence, item))
