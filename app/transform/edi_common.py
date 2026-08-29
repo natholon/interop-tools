@@ -83,6 +83,46 @@ def reverse_nm1_qualifier(identifier) -> str:
     return _DEFAULT_ID_QUALIFIER
 
 
+# PER03/05/07 name what PER04/06/08 carries - the inverse of
+# app.edi.common's own _PER_QUALIFIER_TO_SYSTEM.
+_SYSTEM_TO_PER_QUALIFIER = {"phone": "TE", "fax": "FX", "email": "EM", "url": "UR"}
+
+
+def build_address_segments(party) -> str:
+    """Address -> N3/N4, and telecom -> PER. Emitted after the NM1 they
+    describe, which is where X12 expects them and where the forward
+    direction reads them from."""
+    parts = []
+    address = party.address[0] if getattr(party, "address", None) else None
+    if address is not None:
+        lines = [sanitize_x12_text(line) for line in (address.line or []) if line]
+        if lines:
+            parts.append("N3*" + "*".join(lines[:2]) + "~")
+        n4 = [
+            sanitize_x12_text(address.city or ""),
+            sanitize_x12_text(address.state or ""),
+            sanitize_x12_text(address.postalCode or ""),
+            sanitize_x12_text(address.country or ""),
+        ]
+        if any(n4):
+            parts.append("N4*" + "*".join(n4).rstrip("*") + "~")
+    fields = []
+    for telecom in (getattr(party, "telecom", None) or [])[:3]:
+        qualifier = _SYSTEM_TO_PER_QUALIFIER.get(telecom.system)
+        if qualifier and telecom.value:
+            fields += [qualifier, sanitize_x12_text(telecom.value)]
+    if fields:
+        # PER01 is the contact function code; "IC" (Information Contact) is
+        # the one this app can state truthfully, since the forward direction
+        # reads no function code of its own. PER02 (the contact's name) has
+        # no FHIR source on a bare telecom list, so it is left empty.
+        # PER02 is the contact's own name and has no FHIR source on a bare
+        # telecom list, so it stays empty - the qualifier/value pairs start
+        # at PER03, which is where the forward direction reads them.
+        parts.append("PER*IC*" + "*".join([""] + fields) + "~")
+    return "".join(parts)
+
+
 def build_org_nm1(entity_code: str, organization) -> str:
     name = sanitize_x12_text(organization.name) or "UNKNOWN"
     identifier = organization.identifier[0] if organization.identifier else None
@@ -143,11 +183,14 @@ def org_or_person_nm1(entity_code: str, resource, include_id: bool = True) -> st
     resolve_by_reference above, shared by every 837 variant's reverse
     builder for its billing/subscriber/dependent/payer/rendering-or-
     attending-provider NM1 segments."""
-    return (
+    nm1 = (
         build_org_nm1(entity_code, resource)
         if resource.get_resource_type() == "Organization"
         else build_person_nm1(entity_code, resource, include_id=include_id)
     )
+    # N3/N4/PER follow the NM1 they describe, which is the one choke point
+    # every 837 variant already routes its parties through.
+    return nm1 + build_address_segments(resource)
 
 
 def resolve_payer_and_provider(bundle: Bundle, insurer_reference, provider_reference):

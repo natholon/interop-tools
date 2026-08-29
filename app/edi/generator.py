@@ -34,7 +34,14 @@ should raise `EdiParseError`, not hand back broken X12."""
 import random
 
 from app.edi.parser import parse_interchange
-from app.generators.base import maybe, random_datetime_near_now, random_identifier, random_person_name, random_sex
+from app.generators.base import (
+    maybe,
+    random_address,
+    random_datetime_near_now,
+    random_identifier,
+    random_person_name,
+    random_sex,
+)
 
 PAYER_NAMES = [
     "ACME HEALTH PLAN",
@@ -87,18 +94,33 @@ def build_isa(control_number: str, sender_id: str, receiver_id: str, dt) -> str:
     return "ISA*" + "*".join(fields) + "~"
 
 
+def build_address_segments(rng: random.Random) -> str:
+    """N3/N4, and sometimes PER - every party in every 837 can carry them,
+    and each maps to a real Address/ContactPoint, so both present and
+    absent need generating."""
+    if not maybe(rng, 0.7):
+        return ""
+    line, city, state, zip_code = random_address(rng)
+    segments = [f"N3*{line.upper()}~", f"N4*{city.upper()}*{state}*{zip_code}~"]
+    if maybe(rng, 0.35):
+        _, given = random_person_name(rng)
+        segments.append(f"PER*IC*{given.upper()}*TE*{random_identifier(rng, digits=10)}~")
+    return "".join(segments)
+
+
 def build_org_nm1(rng: random.Random, entity_code: str, names_pool: list[str]) -> str:
     name = rng.choice(names_pool)
     identifier = random_identifier(rng, digits=8)
-    return f"NM1*{entity_code}*2*{name}*****XX*{identifier}~"
+    return f"NM1*{entity_code}*2*{name}*****XX*{identifier}~" + build_address_segments(rng)
 
 
 def build_person_nm1(rng: random.Random, entity_code: str, sex: str, include_id: bool) -> str:
     family, given = random_person_name(rng, sex=sex)
+    address = build_address_segments(rng)
     if include_id:
         identifier = random_identifier(rng, digits=8)
-        return f"NM1*{entity_code}*1*{family}*{given}****MI*{identifier}~"
-    return f"NM1*{entity_code}*1*{family}*{given}~"
+        return f"NM1*{entity_code}*1*{family}*{given}****MI*{identifier}~" + address
+    return f"NM1*{entity_code}*1*{family}*{given}~" + address
 
 
 def build_dmg(rng: random.Random, sex: str) -> str:
@@ -126,6 +148,18 @@ class EdiDraft:
         self.isa_control = isa_control
 
 
+def _segment_count(segments: list[str]) -> int:
+    """How many X12 segments a list of built strings actually contains.
+
+    Counting terminators rather than list entries, because a builder may
+    return an NM1 together with the N3/N4/PER segments that describe it.
+    Exact here for the same reason EdiDraft's own docstring gives for not
+    scanning a joined string: every value these generators emit comes from
+    a fixed pool or a digit string, so none can contain a terminator.
+    """
+    return sum(segment.count("~") for segment in segments)
+
+
 def assemble_generated_interchange(rng: random.Random, draft: EdiDraft, body_segments: list[str]) -> str:
     """Append the patient-loop-specific body, then the trailer segments
     (SE/GE/IEA), deliberately wrong ~12% of the time on SE01/GE01/IEA02
@@ -133,8 +167,10 @@ def assemble_generated_interchange(rng: random.Random, draft: EdiDraft, body_seg
     count-mismatch warning findings - mirroring ORU's deliberate ~30%
     out-of-range OBX-5 fuzzing precedent. A generator that never produces a
     mismatch would leave those rules permanently untested."""
-    # SE01 counts every segment from ST through SE inclusive.
-    se01 = len(draft.st_to_hl_segments) + len(body_segments) + 1  # +1 for SE itself
+    # SE01 counts every segment from ST through SE inclusive - segments,
+    # not list entries: a party's NM1 now comes with the N3/N4/PER that
+    # describe it, in one string.
+    se01 = _segment_count(draft.st_to_hl_segments) + _segment_count(body_segments) + 1  # +1 for SE itself
     ge01 = 1
     iea02 = 1
     if maybe(rng, 0.12):

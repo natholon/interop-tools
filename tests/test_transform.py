@@ -2677,3 +2677,27 @@ def test_edi_835_round_trip_preserves_each_claims_patient():
     )
     assert (patient.name[0].family, str(patient.birthDate), patient.gender) == ("DOE", "1980-01-01", "female")
 
+
+def test_edi_837p_round_trip_preserves_each_party_address_and_telecom():
+    # N3/N4/PER had no FHIR-side home at all and were dropped for every
+    # party in every claim; they now round-trip attached to the NM1 they
+    # describe rather than to whichever party comes first.
+    raw = (Path(__file__).parent / "fixtures" / "edi_837p_basic.x12").read_text().replace(
+        "N3*3333 OCEAN ST~", "N3*3333 OCEAN ST~PER*IC*JERRY*TE*3055552222~"
+    )
+    bundle = convert_to_bundle(raw)
+    message = build_message_from_bundle(bundle, "EDI", "837P", "")
+    assert "N4*SOUTH MIAMI*FL*33000" in message
+    # PER02 is the contact's own name, which a bare telecom list cannot
+    # supply, so it comes back empty rather than guessed at.
+    assert "PER*IC**TE*3055552222" in message
+
+    def snapshot(b):
+        return sorted(
+            (r.resource.get_resource_type(), tuple(r.resource.address[0].line or []), r.resource.address[0].city,
+             tuple(t.value for t in (r.resource.telecom or [])))
+            for r in b.entry if getattr(r.resource, "address", None)
+        )
+
+    assert snapshot(convert_to_bundle(message)) == snapshot(bundle)
+

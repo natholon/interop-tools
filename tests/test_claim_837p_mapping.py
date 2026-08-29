@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.edi.claim_837p import Edi837pBuilder
+from app.edi.pipeline import convert_edi_to_bundle
 from app.edi.parser import first_transaction_set, parse_interchange
 from app.hl7.errors import MappingError, MissingSegmentError
 
@@ -326,3 +327,44 @@ def test_bundle_round_trips_through_json():
     round_tripped = Bundle.model_validate_json(bundle.model_dump_json())
     assert round_tripped.type == bundle.type
     assert len(round_tripped.entry) == len(bundle.entry)
+
+
+def _by_type(bundle, resource_type):
+    return [e.resource for e in bundle.entry if e.resource.get_resource_type() == resource_type]
+
+
+def test_n3_n4_map_to_each_party_own_address():
+    # N3/N4 follow the NM1 they describe, so the billing provider's address
+    # must not land on the payer - both are in the same 2000B/2000A walk.
+    bundle = convert_edi_to_bundle(read_fixture("edi_837p_basic.x12"))
+    payer = next(o for o in _by_type(bundle, "Organization") if o.name == "KEY INSURANCE COMPANY")
+    assert payer.address[0].line == ["3333 OCEAN ST"]
+    assert (payer.address[0].city, payer.address[0].state, payer.address[0].postalCode) == (
+        "SOUTH MIAMI",
+        "FL",
+        "33000",
+    )
+    billing = _by_type(bundle, "Practitioner")[0]
+    assert billing.address[0].line == ["234 SEAWAY ST"]
+    assert billing.address[0].city == "MIAMI"
+
+
+def test_per_contact_numbers_map_to_telecom():
+    raw = read_fixture("edi_837p_basic.x12").replace(
+        "N3*3333 OCEAN ST~", "N3*3333 OCEAN ST~PER*IC*JERRY*TE*3055552222*FX*3055553333~"
+    )
+    payer = next(
+        o for o in _by_type(convert_edi_to_bundle(raw), "Organization") if o.name == "KEY INSURANCE COMPANY"
+    )
+    assert [(t.system, t.value) for t in payer.telecom] == [
+        ("phone", "3055552222"),
+        ("fax", "3055553333"),
+    ]
+
+
+def test_a_party_with_no_address_segments_gets_no_address():
+    raw = "".join(
+        seg + "~" for seg in read_fixture("edi_837p_basic.x12").split("~") if not seg.startswith(("N3", "N4"))
+    )
+    assert all(o.address is None for o in _by_type(convert_edi_to_bundle(raw), "Organization"))
+

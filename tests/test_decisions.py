@@ -8,6 +8,8 @@ exists to support. These tests pin both properties.
 
 from pathlib import Path
 
+import re
+
 import pytest
 
 from app.provenance.decisions import (
@@ -395,14 +397,18 @@ def test_edi_qualifier_elements_are_not_reported_as_drops():
 
 
 def test_edi_repeated_segments_get_distinct_locations_and_ids():
-    # X12 repeats whole segments where HL7v2 repeats fields - an 837P
-    # carries several REF/N3/N4 segments, and each must report its own drop
-    # rather than colliding onto one id.
-    decisions = _edi_decisions("edi_837p_basic.x12")
-    n4 = [d for d in decisions if (d.source_location or "").startswith("N4")]
-    assert len(n4) > 3
-    assert len({d.id for d in n4}) == len(n4)
-    assert any("[1]" in (d.source_location or "") for d in n4)
+    # X12 repeats whole segments where HL7v2 repeats fields, and a second
+    # occurrence must report its own drop rather than colliding onto the
+    # first one's id. Asserted over whatever actually repeats rather than a
+    # named segment: this pinned N3/N4 until those gained a real Address
+    # mapping and stopped being drops at all.
+    decisions = [d for d in _edi_decisions("edi_837p_basic.x12") if d.kind == "dropped"]
+    indexed = [d for d in decisions if re.search(r"\[\d+\]", d.source_location or "")]
+    assert indexed, "fixture assumption: some segment occurs more than once"
+    assert len({d.id for d in decisions}) == len(decisions)
+    for decision in indexed:
+        base = re.sub(r"\[\d+\]", "", decision.source_location)
+        assert any(d.source_location == base for d in decisions), base
 
 
 def test_edi_envelope_segments_are_never_reported():

@@ -9,7 +9,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
+from fhir.resources.R4B.address import Address
 from fhir.resources.R4B.bundle import Bundle, BundleEntry
+from fhir.resources.R4B.contactpoint import ContactPoint
 from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.coding import Coding
 from fhir.resources.R4B.coverage import Coverage
@@ -21,7 +23,7 @@ from fhir.resources.R4B.practitioner import Practitioner
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.resource import Resource
 
-from app.edi.parser import Delimiters, HlLoop, Segment, component, element, find_segment, group_by_hl_hierarchy
+from app.edi.parser import Delimiters, HlLoop, Segment, component, element, find_segment, group_by_hl_hierarchy, group_by_leader
 from app.fhir_models.builders import parse_hl7_date, parse_hl7_datetime
 from app.hl7.errors import MissingSegmentError
 from app.provenance.location import edi_location
@@ -503,6 +505,13 @@ class Resolved837Loops:
     patient_nm1: Segment | None
     patient_dmg: Segment | None
     patient_is_dependent: bool
+    # Each party's own following segments (N3/N4/PER/REF/PRV), so an
+    # address belongs to the NM1 it actually describes rather than to
+    # whichever one happens to come first in the loop.
+    billing_provider_members: list[Segment]
+    subscriber_members: list[Segment]
+    payer_members: list[Segment]
+    patient_members: list[Segment]
 
 
 def resolve_837_loops(segments: list[Segment], transaction_set_id: str) -> Resolved837Loops:
@@ -523,16 +532,18 @@ def resolve_837_loops(segments: list[Segment], transaction_set_id: str) -> Resol
     if subscriber_loop is None:
         raise MissingSegmentError(f"{transaction_set_id} transaction set is missing its 2000B Subscriber loop")
 
-    billing_provider_nm1 = find_nm1_by_entity_code(billing_provider_loop.member_segments, _NM1_837_BILLING_PROVIDER)
+    billing_provider_nm1, billing_provider_members = find_nm1_group(
+        billing_provider_loop.member_segments, _NM1_837_BILLING_PROVIDER
+    )
     if billing_provider_nm1 is None:
         raise MissingSegmentError(f"{transaction_set_id} 2000A loop is missing its NM1*85 (billing provider) segment")
 
-    subscriber_nm1 = find_nm1_by_entity_code(subscriber_loop.member_segments, _NM1_837_SUBSCRIBER)
+    subscriber_nm1, subscriber_members = find_nm1_group(subscriber_loop.member_segments, _NM1_837_SUBSCRIBER)
     if subscriber_nm1 is None:
         raise MissingSegmentError(f"{transaction_set_id} 2000B loop is missing its NM1*IL (subscriber) segment")
     subscriber_dmg = find_segment(subscriber_loop.member_segments, "DMG")
 
-    payer_nm1 = find_nm1_by_entity_code(subscriber_loop.member_segments, _NM1_837_PAYER)
+    payer_nm1, payer_members = find_nm1_group(subscriber_loop.member_segments, _NM1_837_PAYER)
     if payer_nm1 is None:
         raise MissingSegmentError(f"{transaction_set_id} 2000B loop is missing its NM1*PR (payer) segment")
 
@@ -545,9 +556,10 @@ def resolve_837_loops(segments: list[Segment], transaction_set_id: str) -> Resol
 
     patient_nm1 = None
     patient_dmg = None
+    patient_members: list[Segment] = []
     patient_is_dependent = False
     if patient_loop is not None:
-        patient_nm1 = find_nm1_by_entity_code(patient_loop.member_segments, _NM1_837_PATIENT)
+        patient_nm1, patient_members = find_nm1_group(patient_loop.member_segments, _NM1_837_PATIENT)
         if patient_nm1 is not None:
             patient_dmg = find_segment(patient_loop.member_segments, "DMG")
             patient_is_dependent = True
@@ -563,6 +575,10 @@ def resolve_837_loops(segments: list[Segment], transaction_set_id: str) -> Resol
         patient_nm1=patient_nm1,
         patient_dmg=patient_dmg,
         patient_is_dependent=patient_is_dependent,
+        billing_provider_members=billing_provider_members,
+        subscriber_members=subscriber_members,
+        payer_members=payer_members,
+        patient_members=patient_members,
     )
 
 
@@ -574,7 +590,119 @@ def is_person_entity(nm1: Segment) -> bool:
     return element(nm1, 2) == "1"
 
 
-def build_organization_from_nm1(nm1: Segment, recorder=None) -> Organization:
+# N3 (street) and N4 (city/state/postal/country) follow the NM1 whose party
+# they describe, so they are read from that NM1's own segment group rather
+# than the whole loop - a 2000B loop carries both the subscriber's NM1*IL
+# and the payer's NM1*PR, each with its own address.
+_ADDRESS_MEMBER_SEGMENTS = ["N3", "N4", "PER", "DMG", "REF", "PRV"]
+
+
+def find_nm1_group(segments: list[Segment], entity_code: str) -> tuple[Segment | None, list[Segment]]:
+    """The NM1 with this entity code, plus the segments that describe it -
+    everything up to the next NM1."""
+    for nm1, members in group_by_leader(segments, "NM1", _ADDRESS_MEMBER_SEGMENTS):
+        if element(nm1, 1).strip().upper() == entity_code:
+            return nm1, members
+    return None, []
+
+
+def build_address_from_n3_n4(members: list[Segment]) -> Address | None:
+    """N3/N4 -> Address. N3 carries one or two street lines, N4 the city,
+    state, postal code and (outside the US) country."""
+    n3 = find_segment(members, "N3")
+    n4 = find_segment(members, "N4")
+    if n3 is None and n4 is None:
+        return None
+    lines = [element(n3, i) for i in (1, 2)] if n3 is not None else []
+    lines = [line for line in lines if line]
+    city = element(n4, 1) if n4 is not None else ""
+    state = element(n4, 2) if n4 is not None else ""
+    postal_code = element(n4, 3) if n4 is not None else ""
+    country = element(n4, 4) if n4 is not None else ""
+    if not any([lines, city, state, postal_code, country]):
+        return None
+    address = Address()
+    if lines:
+        address.line = lines
+    if city:
+        address.city = city
+    if state:
+        address.state = state
+    if postal_code:
+        address.postalCode = postal_code
+    if country:
+        address.country = country
+    return address
+
+
+def _record_address(resource_id: str, address: Address, recorder) -> None:
+    if not recorder:
+        return
+    for index, line in enumerate(address.line or []):
+        recorder.record(resource_id, f"address[0].line[{index}]", edi_location("N3", index + 1), line)
+    for field, element_num in (("city", 1), ("state", 2), ("postalCode", 3), ("country", 4)):
+        value = getattr(address, field)
+        if value:
+            recorder.record(resource_id, f"address[0].{field}", edi_location("N4", element_num), value)
+
+
+# PER03/05/07 name which kind of contact number PER04/06/08 carries, so the
+# pairs are walked together. Only the shapes X12 actually defines here are
+# mapped; anything else is left alone rather than guessed at.
+_PER_QUALIFIER_TO_SYSTEM = {"TE": "phone", "FX": "fax", "EM": "email", "UR": "url"}
+_PER_PAIRS = ((3, 4), (5, 6), (7, 8))
+
+
+def build_telecoms_from_per(members: list[Segment]) -> list[ContactPoint]:
+    """PER -> ContactPoint list. PER02 is the contact's own name, which has
+    no home on a bare telecom and is carried by the caller when the target
+    resource has somewhere to put it."""
+    per = find_segment(members, "PER")
+    if per is None:
+        return []
+    telecoms = []
+    for qualifier_element, value_element in _PER_PAIRS:
+        qualifier = element(per, qualifier_element).strip().upper()
+        value = element(per, value_element)
+        system = _PER_QUALIFIER_TO_SYSTEM.get(qualifier)
+        if not value or system is None:
+            continue
+        telecoms.append(ContactPoint(system=system, value=value))
+    return telecoms
+
+
+def _record_telecoms(resource_id: str, telecoms: list[ContactPoint], recorder) -> None:
+    if not recorder:
+        return
+    for index, telecom in enumerate(telecoms):
+        _, value_element = _PER_PAIRS[index]
+        recorder.record(resource_id, f"telecom[{index}].value", edi_location("PER", value_element), telecom.value)
+        recorder.record(
+            resource_id,
+            f"telecom[{index}].system",
+            edi_location("PER", value_element - 1),
+            telecom.system,
+        )
+
+
+def apply_address_and_telecom(resource, members: list[Segment], recorder=None) -> None:
+    """N3/N4 -> .address and PER -> .telecom, for any resource that has
+    both - Organization, Practitioner and Patient all do. Every party in
+    every X12 family this app reads carries them the same way, so this is
+    applied once here rather than per family."""
+    if not members:
+        return
+    address = build_address_from_n3_n4(members)
+    if address is not None:
+        resource.address = [address]
+        _record_address(resource.id, address, recorder)
+    telecoms = build_telecoms_from_per(members)
+    if telecoms:
+        resource.telecom = telecoms
+        _record_telecoms(resource.id, telecoms, recorder)
+
+
+def build_organization_from_nm1(nm1: Segment, recorder=None, members: list[Segment] | None = None) -> Organization:
     """NM1 (non-person entity) -> Organization. Used for the payer (NM1*PR)
     loop, and the provider (NM1*1P/41) loop when NM102 indicates an
     organization rather than an individual."""
@@ -588,6 +716,7 @@ def build_organization_from_nm1(nm1: Segment, recorder=None) -> Organization:
     identifier = _build_nm1_identifier(nm1, resource_id=organization_id, recorder=recorder)
     if identifier:
         organization.identifier = [identifier]
+    apply_address_and_telecom(organization, members or [], recorder)
     return organization
 
 
@@ -613,7 +742,7 @@ def _record_person_name(resource_id: str, name: HumanName | None, recorder) -> N
         recorder.record(resource_id, "name[0].given[0]", edi_location("NM1", 4), name.given[0])
 
 
-def build_practitioner_from_nm1(nm1: Segment, recorder=None) -> Practitioner:
+def build_practitioner_from_nm1(nm1: Segment, recorder=None, members: list[Segment] | None = None) -> Practitioner:
     """NM1 (person) -> Practitioner. Used for the provider (NM1*1P/41) loop
     when NM102 indicates an individual rather than an organization."""
     practitioner_id = str(uuid.uuid4())
@@ -625,10 +754,13 @@ def build_practitioner_from_nm1(nm1: Segment, recorder=None) -> Practitioner:
     identifier = _build_nm1_identifier(nm1, resource_id=practitioner_id, recorder=recorder)
     if identifier:
         practitioner.identifier = [identifier]
+    apply_address_and_telecom(practitioner, members or [], recorder)
     return practitioner
 
 
-def build_patient_from_nm1_dmg(nm1: Segment, dmg: Segment | None, recorder=None) -> Patient:
+def build_patient_from_nm1_dmg(
+    nm1: Segment, dmg: Segment | None, recorder=None, members: list[Segment] | None = None
+) -> Patient:
     """NM1 (person) + optional DMG -> Patient. Used for the subscriber
     (NM1*IL) and dependent (NM1*QC) loops - both are always person entities
     in 270/271, unlike the payer/provider loops."""
@@ -661,8 +793,8 @@ def build_patient_from_nm1_dmg(nm1: Segment, dmg: Segment | None, recorder=None)
             if recorder:
                 recorder.record(patient_id, "gender", edi_location("DMG", 3), gender, source_value=dmg03_raw)
 
+    apply_address_and_telecom(patient, members or [], recorder)
     return patient
-
 
 def build_coverage(patient: Resource, payer: Resource, subscriber: Resource, recorder=None) -> Coverage:
     """A minimal, always-active Coverage linking a beneficiary (patient),

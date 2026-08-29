@@ -72,7 +72,7 @@ from app.edi.common import (
     build_place_of_service_from_clm05,
     build_practitioner_from_nm1,
     find_dtp_by_qualifier,
-    find_nm1_by_entity_code,
+    find_nm1_group,
     is_person_entity,
     parse_x12_datetime,
     resolve_837_loops,
@@ -243,11 +243,11 @@ class Edi837pBuilder(EdiTransactionBuilder):
         loops = resolve_837_loops(transaction_set.segments, self.transaction_set_id)
 
         billing_provider: Resource = (
-            build_practitioner_from_nm1(loops.billing_provider_nm1, recorder=recorder)
+            build_practitioner_from_nm1(loops.billing_provider_nm1, recorder=recorder, members=loops.billing_provider_members)
             if is_person_entity(loops.billing_provider_nm1)
-            else build_organization_from_nm1(loops.billing_provider_nm1, recorder=recorder)
+            else build_organization_from_nm1(loops.billing_provider_nm1, recorder=recorder, members=loops.billing_provider_members)
         )
-        payer = build_organization_from_nm1(loops.payer_nm1, recorder=recorder)
+        payer = build_organization_from_nm1(loops.payer_nm1, recorder=recorder, members=loops.payer_members)
         subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, loops.subscriber_dmg, recorder=recorder)
         patient = (
             build_patient_from_nm1_dmg(loops.patient_nm1, loops.patient_dmg, recorder=recorder)
@@ -273,13 +273,13 @@ class Edi837pBuilder(EdiTransactionBuilder):
             hi, delimiters, resource_id=claim_id, relative_path_prefix="diagnosis", recorder=recorder
         )
 
-        rendering_nm1 = find_nm1_by_entity_code(loops.claim_loop.member_segments, _NM1_RENDERING_PROVIDER)
+        rendering_nm1, rendering_nm1_members = find_nm1_group(loops.claim_loop.member_segments, _NM1_RENDERING_PROVIDER)
         rendering_provider: Resource | None = None
         if rendering_nm1 is not None:
             rendering_provider = (
-                build_practitioner_from_nm1(rendering_nm1, recorder=recorder)
+                build_practitioner_from_nm1(rendering_nm1, recorder=recorder, members=rendering_nm1_members)
                 if is_person_entity(rendering_nm1)
-                else build_organization_from_nm1(rendering_nm1, recorder=recorder)
+                else build_organization_from_nm1(rendering_nm1, recorder=recorder, members=rendering_nm1_members)
             )
 
         bht04_raw = element(bht, 4)

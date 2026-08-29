@@ -135,3 +135,13 @@ def test_generate_is_reproducible_with_same_seed():
 
 def test_generate_differs_across_seeds():
     assert generate_837p(random.Random(1)) != generate_837p(random.Random(2))
+
+
+def test_party_address_and_contact_vary_across_seeds():
+    # Both map to a real Address/ContactPoint, so each needs to occur
+    # present and absent for the mapping to be fuzzed at all.
+    for segment_id in ("N3", "N4", "PER"):
+        seen = {any(s.startswith(segment_id) for s in generate_837p(random.Random(seed)).split("~"))
+                for seed in range(40)}
+        assert seen == {True, False}, f"{segment_id} never varies"
+
