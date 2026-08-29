@@ -368,3 +368,40 @@ def test_a_party_with_no_address_segments_gets_no_address():
     )
     assert all(o.address is None for o in _by_type(convert_edi_to_bundle(raw), "Organization"))
 
+
+def _coverage(raw: str):
+    return next(e.resource for e in convert_edi_to_bundle(raw).entry if e.resource.get_resource_type() == "Coverage")
+
+
+def test_sbr_maps_payer_order_and_filing_indicator():
+    # SBR09 is the Claim Filing Indicator - element 9, the position the real
+    # X12.org examples use. Coverage.type binds at preferred strength, so an
+    # X12 code on a disclosed system is conformant there.
+    coverage = _coverage(read_fixture("edi_837p_basic.x12"))
+    assert coverage.order == 1
+    assert coverage.type.coding[0].code == "CI"
+
+
+def test_pat_supplies_the_relationship_when_sbr_does_not():
+    # A dependent's own 2000C loop states the relationship on PAT01, not on
+    # the subscriber's SBR02.
+    coverage = _coverage(read_fixture("edi_837p_with_dependent.x12"))
+    assert coverage.relationship.coding[0].code == "child"
+
+
+def test_sbr02_relationship_wins_over_pat01():
+    raw = read_fixture("edi_837p_with_dependent.x12").replace("SBR*P********CI~", "SBR*P*01******CI~")
+    assert _coverage(raw).relationship.coding[0].code == "spouse"
+
+
+def test_unknown_relationship_code_leaves_the_field_unset():
+    # "21" is X12's own Unknown - flattening it to "other" would assert a
+    # relationship the message never stated.
+    raw = read_fixture("edi_837p_with_dependent.x12").replace("PAT*19~", "PAT*21~")
+    assert _coverage(raw).relationship is None
+
+
+def test_unknown_payer_responsibility_leaves_order_unset():
+    raw = read_fixture("edi_837p_basic.x12").replace("SBR*P********CI~", "SBR*U********CI~")
+    assert _coverage(raw).order is None
+

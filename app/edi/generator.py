@@ -94,6 +94,26 @@ def build_isa(control_number: str, sender_id: str, receiver_id: str, dt) -> str:
     return "ISA*" + "*".join(fields) + "~"
 
 
+# SBR01 Payer Responsibility, SBR02 Individual Relationship and SBR09
+# Claim Filing Indicator all map to a real Coverage field, so each needs to
+# vary rather than staying the one literal each family used to pass.
+_SBR_RESPONSIBILITY_CODES = ["P", "P", "P", "S", "T"]
+_SBR_RELATIONSHIP_CODES = ["18", "01", "19", "", "21"]
+_CLAIM_FILING_INDICATORS = ["CI", "MB", "MC", "HM", "BL"]
+
+
+def randomize_sbr(rng: random.Random, template: str) -> str:
+    """Rebuild the caller's SBR positionally - SBR09 is the filing
+    indicator, the position the real X12.org examples use."""
+    fields = [""] * 9
+    fields[0] = rng.choice(_SBR_RESPONSIBILITY_CODES)
+    if maybe(rng, 0.7):
+        fields[1] = rng.choice(_SBR_RELATIONSHIP_CODES)
+    if maybe(rng, 0.8):
+        fields[8] = rng.choice(_CLAIM_FILING_INDICATORS)
+    return "SBR*" + "*".join(fields).rstrip("*") + "~"
+
+
 def build_address_segments(rng: random.Random) -> str:
     """N3/N4, and sometimes PER - every party in every 837 can carry them,
     and each maps to a real Address/ContactPoint, so both present and
@@ -240,7 +260,11 @@ def build_837_envelope(
         st_to_hl_segments.append(build_person_nm1(rng, "85", random_sex(rng), include_id=True))
 
     subscriber_sex = random_sex(rng)
-    st_to_hl_segments += ["HL*2*1*22*1~", sbr_segment, build_person_nm1(rng, "IL", subscriber_sex, include_id=True)]
+    st_to_hl_segments += [
+        "HL*2*1*22*1~",
+        randomize_sbr(rng, sbr_segment),
+        build_person_nm1(rng, "IL", subscriber_sex, include_id=True),
+    ]
     if maybe(rng, 0.7):
         st_to_hl_segments.append(build_dmg(rng, subscriber_sex))
     st_to_hl_segments.append(build_org_nm1(rng, "PR", PAYER_NAMES))

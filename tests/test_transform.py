@@ -2701,3 +2701,25 @@ def test_edi_837p_round_trip_preserves_each_party_address_and_telecom():
 
     assert snapshot(convert_to_bundle(message)) == snapshot(bundle)
 
+
+@pytest.mark.parametrize(
+    "fixture,target", [("edi_837p_with_dependent.x12", "837P"), ("edi_837i_basic.x12", "837I")]
+)
+def test_edi_837_round_trip_preserves_the_coverage_fields(fixture, target):
+    # SBR/PAT were never emitted by the reverse direction at all, so the
+    # order, relationship and filing indicator had nowhere to come back from.
+    raw = (Path(__file__).parent / "fixtures" / fixture).read_text()
+    bundle = convert_to_bundle(raw)
+    round_tripped = convert_to_bundle(build_message_from_bundle(bundle, "EDI", target, ""))
+
+    def snapshot(b):
+        coverage = next(e.resource for e in b.entry if e.resource.get_resource_type() == "Coverage")
+        return (
+            coverage.order,
+            coverage.relationship.coding[0].code if coverage.relationship else None,
+            coverage.type.coding[0].code if coverage.type else None,
+        )
+
+    assert snapshot(round_tripped) == snapshot(bundle)
+    assert snapshot(bundle)[0] == 1
+

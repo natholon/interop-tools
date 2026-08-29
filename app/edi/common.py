@@ -796,7 +796,46 @@ def build_patient_from_nm1_dmg(
     apply_address_and_telecom(patient, members or [], recorder)
     return patient
 
-def build_coverage(patient: Resource, payer: Resource, subscriber: Resource, recorder=None) -> Coverage:
+# SBR01 (Payer Responsibility Sequence Number Code, X12 element 1138) ->
+# Coverage.order, which is a plain positiveInt with no value-set binding:
+# "the relative order of a series of coverages". P/S/T are the three the
+# TR3 defines for the destination payer; the A-H codes continue the same
+# sequence, and "U" (Unknown) states no order at all so it maps to nothing.
+SBR_RESPONSIBILITY_TO_ORDER = {
+    "P": 1, "S": 2, "T": 3, "A": 4, "B": 5, "C": 6, "D": 7, "E": 8, "F": 9, "G": 10, "H": 11,
+}
+
+# SBR02 and PAT01 both carry X12's Individual Relationship Code (element
+# 1069) -> Coverage.relationship, an *extensible* binding to
+# subscriber-relationship (child|parent|spouse|common|other|self|injured).
+# Only codes with a real counterpart are mapped; "21" (Unknown) and any
+# code not listed leave the field unset rather than being flattened into
+# "other", which would assert a relationship the message never stated.
+RELATIONSHIP_CODE_TO_COVERAGE_RELATIONSHIP = {
+    "18": "self",
+    "01": "spouse",
+    "19": "child",
+    "76": "parent",
+    "53": "common",  # Life Partner - "common" is Common Law Spouse
+    "G8": "other",
+    "39": "other",  # Organ Donor
+    "40": "other",  # Cadaver Donor
+    "20": "other",  # Employee
+}
+# One X12 code list (element 1032), so one system. Defined here rather
+# than in remittance_835.py because Coverage is the shared consumer;
+# remittance_835.py imports it back for its own CLP06.
+CLAIM_FILING_INDICATOR_SYSTEM = "urn:interop-tools:x12-claim-filing-indicator"
+SUBSCRIBER_RELATIONSHIP_SYSTEM = "http://terminology.hl7.org/CodeSystem/subscriber-relationship"
+
+def build_coverage(
+    patient: Resource,
+    payer: Resource,
+    subscriber: Resource,
+    recorder=None,
+    sbr: Segment | None = None,
+    pat: Segment | None = None,
+) -> Coverage:
     """A minimal, always-active Coverage linking a beneficiary (patient),
     payer, and subscriber - independently written the identical way three
     separate times (eligibility_270.py, eligibility_271.py, prior_auth.py)
@@ -813,13 +852,65 @@ def build_coverage(patient: Resource, payer: Resource, subscriber: Resource, rec
             "Every Coverage this app builds is a minimal, synthesized resource always recorded as status=\"active\" - no X12 field in any family this converter reads carries a real policy-status value to read this from.",
             "active",
         )
-    return Coverage(
+    coverage = Coverage(
         id=coverage_id,
         status="active",
         beneficiary=Reference(reference=f"urn:uuid:{patient.id}"),
         payor=[Reference(reference=f"urn:uuid:{payer.id}")],
         subscriber=Reference(reference=f"urn:uuid:{subscriber.id}"),
     )
+    _apply_sbr_fields(coverage, sbr, pat, recorder)
+    return coverage
+
+
+def _apply_sbr_fields(coverage: Coverage, sbr: Segment | None, pat: Segment | None, recorder) -> None:
+    """SBR01 -> .order, SBR02 (or PAT01) -> .relationship, SBR09 -> .type.
+
+    PAT01 is the fallback for the relationship because a dependent's own
+    2000C loop states it there rather than on the subscriber's SBR - so
+    whichever segment actually carries it is the one read.
+    """
+    if sbr is not None:
+        order = SBR_RESPONSIBILITY_TO_ORDER.get(element(sbr, 1).strip().upper())
+        if order is not None:
+            coverage.order = order
+            if recorder:
+                recorder.record(
+                    coverage.id, "order", edi_location("SBR", 1), str(order), source_value=element(sbr, 1)
+                )
+        # SBR09 is the Claim Filing Indicator - the same X12 code list 835's
+        # own CLP06 carries, so it reuses that disclosed system. The
+        # coverage-type binding is *preferred*, not required, so a code from
+        # outside its value set is conformant here.
+        filing_indicator = element(sbr, 9)
+        if filing_indicator:
+            coverage.type = CodeableConcept(
+                coding=[Coding(system=CLAIM_FILING_INDICATOR_SYSTEM, code=filing_indicator)]
+            )
+            if recorder:
+                recorder.record(
+                    coverage.id, "type.coding[0].code", edi_location("SBR", 9), filing_indicator
+                )
+
+    for segment, element_num in ((sbr, 2), (pat, 1)):
+        if segment is None:
+            continue
+        raw = element(segment, element_num).strip().upper()
+        mapped = RELATIONSHIP_CODE_TO_COVERAGE_RELATIONSHIP.get(raw)
+        if mapped is None:
+            continue
+        coverage.relationship = CodeableConcept(
+            coding=[Coding(system=SUBSCRIBER_RELATIONSHIP_SYSTEM, code=mapped)]
+        )
+        if recorder:
+            recorder.record(
+                coverage.id,
+                "relationship.coding[0].code",
+                edi_location(segment[0], element_num),
+                mapped,
+                source_value=raw,
+            )
+        return
 
 
 def assemble_bundle(bht: Segment, *resources: Resource, recorder=None) -> Bundle:

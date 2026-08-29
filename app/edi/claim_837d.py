@@ -366,7 +366,14 @@ class Edi837dBuilder(EdiTransactionBuilder):
             else subscriber
         )
 
-        coverage = build_coverage(patient, payer, subscriber, recorder=recorder)
+        coverage = build_coverage(
+            patient,
+            payer,
+            subscriber,
+            recorder=recorder,
+            sbr=find_segment(loops.subscriber_loop.member_segments, "SBR"),
+            pat=find_segment(loops.claim_loop.member_segments, "PAT"),
+        )
 
         clm = find_segment(loops.claim_loop.member_segments, "CLM")
         if clm is None:

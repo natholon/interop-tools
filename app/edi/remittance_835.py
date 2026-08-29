@@ -110,7 +110,11 @@ from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.resource import Resource
 
 from app.edi.base import EdiTransactionBuilder
-from app.edi.common import build_patient_from_nm1_dmg, resolve_id_qualifier_system
+from app.edi.common import (
+    CLAIM_FILING_INDICATOR_SYSTEM,
+    build_patient_from_nm1_dmg,
+    resolve_id_qualifier_system,
+)
 from app.edi.parser import Delimiters, Segment, TransactionSet, element, find_segment, group_by_leader, parse_decimal
 from app.fhir_models.builders import parse_hl7_date
 from app.hl7.errors import MappingError, MissingSegmentError
@@ -160,7 +164,6 @@ PAYER_CLAIM_CONTROL_SYSTEM = "urn:interop-tools:x12-payer-claim-control-number"
 # type") binds at *example* strength, so the raw code is conformant there;
 # X12 publishes no free authoritative table, hence a disclosed local
 # system, the same footing as CLP_STATUS_SYSTEM.
-CLAIM_FILING_INDICATOR_SYSTEM = "urn:interop-tools:x12-claim-filing-indicator"
 CLP01_CLAIM_IDENTIFIER_SYSTEM = "urn:interop-tools:x12-claim-submitter-identifier"
 
 # ClaimResponse requires all four, and an 835 carries a source field for

@@ -44,6 +44,8 @@ from app.transform.edi_common import (
     build_hi_segment,
     build_trailer_segments,
     envelope_datetime,
+    build_pat_segment,
+    build_sbr_segment,
     org_or_person_nm1,
     resolve_by_reference,
     resolve_subscriber_and_dependent,
@@ -139,8 +141,15 @@ class Edi837pBuilder(MessageBuilder):
             "HL*1**20*1~",
             org_or_person_nm1("85", billing_provider),
             f"HL*2*1*22*{0 if patient_loop_is_dependent else 1}~",
-            org_or_person_nm1("IL", subscriber),
         ]
+        # SBR precedes NM1*IL in the 2000B loop, which is where the forward
+        # direction reads it from.
+        sbr = build_sbr_segment(find_resource(bundle, "Coverage"))
+        if sbr:
+            st_to_hl_segments.append(sbr)
+        st_to_hl_segments.extend([
+            org_or_person_nm1("IL", subscriber),
+        ])
         subscriber_dmg = build_dmg(subscriber)
         if subscriber_dmg:
             st_to_hl_segments.append(subscriber_dmg)
@@ -148,6 +157,9 @@ class Edi837pBuilder(MessageBuilder):
 
         if patient_loop_is_dependent:
             st_to_hl_segments.append("HL*3*2*23*0~")
+            pat = build_pat_segment(find_resource(bundle, "Coverage"))
+            if pat:
+                st_to_hl_segments.append(pat)
             st_to_hl_segments.append(org_or_person_nm1("QC", dependent, include_id=False))
             dependent_dmg = build_dmg(dependent)
             if dependent_dmg:

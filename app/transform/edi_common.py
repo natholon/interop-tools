@@ -15,7 +15,11 @@ import datetime
 
 from fhir.resources.R4B.bundle import Bundle
 
-from app.edi.common import HI_QUALIFIER_SYSTEM, NM1_ID_QUALIFIER_SYSTEM
+from app.edi.common import (
+    HI_QUALIFIER_SYSTEM,
+    NM1_ID_QUALIFIER_SYSTEM,
+    SBR_RESPONSIBILITY_TO_ORDER,
+)
 from app.edi.generator import build_isa, format_x12_date, format_x12_time
 from app.transform.common import find_resource, find_resources, format_hl7_date
 
@@ -175,6 +179,55 @@ def resolve_by_reference(bundle: Bundle, reference):
         if entry.resource.id == resource_id:
             return entry.resource
     return None
+
+
+# Inverses of app.edi.common's own two tables. The relationship inverse
+# keeps only the codes that map back unambiguously - three X12 codes share
+# FHIR's "other", so that one cannot be reversed and is left unwritten
+# rather than guessed at.
+ORDER_TO_SBR_RESPONSIBILITY = {v: k for k, v in SBR_RESPONSIBILITY_TO_ORDER.items()}
+COVERAGE_RELATIONSHIP_TO_RELATIONSHIP_CODE = {
+    "self": "18",
+    "spouse": "01",
+    "child": "19",
+    "parent": "76",
+    "common": "53",
+}
+
+
+def build_sbr_segment(coverage) -> str:
+    """Coverage.order/.type -> SBR01/SBR09, and .relationship -> SBR02.
+
+    SBR09 is the Claim Filing Indicator, at element 9 - the position the
+    real X12.org examples use, which is one and two elements further out
+    than this repo's own fixtures originally had it.
+    """
+    if coverage is None:
+        return ""
+    fields = [""] * 9
+    if coverage.order:
+        fields[0] = ORDER_TO_SBR_RESPONSIBILITY.get(coverage.order, "")
+    if coverage.relationship and coverage.relationship.coding:
+        fields[1] = COVERAGE_RELATIONSHIP_TO_RELATIONSHIP_CODE.get(
+            coverage.relationship.coding[0].code, ""
+        )
+    if coverage.type and coverage.type.coding and coverage.type.coding[0].code:
+        fields[8] = sanitize_x12_text(coverage.type.coding[0].code)
+    if not any(fields):
+        return ""
+    return "SBR*" + "*".join(fields).rstrip("*") + "~"
+
+
+def build_pat_segment(coverage) -> str:
+    """Coverage.relationship -> PAT01, for a dependent's own 2000C loop.
+
+    The forward direction reads SBR02 first and falls back to PAT01, so a
+    relationship is written to whichever loop is actually being built.
+    """
+    if coverage is None or not coverage.relationship or not coverage.relationship.coding:
+        return ""
+    code = COVERAGE_RELATIONSHIP_TO_RELATIONSHIP_CODE.get(coverage.relationship.coding[0].code, "")
+    return f"PAT*{code}~" if code else ""
 
 
 def org_or_person_nm1(entity_code: str, resource, include_id: bool = True) -> str:

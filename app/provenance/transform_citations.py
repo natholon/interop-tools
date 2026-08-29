@@ -178,6 +178,28 @@ _X12_ELIGIBILITY_EXCLUDED = _local(
     ".excluded unset rather than guessing.",
 )
 
+_X12_PAYER_RESPONSIBILITY = Citation(
+    title="X12 element 1138 (Payer Responsibility Sequence Number Code)",
+    url="https://x12.org/codes",
+    authoritative=False,
+    note=(
+        "P/S/T and the A-H continuation codes state where this payer sits in the payment sequence, which "
+        "Coverage.order expresses as a plain positiveInt with no value-set binding. No official X12-to-FHIR "
+        "crosswalk publishes this pairing; \"U\" (Unknown) states no order and is left unmapped."
+    ),
+)
+
+_X12_RELATIONSHIP = Citation(
+    title="X12 element 1069 (Individual Relationship Code)",
+    url="https://terminology.hl7.org/CodeSystem-subscriber-relationship.html",
+    authoritative=False,
+    note=(
+        "SBR02, or PAT01 for a dependent's own loop, mapped onto FHIR's subscriber-relationship codes. The "
+        "binding is extensible and the pairing is this project's own: only codes with an unambiguous "
+        "counterpart are mapped, so \"21\" (Unknown) leaves the field unset rather than becoming \"other\"."
+    ),
+)
+
 _X12_NETWORK = _local(
     "Local text for EB12 (In Plan Network Indicator)",
     "No FHIR CodeSystem exists for this indicator and .network is a CodeableConcept, so Y/N/U are "
@@ -266,6 +288,8 @@ TRANSFORM_CITATIONS: dict[tuple[str, str], Citation] = {
     ("EDI", "insurance[].inforce"): _X12_ELIGIBILITY_INFORCE,
     ("EDI", "insurance[].item[].excluded"): _X12_ELIGIBILITY_EXCLUDED,
     ("EDI", "insurance[].item[].network.text"): _X12_NETWORK,
+    ("EDI", "order"): _X12_PAYER_RESPONSIBILITY,
+    ("EDI", "relationship.coding[].code"): _X12_RELATIONSHIP,
 }
 
 _INDEX_RE = None
