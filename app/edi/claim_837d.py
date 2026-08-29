@@ -360,9 +360,9 @@ class Edi837dBuilder(EdiTransactionBuilder):
             else build_organization_from_nm1(loops.billing_provider_nm1, recorder=recorder, members=loops.billing_provider_members)
         )
         payer = build_organization_from_nm1(loops.payer_nm1, recorder=recorder, members=loops.payer_members)
-        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, loops.subscriber_dmg, recorder=recorder)
+        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, loops.subscriber_dmg, recorder=recorder, members=loops.subscriber_members)
         patient = (
-            build_patient_from_nm1_dmg(loops.patient_nm1, loops.patient_dmg, recorder=recorder)
+            build_patient_from_nm1_dmg(loops.patient_nm1, loops.patient_dmg, recorder=recorder, members=loops.patient_members)
             if loops.patient_is_dependent
             else subscriber
         )

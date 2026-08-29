@@ -61,6 +61,7 @@ from fhir.resources.R4B.resource import Resource
 
 from app.edi.base import EdiTransactionBuilder
 from app.edi.common import (
+    nm1_members,
     HL_DEPENDENT,
     HL_INFORMATION_RECEIVER,
     HL_INFORMATION_SOURCE,
@@ -410,15 +411,15 @@ class Edi278Builder(EdiTransactionBuilder):
 
         loops = resolve_prior_auth_loops(transaction_set.segments, self.transaction_set_id)
 
-        payer = build_organization_from_nm1(loops.payer_nm1, recorder=recorder)
+        payer = build_organization_from_nm1(loops.payer_nm1, recorder=recorder, members=nm1_members(loops.payer_loop.member_segments, loops.payer_nm1))
         requester: Resource = (
-            build_practitioner_from_nm1(loops.receiver_nm1, recorder=recorder)
+            build_practitioner_from_nm1(loops.receiver_nm1, recorder=recorder, members=nm1_members(loops.receiver_loop.member_segments, loops.receiver_nm1))
             if is_person_entity(loops.receiver_nm1)
-            else build_organization_from_nm1(loops.receiver_nm1, recorder=recorder)
+            else build_organization_from_nm1(loops.receiver_nm1, recorder=recorder, members=nm1_members(loops.receiver_loop.member_segments, loops.receiver_nm1))
         )
-        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, loops.subscriber_dmg, recorder=recorder)
+        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, loops.subscriber_dmg, recorder=recorder, members=nm1_members(loops.subscriber_loop.member_segments, loops.subscriber_nm1))
         patient = (
-            build_patient_from_nm1_dmg(loops.patient_nm1, loops.patient_dmg, recorder=recorder)
+            build_patient_from_nm1_dmg(loops.patient_nm1, loops.patient_dmg, recorder=recorder, members=nm1_members(loops.dependent_loop.member_segments, loops.patient_nm1) if loops.dependent_loop else [])
             if loops.patient_is_dependent
             else subscriber
         )

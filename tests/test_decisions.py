@@ -655,16 +655,16 @@ def test_cda_unsourced_shape_still_says_unchecked():
 
 
 def test_edi_drops_cite_the_missing_crosswalk_not_unchecked():
-    """X12 publishes no FHIR crosswalk at all, so "not yet checked" would
-    imply pending work that cannot be done. The honest citation is that no
-    authoritative crosswalk exists - which is also why it is the one
-    citation here marked non-authoritative by design."""
-    decisions = _edi_decisions("edi_837i_basic.x12")
+    # X12 publishes no FHIR crosswalk, so an EDI drop must never say "not
+    # yet checked" - that would imply pending work that cannot be done.
+    # What it says instead is now a per-element verdict rather than one
+    # blanket line; see app/provenance/edi_ig_verdicts.py.
+    decisions = _edi_decisions("edi_837p_basic.x12")
     dropped = [d for d in decisions if d.kind == "dropped"]
     assert dropped
-    assert all("No official X12-to-FHIR crosswalk" in d.citation.title for d in dropped)
-    assert all(d.citation.authoritative is False for d in dropped)
-
+    assert not any(d.citation.title.startswith("Not yet checked") for d in dropped)
+    # And none of them is authoritative: nothing published backs any of it.
+    assert not any(d.citation.authoritative for d in dropped)
 
 def test_mdm_txa19_is_read_not_dropped():
     """TXA-19 "AV" maps to DocumentReference.status "current" - a verified
@@ -887,27 +887,26 @@ def test_every_drop_carries_a_checked_verdict(fixture):
     "fixture", [f for f in _ALL_FIXTURES if f.endswith(".x12")]
 )
 def test_every_edi_drop_cites_the_absent_crosswalk(fixture):
-    # X12 publishes no FHIR crosswalk at all, so _dropped_edi_decisions
-    # cites that fact unconditionally and can never produce an unchecked
-    # drop or a gap. That makes EDI's arm of the two tests above
-    # structurally satisfied rather than verified - they would pass even
-    # if EDI's citations were wrong - so this is the assertion actually
-    # holding EDI's half of the claim up.
+    # X12 publishes no FHIR crosswalk, so every drop used to cite that one
+    # fact - true as a general statement, and uninformative about the
+    # element in front of a reviewer. It also made EDI's arm of the two
+    # tests above structurally satisfied rather than verified: they would
+    # have passed even if EDI's citations were wrong.
     #
-    # It fails if EDI drops ever start citing something else: either a
-    # real verdict table appeared (in which case add EDI to the checked
-    # set properly) or a citation regressed.
+    # app/provenance/edi_ig_verdicts.py now gives each element its own
+    # verdict, so this asserts the stronger thing: *no* EDI drop falls back
+    # to the blanket citation. A new unmapped element fails here until
+    # somebody decides what its answer actually is.
     try:
         decisions = _decisions_for_any_fixture(fixture)
     except Exception:
         pytest.skip("fixture does not convert by design")
-    dropped = [d for d in decisions if d.kind == "dropped"]
-    wrong = sorted({
-        d.citation.title
-        for d in dropped
-        if d.citation.title != "No official X12-to-FHIR crosswalk exists"
+    uncovered = sorted({
+        d.source_location
+        for d in decisions
+        if d.kind == "dropped" and d.citation.title == "No official X12-to-FHIR crosswalk exists"
     })
-    assert wrong == []
+    assert uncovered == [], f"no verdict written for: {uncovered}"
 
 
 @pytest.mark.parametrize("fixture", _ALL_FIXTURES)
@@ -1256,3 +1255,22 @@ def _resolve_json_path(resource, path: str):
                 return None
             current = current[index]
     return current
+
+
+@pytest.mark.parametrize("trigger", [te for mt, te, _ in list_supported_types() if mt == "EDI"])
+def test_generated_edi_samples_carry_only_written_verdicts(trigger):
+    """The fixture arm above is a couple of dozen hand-written files; the
+    generator reaches far more element combinations, and measuring against
+    it is what turned up the elements that only drop in particular shapes
+    (a claim with no 2100 patient loop, a PER qualifier outside TE/FX/EM/
+    UR, a diagnosis pointer that resolves to nothing)."""
+    for seed in range(8):
+        raw = generate("EDI", trigger, seed=seed)
+        _, report, _ = convert_with_provenance(raw)
+        for decision in compute_decisions(report, raw):
+            if decision.kind != "dropped":
+                continue
+            assert decision.citation.title != "No official X12-to-FHIR crosswalk exists", (
+                f"{trigger} seed={seed}: no verdict written for {decision.source_location}"
+            )
+

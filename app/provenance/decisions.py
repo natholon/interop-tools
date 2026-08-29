@@ -39,6 +39,7 @@ from pydantic import BaseModel
 
 from app.edi.parser import read_isa_delimiters, split_segments, strip_bom_and_whitespace
 from app.hl7.parser import normalize_segment_separators, truncate_to_first_message
+from app.provenance.edi_ig_verdicts import edi_verdict
 from app.provenance.citations import (
     CDA_ENTRY_NOT_CONVERTED,
     Citation,
@@ -1150,10 +1151,12 @@ def _dropped_edi_decisions(
                 source_location=location,
                 field_label=label,
                 lost_value=value,
-                # Not "not yet checked": X12 publishes no FHIR crosswalk at
-                # all, so there is nothing pending to check this against.
-                # Saying "unchecked" would imply work that cannot be done.
-                citation=X12_NO_OFFICIAL_CROSSWALK,
+                # A per-element verdict where one has been written, else
+                # the general absent-crosswalk citation - so "unlisted"
+                # still reads as "not individually checked" rather than
+                # every element sharing one uninformative line.
+                citation=edi_verdict(f"{segment_id}-{element_num}" + (f".{component}" if component else ""))
+                or X12_NO_OFFICIAL_CROSSWALK,
             )
         )
     return decisions

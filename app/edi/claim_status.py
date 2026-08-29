@@ -53,6 +53,7 @@ from fhir.resources.R4B.task import Task
 
 from app.edi.base import EdiTransactionBuilder
 from app.edi.common import (
+    nm1_members,
     assemble_bundle,
     build_organization_from_nm1,
     build_patient_from_nm1_dmg,
@@ -338,19 +339,19 @@ class _BaseClaimStatusBuilder(EdiTransactionBuilder):
 
         loops = resolve_claim_status_loops(transaction_set.segments, self.transaction_set_id)
 
-        payer = build_organization_from_nm1(loops.payer_nm1, recorder=recorder)
+        payer = build_organization_from_nm1(loops.payer_nm1, recorder=recorder, members=nm1_members(loops.payer_loop.member_segments, loops.payer_nm1))
         receiver: Resource = (
-            build_practitioner_from_nm1(loops.receiver_nm1, recorder=recorder)
+            build_practitioner_from_nm1(loops.receiver_nm1, recorder=recorder, members=nm1_members(loops.receiver_loop.member_segments, loops.receiver_nm1))
             if is_person_entity(loops.receiver_nm1)
-            else build_organization_from_nm1(loops.receiver_nm1, recorder=recorder)
+            else build_organization_from_nm1(loops.receiver_nm1, recorder=recorder, members=nm1_members(loops.receiver_loop.member_segments, loops.receiver_nm1))
         )
         provider: Resource = (
-            build_practitioner_from_nm1(loops.provider_nm1, recorder=recorder)
+            build_practitioner_from_nm1(loops.provider_nm1, recorder=recorder, members=nm1_members(loops.provider_loop.member_segments, loops.provider_nm1))
             if is_person_entity(loops.provider_nm1)
-            else build_organization_from_nm1(loops.provider_nm1, recorder=recorder)
+            else build_organization_from_nm1(loops.provider_nm1, recorder=recorder, members=nm1_members(loops.provider_loop.member_segments, loops.provider_nm1))
         )
         subscriber_dmg = find_segment(loops.subscriber_loop.member_segments, "DMG")
-        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, subscriber_dmg, recorder=recorder)
+        subscriber = build_patient_from_nm1_dmg(loops.subscriber_nm1, subscriber_dmg, recorder=recorder, members=nm1_members(loops.subscriber_loop.member_segments, loops.subscriber_nm1))
 
         authored_on = parse_x12_datetime(element(bht, 4), element(bht, 5))
 

@@ -207,6 +207,12 @@ class ResolvedEligibilityParties:
     patient_dmg: Segment | None
     patient_is_dependent: bool
     patient_loop_members: list[Segment]
+    # Each party's own following segments (N3/N4/PER/REF), so an address
+    # attaches to the NM1 it describes rather than to the loop at large.
+    payer_members: list[Segment]
+    provider_members: list[Segment]
+    subscriber_members: list[Segment]
+    patient_members: list[Segment]
 
 
 def resolve_eligibility_parties(segments: list[Segment], transaction_set_id: str) -> ResolvedEligibilityParties:
@@ -267,6 +273,10 @@ def resolve_eligibility_parties(segments: list[Segment], transaction_set_id: str
             patient_is_dependent = True
             patient_loop_members = dependent_loop.member_segments
 
+    payer_members = nm1_members(source_loop.member_segments, payer_nm1)
+    provider_members = nm1_members(receiver_loop.member_segments, provider_nm1)
+    subscriber_members = nm1_members(subscriber_loop.member_segments, subscriber_nm1)
+    patient_members = nm1_members(patient_loop_members, patient_nm1)
     return ResolvedEligibilityParties(
         payer_nm1=payer_nm1,
         provider_nm1=provider_nm1,
@@ -275,6 +285,10 @@ def resolve_eligibility_parties(segments: list[Segment], transaction_set_id: str
         patient_nm1=patient_nm1,
         patient_dmg=patient_dmg,
         patient_is_dependent=patient_is_dependent,
+        payer_members=payer_members,
+        provider_members=provider_members,
+        subscriber_members=subscriber_members,
+        patient_members=patient_members,
         patient_loop_members=patient_loop_members,
     )
 
@@ -595,6 +609,25 @@ def is_person_entity(nm1: Segment) -> bool:
 # than the whole loop - a 2000B loop carries both the subscriber's NM1*IL
 # and the payer's NM1*PR, each with its own address.
 _ADDRESS_MEMBER_SEGMENTS = ["N3", "N4", "PER", "DMG", "REF", "PRV"]
+
+
+def nm1_members(segments: list[Segment], nm1: Segment) -> list[Segment]:
+    """The segments describing this particular NM1 - everything after it up
+    to the next one.
+
+    Matched by identity rather than entity code, so a loop carrying two
+    NM1s with the same code (a corrected payer beside the original, say)
+    still attributes each address to the right one.
+    """
+    for index, segment in enumerate(segments):
+        if segment is nm1:
+            members = []
+            for following in segments[index + 1:]:
+                if following[0] == "NM1":
+                    break
+                members.append(following)
+            return members
+    return []
 
 
 def find_nm1_group(segments: list[Segment], entity_code: str) -> tuple[Segment | None, list[Segment]]:

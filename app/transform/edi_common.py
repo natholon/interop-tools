@@ -137,8 +137,10 @@ def build_org_nm1(entity_code: str, organization) -> str:
     identifier = _first_nm1_identifier(organization)
     if identifier is not None and identifier.value:
         qualifier = reverse_nm1_qualifier(identifier)
-        return f"NM1*{entity_code}*2*{name}*****{qualifier}*{sanitize_x12_text(identifier.value)}~"
-    return f"NM1*{entity_code}*2*{name}~"
+        nm1 = f"NM1*{entity_code}*2*{name}*****{qualifier}*{sanitize_x12_text(identifier.value)}~"
+    else:
+        nm1 = f"NM1*{entity_code}*2*{name}~"
+    return nm1 + build_address_segments(organization)
 
 
 def build_person_nm1(entity_code: str, person, include_id: bool) -> str:
@@ -154,7 +156,7 @@ def build_person_nm1(entity_code: str, person, include_id: bool) -> str:
     fields = [entity_code, "1", family, given, middle, "", suffix]
     if include_id and identifier is not None and identifier.value:
         fields += [reverse_nm1_qualifier(identifier), sanitize_x12_text(identifier.value)]
-    return "NM1*" + "*".join(fields).rstrip("*") + "~"
+    return "NM1*" + "*".join(fields).rstrip("*") + "~" + build_address_segments(person)
 
 
 def _first_nm1_identifier(resource):
@@ -283,9 +285,7 @@ def org_or_person_nm1(entity_code: str, resource, include_id: bool = True) -> st
         if resource.get_resource_type() == "Organization"
         else build_person_nm1(entity_code, resource, include_id=include_id)
     )
-    # N3/N4/PER follow the NM1 they describe, which is the one choke point
-    # every 837 variant already routes its parties through.
-    return nm1 + build_address_segments(resource)
+    return nm1
 
 
 def resolve_payer_and_provider(bundle: Bundle, insurer_reference, provider_reference):
@@ -351,7 +351,10 @@ def build_envelope_segments(now: datetime.datetime) -> list[str]:
 
 
 def build_trailer_segments(st_to_hl_segments: list[str], body_segments: list[str]) -> list[str]:
-    se01 = len(st_to_hl_segments) + len(body_segments) + 1
+    # Segments, not list entries: an NM1 now comes with the N3/N4/PER/REF
+    # that describe it, in one string. sanitize_x12_text keeps the
+    # terminator out of every value, so counting them is exact.
+    se01 = sum(s.count("~") for s in st_to_hl_segments) + sum(s.count("~") for s in body_segments) + 1
     return [
         f"SE*{se01}*{DEFAULT_ST_CONTROL}~",
         f"GE*1*{DEFAULT_GS_CONTROL}~",

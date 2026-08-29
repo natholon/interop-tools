@@ -198,18 +198,18 @@ class Edi271Builder(EdiTransactionBuilder):
 
         parties = resolve_eligibility_parties(transaction_set.segments, "271")
 
-        payer = build_organization_from_nm1(parties.payer_nm1, recorder=recorder)
+        payer = build_organization_from_nm1(parties.payer_nm1, recorder=recorder, members=parties.payer_members)
         provider: Resource = (
-            build_practitioner_from_nm1(parties.provider_nm1, recorder=recorder)
+            build_practitioner_from_nm1(parties.provider_nm1, recorder=recorder, members=parties.provider_members)
             if is_person_entity(parties.provider_nm1)
-            else build_organization_from_nm1(parties.provider_nm1, recorder=recorder)
+            else build_organization_from_nm1(parties.provider_nm1, recorder=recorder, members=parties.provider_members)
         )
-        subscriber = build_patient_from_nm1_dmg(parties.subscriber_nm1, parties.subscriber_dmg, recorder=recorder)
+        subscriber = build_patient_from_nm1_dmg(parties.subscriber_nm1, parties.subscriber_dmg, recorder=recorder, members=parties.subscriber_members)
 
         # Same "dependent wins when present" rule as 270 - see
         # eligibility_270.py's module docstring for the full rationale.
         patient = (
-            build_patient_from_nm1_dmg(parties.patient_nm1, parties.patient_dmg, recorder=recorder)
+            build_patient_from_nm1_dmg(parties.patient_nm1, parties.patient_dmg, recorder=recorder, members=parties.patient_members)
             if parties.patient_is_dependent
             else subscriber
         )

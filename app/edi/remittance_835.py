@@ -112,6 +112,8 @@ from fhir.resources.R4B.resource import Resource
 from app.edi.base import EdiTransactionBuilder
 from app.edi.common import (
     CLAIM_FILING_INDICATOR_SYSTEM,
+    apply_address_and_telecom,
+    nm1_members,
     build_patient_from_nm1_dmg,
     resolve_id_qualifier_system,
 )
@@ -181,7 +183,7 @@ _CLAIM_RESPONSE_OUTCOME = "complete"
 # Public - app/edi/remittance_validation.py walks the identical claim
 # groups, so the two can never disagree about which segments belong to a
 # claim or which NM1 names its patient.
-CLP_MEMBER_SEGMENTS = ["CAS", "SVC", "NM1", "DMG", "REF", "DTM", "AMT", "QTY"]
+CLP_MEMBER_SEGMENTS = ["CAS", "SVC", "NM1", "DMG", "N3", "N4", "PER", "REF", "DTM", "AMT", "QTY"]
 
 _NM1_PATIENT = "QC"
 _NM1_INSURED = "IL"
@@ -217,6 +219,21 @@ def _find_n1(segments: list[Segment], entity_code: str) -> Segment | None:
     return None
 
 
+def _n1_members(segments: list[Segment], n1: Segment) -> list[Segment]:
+    """The N3/N4/PER/REF describing this N1 - everything up to the next
+    one. The N1 mirror of app.edi.common.nm1_members; 835 has its own
+    because its party loops are N1-led, not NM1-led."""
+    for index, segment in enumerate(segments):
+        if segment is n1:
+            members = []
+            for following in segments[index + 1:]:
+                if following[0] in ("N1", "CLP", "LX"):
+                    break
+                members.append(following)
+            return members
+    return []
+
+
 def _build_n1_identifier(n1: Segment, resource_id: str | None = None, recorder=None) -> Identifier | None:
     qualifier = element(n1, 3).strip().upper()
     value = element(n1, 4)
@@ -227,7 +244,7 @@ def _build_n1_identifier(n1: Segment, resource_id: str | None = None, recorder=N
     return Identifier(system=resolve_id_qualifier_system(qualifier, N1_ID_FALLBACK_SYSTEM), value=value)
 
 
-def _build_organization_from_n1(n1: Segment, recorder=None) -> Organization:
+def _build_organization_from_n1(n1: Segment, recorder=None, members: list[Segment] | None = None) -> Organization:
     organization_id = str(uuid.uuid4())
     organization = Organization(id=organization_id)
     name = element(n1, 2)
@@ -238,6 +255,7 @@ def _build_organization_from_n1(n1: Segment, recorder=None) -> Organization:
     identifier = _build_n1_identifier(n1, resource_id=organization_id, recorder=recorder)
     if identifier:
         organization.identifier = [identifier]
+    apply_address_and_telecom(organization, members or [], recorder)
     return organization
 
 
@@ -526,8 +544,8 @@ class Edi835Builder(EdiTransactionBuilder):
         if payee_n1 is None:
             raise MissingSegmentError(f"{self.transaction_set_id} transaction set is missing its 1000B N1*PE (payee) segment")
 
-        payer = _build_organization_from_n1(payer_n1, recorder=recorder)
-        payee = _build_organization_from_n1(payee_n1, recorder=recorder)
+        payer = _build_organization_from_n1(payer_n1, recorder=recorder, members=_n1_members(segments, payer_n1))
+        payee = _build_organization_from_n1(payee_n1, recorder=recorder, members=_n1_members(segments, payee_n1))
 
         # BPR is present but its own required values not resolving is a
         # business-rule failure, not an absent-segment one - MappingError,
@@ -612,7 +630,9 @@ class Edi835Builder(EdiTransactionBuilder):
             if patient_nm1 is None:
                 continue
             dmg = next((seg for seg in members if seg[0] == "DMG"), None)
-            patient = build_patient_from_nm1_dmg(patient_nm1, dmg, recorder=recorder)
+            patient = build_patient_from_nm1_dmg(
+                patient_nm1, dmg, recorder=recorder, members=nm1_members(members, patient_nm1)
+            )
             claim_response = _build_claim_response(
                 clp, patient.id, payer.id, payee.id, payment_date, recorder=recorder
             )

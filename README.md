@@ -121,7 +121,9 @@ This project converts and validates data in formats governed by external standar
   - Free companion guides published by CMS, state Medicaid agencies, and clearinghouses, cross-referenced against each other wherever the X12.org examples alone didn't label a field's exact position
   - For 278 specifically, HL7's own [Da Vinci PAS](https://hl7.org/fhir/us/davinci-pas/) implementation guide (free, ballot-published) confirms the target `Claim`/`ClaimResponse` FHIR shape, even though it doesn't publish an X12-segment-level crosswalk
 
-  The FHIR (target) side of every EDI mapping is checked directly against `hl7.org`/`terminology.hl7.org` - CodeSystems like NUBC Revenue Codes and value sets like `claim-careteamrole` are confirmed by direct fetch, not assumed.
+  The FHIR (target) side of every EDI mapping is checked directly against `hl7.org`/`terminology.hl7.org` - CodeSystems like NUBC Revenue Codes and value sets like `claim-careteamrole` are confirmed by direct fetch, not assumed, as are binding strengths (whether a local code is conformant at all).
+
+  Every X12 element this app *doesn't* map carries its own written verdict saying why - no R4 target, no published code list, administrative, out of scope - rather than one blanket "no crosswalk exists" line. Those verdicts are this project's own reading and none is marked authoritative.
 
 Every disclosed judgment call, local-system fallback, and scope limit made along the way is documented in [CLAUDE.md](CLAUDE.md)'s own per-module notes, alongside the file/line it applies to.
 
