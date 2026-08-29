@@ -1,7 +1,6 @@
 import random
 from decimal import Decimal
 
-import pytest
 
 from app.edi.remittance_835 import CLP_MEMBER_SEGMENTS
 from app.edi.remittance_generator import generate_835

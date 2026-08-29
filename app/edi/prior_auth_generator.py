@@ -112,7 +112,7 @@ def _generate_prior_auth(rng: random.Random, bht02: str) -> str:
     next_hl_id = 4
     if maybe(rng, 0.4):
         dependent_sex = random_sex(rng)
-        st_to_hl_segments += [f"HL*4*3*23*1~", build_person_nm1(rng, "QC", dependent_sex, include_id=False)]
+        st_to_hl_segments += ["HL*4*3*23*1~", build_person_nm1(rng, "QC", dependent_sex, include_id=False)]
         if maybe(rng, 0.7):
             st_to_hl_segments.append(build_dmg(rng, dependent_sex))
         patient_hl_id = "4"

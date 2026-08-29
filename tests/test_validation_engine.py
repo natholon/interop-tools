@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import pytest
 
 from app.hl7.errors import MappingError
 from app.hl7.parser import parse_message
