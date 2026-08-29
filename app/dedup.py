@@ -23,12 +23,13 @@ Devices represent scheduling/booking context (see `siu.py`'s AIG handling),
 not a stable identity.
 
 **Identity key**: *any* shared `(system, value)` identifier pair - two
-resources sharing one real identifier are the same entity by construction,
-so they merge even when one carries identifiers the other does not. That
-is the whole motivating case: an 837's billing loop routinely carries a
-tax ID beside the NPI while the rendering loop carries the NPI alone, and
-keying on the *set* of identifiers rather than the overlap kept those two
-apart. Otherwise a name-only fallback: `Patient`/`Practitioner`
+resources sharing one real identifier are the same entity, so they merge
+even when one carries identifiers the other does not (an 837's billing
+loop routinely carries a tax ID beside the NPI while its rendering loop
+carries the NPI alone). An employer tax ID is excluded from the key: it
+identifies the practice, so everyone billing under it would collapse into
+one person. Merging unions the identifiers onto the survivor, so nothing
+a duplicate carried alone is lost. Otherwise a name-only fallback: `Patient`/`Practitioner`
 key off the first `HumanName`'s `(family, tuple(given))`,
 `Organization`/`Location` off their bare `.name` string, case-folded. A
 resource with neither is never merged - not enough signal to guess."""
@@ -64,11 +65,22 @@ class DedupResult:
         return sum(len(merge.removed_ids) for merge in self.merges)
 
 
+# An employer tax ID identifies the *practice*, not the party carrying it,
+# so two different clinicians who bill under one practice share it. It is
+# real data worth keeping on the resource, but it can never establish that
+# two resources are the same entity.
+_SHARED_BY_CONSTRUCTION_SYSTEMS = {"urn:oid:2.16.840.1.113883.4.4"}
+
+
 def _identifier_key(resource) -> frozenset | None:
     identifiers = getattr(resource, "identifier", None)
     if not identifiers:
         return None
-    pairs = {(identifier.system, identifier.value) for identifier in identifiers if identifier.value}
+    pairs = {
+        (identifier.system, identifier.value)
+        for identifier in identifiers
+        if identifier.value and identifier.system not in _SHARED_BY_CONSTRUCTION_SYSTEMS
+    }
     return frozenset(pairs) if pairs else None
 
 
@@ -119,6 +131,25 @@ def _rewrite_references(node, uuid_remap: dict[str, str]) -> None:
     if isinstance(node, list):
         for item in node:
             _rewrite_references(item, uuid_remap)
+
+
+def _absorb_identifiers(canonical, duplicates) -> None:
+    """Carry onto the survivor any identifier only a removed duplicate had.
+
+    Merging is a claim that these are one entity, so an identifier on
+    either of them belongs to it. Without this, whether a tax ID survives
+    depended on which resource happened to come first in the Bundle.
+    """
+    seen = {(i.system, i.value) for i in (canonical.identifier or [])}
+    extra = []
+    for entry in duplicates:
+        for identifier in entry.resource.identifier or []:
+            pair = (identifier.system, identifier.value)
+            if identifier.value and pair not in seen:
+                seen.add(pair)
+                extra.append(identifier)
+    if extra:
+        canonical.identifier = list(canonical.identifier or []) + extra
 
 
 def _group_by_identity(bundle: Bundle) -> dict:
@@ -183,7 +214,9 @@ def deduplicate_bundle(bundle: Bundle) -> DedupResult:
         duplicates = group_entries[1:]
         if not duplicates:
             continue
-        canonical_id = group_entries[0].resource.id
+        canonical = group_entries[0].resource
+        canonical_id = canonical.id
+        _absorb_identifiers(canonical, duplicates)
         removed_ids = tuple(entry.resource.id for entry in duplicates)
         for removed_id in removed_ids:
             uuid_remap[removed_id] = canonical_id

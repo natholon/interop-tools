@@ -98,10 +98,6 @@ def build_address_segments(party) -> str:
     describe, which is where X12 expects them and where the forward
     direction reads them from."""
     parts = []
-    for identifier in getattr(party, "identifier", None) or []:
-        if identifier.system == EIN_IDENTIFIER_SYSTEM and identifier.value:
-            parts.append(f"REF*EI*{sanitize_x12_text(identifier.value)}~")
-            break
     address = party.address[0] if getattr(party, "address", None) else None
     if address is not None:
         lines = [sanitize_x12_text(line) for line in (address.line or []) if line]
@@ -120,6 +116,11 @@ def build_address_segments(party) -> str:
         qualifier = _SYSTEM_TO_PER_QUALIFIER.get(telecom.system)
         if qualifier and telecom.value:
             fields += [qualifier, sanitize_x12_text(telecom.value)]
+    # REF follows N3/N4 in the TR3's own 2010 loop order.
+    for identifier in getattr(party, "identifier", None) or []:
+        if identifier.system == EIN_IDENTIFIER_SYSTEM and identifier.value:
+            parts.append(f"REF*EI*{sanitize_x12_text(identifier.value)}~")
+            break
     if fields:
         # PER01 is the contact function code; "IC" (Information Contact) is
         # the one this app can state truthfully, since the forward direction
@@ -216,19 +217,19 @@ COVERAGE_RELATIONSHIP_TO_RELATIONSHIP_CODE = {
 }
 
 
-def build_sbr_segment(coverage) -> str:
-    """Coverage.order/.type -> SBR01/SBR09, and .relationship -> SBR02.
+def build_sbr_segment(coverage, patient_is_subscriber: bool = True) -> str:
+    """Coverage.order -> SBR01, .type -> SBR09 (Claim Filing Indicator).
 
-    SBR09 is the Claim Filing Indicator, at element 9 - the position the
-    real X12.org examples use, which is one and two elements further out
-    than this repo's own fixtures originally had it.
+    SBR02 gets the relationship only when the subscriber *is* the patient.
+    It states the subscriber's own relationship to the insured, so writing
+    a dependent's relationship there asserts the subscriber is a child.
     """
     if coverage is None:
         return ""
     fields = [""] * 9
     if coverage.order:
         fields[0] = ORDER_TO_SBR_RESPONSIBILITY.get(coverage.order, "")
-    if coverage.relationship and coverage.relationship.coding:
+    if patient_is_subscriber and coverage.relationship and coverage.relationship.coding:
         fields[1] = COVERAGE_RELATIONSHIP_TO_RELATIONSHIP_CODE.get(
             coverage.relationship.coding[0].code, ""
         )
@@ -268,9 +269,7 @@ def build_prv_segment(claim, role_code: str) -> str:
 def reverse_quantity_unit(item, default: str = "UN") -> str:
     """Claim.item.quantity.code -> the X12 unit-of-measure element.
 
-    Defaults to "UN" (units) only when the Bundle carries no code, which
-    is what this builder emitted for every line before the code had
-    anywhere to come from."""
+    Falls back to "UN" (units) when the Bundle carries no code."""
     quantity = getattr(item, "quantity", None)
     return sanitize_x12_text(quantity.code) if quantity is not None and quantity.code else default
 

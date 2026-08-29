@@ -1,33 +1,26 @@
 """Per-element verdicts for X12 elements this app does not map.
 
-Every other format's drop register cites a published mapping table: HL7v2
-has the v2-to-FHIR IG, C-CDA has C-CDA on FHIR. **X12 has none** - the TR3
+Every other format's register cites a published mapping table - HL7v2 the
+v2-to-FHIR IG, C-CDA the C-CDA on FHIR IG. **X12 has none**: the TR3
 Implementation Guides are commercial, and no free official X12-to-FHIR
-crosswalk exists for any transaction set here. So EDI's register cited that
-absence for *every* dropped element, uniformly, which made its "every drop
-is checked" claim structural rather than earned: the citation was true as a
-general statement and told a reviewer nothing about the element in front of
-them, including whether it had an obvious FHIR home nobody had looked for.
+crosswalk exists for any transaction set here. A single "no crosswalk
+exists" line is therefore true of every element and informative about
+none, so each unmapped element gets its own verdict instead.
 
-It did. Working through the list found real gaps behind the blanket
-citation - every party's address and contact numbers, the coverage order
-and relationship, a person's middle name and suffix, a tax ID, a service
-line's unit of measure, a provider's taxonomy - all now mapped. What
-remains is recorded here, one verdict per element, each stating *why*
-rather than restating that no crosswalk exists.
-
-**These verdicts are this project's own reading**, not a published mapping.
-Where a verdict says "no R4 target", it means the base R4 resource this app
-builds has no field for it - checked against the published StructureDefinition,
-not asserted. Where R5 added one, the verdict says so, because that is the
-honest reason an R4-only converter cannot carry it.
+**These verdicts are this project's own reading, not a published mapping** -
+none is marked authoritative. `NO_R4_TARGET` means the base R4 resource
+this app builds has no field for it, checked against the published
+StructureDefinition; where R5 added one the verdict says so, that being
+the honest reason an R4-only converter cannot carry it.
 
 Keys are `SEGMENT-ELEMENT.COMPONENT`, `SEGMENT-ELEMENT`, or a bare
-`SEGMENT`, tried most specific first - a bare key covers every element of
-a segment whose elements all share one answer, which is what `HI`'s
-repeating diagnosis composites need. An element matching no key keeps the
-general absent-crosswalk citation, so "unlisted" still means "not
-individually checked".
+`SEGMENT`, tried most specific first; the bare form covers a segment whose
+elements share one answer, as `HI`'s repeating composites do. A key matches
+*every* occurrence of its element, so its reason must hold for all of them -
+a reason true only of the case that prompted writing it is the
+over-reaching-key mistake this project has already had to withdraw C-CDA
+verdicts for. An element matching no key keeps the general absent-crosswalk
+citation, so "unlisted" still reads as "not individually checked".
 """
 
 from app.provenance.models import Citation
@@ -152,9 +145,12 @@ EDI_VERDICTS: dict[str, tuple[str, str]] = {
     "EB-2": (NO_R4_TARGET, "coverage level code; CoverageEligibilityResponse models no per-level benefit breakdown"),
     "EB-4": (NO_R4_TARGET, "insurance type code, part of that same absent breakdown"),
     # DTP on a claim-status request.
-    "DTP-1": (NO_R4_TARGET, "date qualifier on a 276 status request; Task carries no service period"),
-    "DTP-2": (NO_R4_TARGET, "date format qualifier for the same unmapped date"),
-    "DTP-3": (NO_R4_TARGET, "service date on a 276 status request; Task carries no service period"),
+    # Fires for a 276's service date (Task models no service period) and
+    # for 837I's statement-period DTP*434 (Claim has no equivalent), so the
+    # reason has to cover both rather than naming only the first.
+    "DTP-1": (NO_R4_TARGET, "date qualifier for a date whose target resource has no field to hold it"),
+    "DTP-2": (NO_R4_TARGET, "date format qualifier for that same unmapped date"),
+    "DTP-3": (NO_R4_TARGET, "a date the target resource models no field for - a 276's Task has no service period, and 837I's statement period has no Claim equivalent"),
     # PAT beyond the relationship.
     "PAT-1": (PARTIAL, "patient relationship code; it maps to Coverage.relationship, and is reported only where no Coverage is built"),
     # Elements that normally map, and are reported only when this
@@ -163,8 +159,8 @@ EDI_VERDICTS: dict[str, tuple[str, str]] = {
     "CLP-5": (PARTIAL, "patient responsibility; same ClaimResponse the absent 2100 patient loop prevents building"),
     "CLP-6": (PARTIAL, "claim filing indicator; maps to ClaimResponse.subType, absent for the same reason"),
     "CLP-7": (PARTIAL, "payer claim control number; maps to ClaimResponse.identifier, absent for the same reason"),
-    "PER-3": (NO_PUBLISHED_CODE_LIST, "contact number qualifier outside TE/FX/EM/UR, which are the shapes ContactPoint.system can state"),
-    "PER-4": (NO_PUBLISHED_CODE_LIST, "contact number whose qualifier names no ContactPoint system"),
+    "PER-3": (PARTIAL, "contact qualifier left unread - either on a party this converter does not materialise (the 1000A submitter, say) or naming a system outside TE/FX/EM/UR"),
+    "PER-4": (PARTIAL, "contact number left unread, for the same two reasons its qualifier is"),
     "SV1-7": (PARTIAL, "diagnosis pointer that resolves to no HI position, so it points at no Claim.diagnosis entry"),
     "SBR-2": (PARTIAL, "relationship code outside the set with an unambiguous subscriber-relationship counterpart - notably \"21\" (Unknown)"),
 }

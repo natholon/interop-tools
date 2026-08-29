@@ -68,7 +68,7 @@ def generate_837p(rng: random.Random) -> str:
     app/edi/generator.py::build_837_envelope(), shared by all three 837
     generators; only the claim-level portion below (CLM onward) is
     837P-specific."""
-    draft = build_837_envelope(rng, "005010X222A2", billing_org_probability=0.6, sbr_segment="SBR*P*******CI~", include_pat_segment=True)
+    draft = build_837_envelope(rng, "005010X222A2", billing_org_probability=0.6, sbr_segment="SBR*P********CI~", include_pat_segment=True)
     now = draft.now
     st_to_hl_segments = draft.st_to_hl_segments
 

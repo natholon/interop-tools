@@ -90,7 +90,7 @@ def generate_837d(rng: random.Random) -> str:
     this module was verified against (a real sender omitting it defaults
     to Edi837pBuilder, covered separately by test_edi_registry.py, not by
     this generator)."""
-    draft = build_837_envelope(rng, "005010X224A2", billing_org_probability=0.6, sbr_segment="SBR*P*******CI~", include_pat_segment=False)
+    draft = build_837_envelope(rng, "005010X224A2", billing_org_probability=0.6, sbr_segment="SBR*P********CI~", include_pat_segment=False)
     now = draft.now
     st_to_hl_segments = draft.st_to_hl_segments
 

@@ -389,9 +389,25 @@ def test_pat_supplies_the_relationship_when_sbr_does_not():
     assert coverage.relationship.coding[0].code == "child"
 
 
-def test_sbr02_relationship_wins_over_pat01():
-    raw = read_fixture("edi_837p_with_dependent.x12").replace("SBR*P********CI~", "SBR*P*01******CI~")
-    assert _coverage(raw).relationship.coding[0].code == "spouse"
+def test_pat01_wins_over_sbr02_for_a_dependent_claim():
+    # Coverage.relationship is the *beneficiary's* relationship to the
+    # subscriber, which is what PAT01 states. SBR02 states the
+    # *subscriber's* own relationship to the insured, so reading it for a
+    # dependent claim reported the child as "self".
+    raw = read_fixture("edi_837p_with_dependent.x12").replace("SBR*P********CI~", "SBR*P*18*******CI~")
+    assert _coverage(raw).relationship.coding[0].code == "child"
+
+
+def test_sbr02_supplies_the_relationship_when_the_subscriber_is_the_patient():
+    raw = read_fixture("edi_837p_basic.x12").replace("SBR*P********CI~", "SBR*P*18*******CI~")
+    assert _coverage(raw).relationship.coding[0].code == "self"
+
+
+def test_a_dependent_claim_with_no_pat_states_no_relationship():
+    # SBR02 describes the subscriber, so with no PAT there is nothing that
+    # describes the dependent - saying "self" would assert the child is the
+    # subscriber.
+    assert _coverage(read_fixture("edi_837i_with_dependent.x12")).relationship is None
 
 
 def test_unknown_relationship_code_leaves_the_field_unset():

@@ -42,7 +42,7 @@ regenerated either, matching the forward mapper's own disclosed
 
 from fhir.resources.R4B.bundle import Bundle
 
-from app.edi.common import NM1_ID_QUALIFIER_SYSTEM
+from app.edi.common import EIN_IDENTIFIER_SYSTEM, NM1_ID_QUALIFIER_SYSTEM
 from app.edi.generator import format_x12_date
 from app.edi.remittance_835 import (
     ADJUSTMENT_PAYMENT_TYPE,
@@ -61,6 +61,7 @@ from app.transform.base import MessageBuilder
 from app.transform.common import find_resource
 from app.transform.edi_common import (
     DEFAULT_ST_CONTROL,
+    build_address_segments,
     build_dmg,
     build_envelope_segments,
     build_person_nm1,
@@ -96,15 +97,22 @@ def _reverse_n1_qualifier(identifier) -> str:
 
 def _build_n1_segment(entity_code: str, organization) -> str:
     name = sanitize_x12_text(organization.name) or "UNKNOWN"
-    identifier = organization.identifier[0] if organization.identifier else None
+    identifier = next(
+        (i for i in (organization.identifier or []) if i.system != EIN_IDENTIFIER_SYSTEM and i.value), None
+    )
     if identifier and identifier.value:
         # N103/N104 (id qualifier/value) - N1's own shape has no
         # first/last name split to worry about, unlike NM1, so this is
         # built directly rather than reusing edi_common.py's NM1-scoped
         # build_org_nm1/build_person_nm1.
         qualifier = _reverse_n1_qualifier(identifier)
-        return f"N1*{entity_code}*{name}*{qualifier}*{sanitize_x12_text(identifier.value)}~"
-    return f"N1*{entity_code}*{name}~"
+        n1 = f"N1*{entity_code}*{name}*{qualifier}*{sanitize_x12_text(identifier.value)}~"
+    else:
+        n1 = f"N1*{entity_code}*{name}~"
+    # 835's parties are N1-led, so they never went through the NM1 builders
+    # where the address emission lives - the forward direction reads their
+    # N3/N4/PER and this dropped every one of them.
+    return n1 + build_address_segments(organization)
 
 
 def _build_bpr_segment(payment_reconciliation) -> str:

@@ -1017,6 +1017,12 @@ EDI_QUALIFIER_OF: dict[tuple[str, int | None, int | None], tuple[int | None, int
     # HI repeats one composite across HI01, HI02, ... - one per diagnosis -
     # so its qualifier cannot be pinned to an element position.
     ("HI", None, 1): (None, 2),
+    # REF01 is fully consumed deciding whether REF02 is an employer ID;
+    # PER03/05/07 likewise name which ContactPoint.system PER04/06/08 gets.
+    ("REF", 1, None): (2, None),
+    ("PER", 3, None): (4, None),
+    ("PER", 5, None): (6, None),
+    ("PER", 7, None): (8, None),
 }
 
 

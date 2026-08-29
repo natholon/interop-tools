@@ -23,7 +23,7 @@ from fhir.resources.R4B.practitioner import Practitioner
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.resource import Resource
 
-from app.edi.parser import Delimiters, HlLoop, Segment, component, element, find_segment, group_by_hl_hierarchy, group_by_leader
+from app.edi.parser import Delimiters, HlLoop, Segment, component, element, find_segment, group_by_hl_hierarchy
 from app.fhir_models.builders import parse_hl7_date, parse_hl7_datetime
 from app.hl7.errors import MissingSegmentError
 from app.provenance.location import edi_location
@@ -611,6 +611,13 @@ def is_person_entity(nm1: Segment) -> bool:
 _ADDRESS_MEMBER_SEGMENTS = ["N3", "N4", "PER", "DMG", "REF", "PRV"]
 
 
+# A 2010 party loop ends at the next party, or at the first segment that
+# belongs to the claim or a service line. Without the second half the scan
+# runs past the loop and a claim-level REF/N3/N4 is attributed to the last
+# party seen.
+_PARTY_LOOP_TERMINATORS = frozenset({"NM1", "N1", "HL", "CLM", "LX", "SBR", "PAT", "CLP", "SVC", "EQ", "EB", "TRN", "UM", "CL1", "HI", "DTP", "SE"})
+
+
 def nm1_members(segments: list[Segment], nm1: Segment) -> list[Segment]:
     """The segments describing this particular NM1 - everything after it up
     to the next one.
@@ -623,7 +630,7 @@ def nm1_members(segments: list[Segment], nm1: Segment) -> list[Segment]:
         if segment is nm1:
             members = []
             for following in segments[index + 1:]:
-                if following[0] == "NM1":
+                if following[0] in _PARTY_LOOP_TERMINATORS:
                     break
                 members.append(following)
             return members
@@ -631,11 +638,16 @@ def nm1_members(segments: list[Segment], nm1: Segment) -> list[Segment]:
 
 
 def find_nm1_group(segments: list[Segment], entity_code: str) -> tuple[Segment | None, list[Segment]]:
-    """The NM1 with this entity code, plus the segments that describe it -
-    everything up to the next NM1."""
-    for nm1, members in group_by_leader(segments, "NM1", _ADDRESS_MEMBER_SEGMENTS):
-        if element(nm1, 1).strip().upper() == entity_code:
-            return nm1, members
+    """The NM1 with this entity code, plus the segments describing it.
+
+    Built on nm1_members rather than group_by_leader: that helper *skips*
+    segments outside its member list instead of stopping at them, so a
+    party's group reached past the end of its own 2010 loop and absorbed
+    claim-level segments.
+    """
+    for segment in segments:
+        if segment[0] == "NM1" and element(segment, 1).strip().upper() == entity_code:
+            return segment, nm1_members(segments, segment)
     return None, []
 
 
@@ -646,8 +658,9 @@ def build_address_from_n3_n4(members: list[Segment]) -> Address | None:
     n4 = find_segment(members, "N4")
     if n3 is None and n4 is None:
         return None
-    lines = [element(n3, i) for i in (1, 2)] if n3 is not None else []
-    lines = [line for line in lines if line]
+    line_pairs = [(i, element(n3, i)) for i in (1, 2)] if n3 is not None else []
+    line_pairs = [(i, value) for i, value in line_pairs if value]
+    lines = [value for _, value in line_pairs]
     city = element(n4, 1) if n4 is not None else ""
     state = element(n4, 2) if n4 is not None else ""
     postal_code = element(n4, 3) if n4 is not None else ""
@@ -655,6 +668,7 @@ def build_address_from_n3_n4(members: list[Segment]) -> Address | None:
     if not any([lines, city, state, postal_code, country]):
         return None
     address = Address()
+    address.__dict__["_source_elements"] = [i for i, _ in line_pairs]
     if lines:
         address.line = lines
     if city:
@@ -671,8 +685,11 @@ def build_address_from_n3_n4(members: list[Segment]) -> Address | None:
 def _record_address(resource_id: str, address: Address, recorder) -> None:
     if not recorder:
         return
+    source_elements = address.__dict__.get("_source_elements") or list(range(1, len(address.line or []) + 1))
     for index, line in enumerate(address.line or []):
-        recorder.record(resource_id, f"address[0].line[{index}]", edi_location("N3", index + 1), line)
+        recorder.record(
+            resource_id, f"address[0].line[{index}]", edi_location("N3", source_elements[index]), line
+        )
     for field, element_num in (("city", 1), ("state", 2), ("postalCode", 3), ("country", 4)):
         value = getattr(address, field)
         if value:
@@ -694,6 +711,7 @@ def build_telecoms_from_per(members: list[Segment]) -> list[ContactPoint]:
     if per is None:
         return []
     telecoms = []
+    kept_elements = []
     for qualifier_element, value_element in _PER_PAIRS:
         qualifier = element(per, qualifier_element).strip().upper()
         value = element(per, value_element)
@@ -701,6 +719,9 @@ def build_telecoms_from_per(members: list[Segment]) -> list[ContactPoint]:
         if not value or system is None:
             continue
         telecoms.append(ContactPoint(system=system, value=value))
+        kept_elements.append(value_element)
+    for telecom, value_element in zip(telecoms, kept_elements):
+        telecom.__dict__["_source_element"] = value_element
     return telecoms
 
 
@@ -708,7 +729,10 @@ def _record_telecoms(resource_id: str, telecoms: list[ContactPoint], recorder) -
     if not recorder:
         return
     for index, telecom in enumerate(telecoms):
-        _, value_element = _PER_PAIRS[index]
+        # The element this value really came from, not this telecom's
+        # position - a PER pair the vocabulary does not cover is skipped,
+        # and using the position shifted every later fact's location.
+        value_element = telecom.__dict__.get("_source_element", _PER_PAIRS[index][1])
         recorder.record(resource_id, f"telecom[{index}].value", edi_location("PER", value_element), telecom.value)
         recorder.record(
             resource_id,
@@ -938,6 +962,7 @@ def build_coverage(
     recorder=None,
     sbr: Segment | None = None,
     pat: Segment | None = None,
+    patient_is_subscriber: bool = True,
 ) -> Coverage:
     """A minimal, always-active Coverage linking a beneficiary (patient),
     payer, and subscriber - independently written the identical way three
@@ -962,16 +987,25 @@ def build_coverage(
         payor=[Reference(reference=f"urn:uuid:{payer.id}")],
         subscriber=Reference(reference=f"urn:uuid:{subscriber.id}"),
     )
-    _apply_sbr_fields(coverage, sbr, pat, recorder)
+    _apply_sbr_fields(coverage, sbr, pat, recorder, patient_is_subscriber)
     return coverage
 
 
-def _apply_sbr_fields(coverage: Coverage, sbr: Segment | None, pat: Segment | None, recorder) -> None:
-    """SBR01 -> .order, SBR02 (or PAT01) -> .relationship, SBR09 -> .type.
+def _apply_sbr_fields(
+    coverage: Coverage,
+    sbr: Segment | None,
+    pat: Segment | None,
+    recorder,
+    patient_is_subscriber: bool = True,
+) -> None:
+    """SBR01 -> .order, SBR09 -> .type, and the relationship from whichever
+    of PAT01/SBR02 actually describes the beneficiary.
 
-    PAT01 is the fallback for the relationship because a dependent's own
-    2000C loop states it there rather than on the subscriber's SBR - so
-    whichever segment actually carries it is the one read.
+    **The two are not interchangeable.** Coverage.relationship is the
+    *beneficiary's* relationship to the subscriber. PAT01 states exactly
+    that. SBR02 states the *subscriber's* own relationship to the insured,
+    which coincides only when the subscriber is the patient - so reading
+    SBR02 for a dependent claim reported a child as "self".
     """
     if sbr is not None:
         order = SBR_RESPONSIBILITY_TO_ORDER.get(element(sbr, 1).strip().upper())
@@ -995,7 +1029,10 @@ def _apply_sbr_fields(coverage: Coverage, sbr: Segment | None, pat: Segment | No
                     coverage.id, "type.coding[0].code", edi_location("SBR", 9), filing_indicator
                 )
 
-    for segment, element_num in ((sbr, 2), (pat, 1)):
+    # A dependent claim's relationship can only come from PAT01; SBR02 is
+    # about the subscriber, who is not the beneficiary here.
+    sources = ((pat, 1),) if not patient_is_subscriber else ((sbr, 2), (pat, 1))
+    for segment, element_num in sources:
         if segment is None:
             continue
         raw = element(segment, element_num).strip().upper()

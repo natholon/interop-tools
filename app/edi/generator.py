@@ -103,14 +103,21 @@ _CLAIM_FILING_INDICATORS = ["CI", "MB", "MC", "HM", "BL"]
 
 
 def randomize_sbr(rng: random.Random, template: str) -> str:
-    """Rebuild the caller's SBR positionally - SBR09 is the filing
-    indicator, the position the real X12.org examples use."""
+    """Vary the caller's own SBR rather than replacing it.
+
+    Each family passes the SBR from its own real X12.org example, so the
+    template's filing indicator is kept most of the time - otherwise every
+    family generated one distribution and 837I's institutional MB never
+    appeared.
+    """
+    parts = template.rstrip("~").split("*")
+    template_fields = parts[1:] + [""] * (9 - len(parts[1:]))
     fields = [""] * 9
     fields[0] = rng.choice(_SBR_RESPONSIBILITY_CODES)
     if maybe(rng, 0.7):
         fields[1] = rng.choice(_SBR_RELATIONSHIP_CODES)
     if maybe(rng, 0.8):
-        fields[8] = rng.choice(_CLAIM_FILING_INDICATORS)
+        fields[8] = template_fields[8] if maybe(rng, 0.7) else rng.choice(_CLAIM_FILING_INDICATORS)
     return "SBR*" + "*".join(fields).rstrip("*") + "~"
 
 
@@ -118,18 +125,17 @@ def build_address_segments(rng: random.Random) -> str:
     """N3/N4, and sometimes PER - every party in every 837 can carry them,
     and each maps to a real Address/ContactPoint, so both present and
     absent need generating."""
-    parts = []
     # REF*EI is the party's own tax ID, which maps to a real Identifier.
-    if maybe(rng, 0.4):
-        parts.append(f"REF*EI*{random_identifier(rng, digits=9)}~")
+    # It follows N3/N4 in the TR3's own 2010 loop order.
+    ein = [f"REF*EI*{random_identifier(rng, digits=9)}~"] if maybe(rng, 0.4) else []
     if not maybe(rng, 0.7):
-        return "".join(parts)
+        return "".join(ein)
     line, city, state, zip_code = random_address(rng)
-    segments = parts + [f"N3*{line.upper()}~", f"N4*{city.upper()}*{state}*{zip_code}~"]
+    segments = [f"N3*{line.upper()}~", f"N4*{city.upper()}*{state}*{zip_code}~"]
     if maybe(rng, 0.35):
         _, given = random_person_name(rng)
         segments.append(f"PER*IC*{given.upper()}*TE*{random_identifier(rng, digits=10)}~")
-    return "".join(segments)
+    return "".join(segments + ein)
 
 
 def build_org_nm1(rng: random.Random, entity_code: str, names_pool: list[str]) -> str:

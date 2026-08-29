@@ -274,6 +274,7 @@ class Edi837iBuilder(EdiTransactionBuilder):
             recorder=recorder,
             sbr=find_segment(loops.subscriber_loop.member_segments, "SBR"),
             pat=find_segment(loops.claim_loop.member_segments, "PAT"),
+            patient_is_subscriber=not loops.patient_is_dependent,
         )
 
         clm = find_segment(loops.claim_loop.member_segments, "CLM")

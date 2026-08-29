@@ -89,7 +89,7 @@ def generate_837i(rng: random.Random) -> str:
     against (a real sender omitting it is disclosed and covered separately
     by test_get_transaction_builder_defaults_837_to_professional_when_
     st03_absent, not by this generator)."""
-    draft = build_837_envelope(rng, "005010X223A2", billing_org_probability=0.7, sbr_segment="SBR*P*18*****MB~", include_pat_segment=False)
+    draft = build_837_envelope(rng, "005010X223A2", billing_org_probability=0.7, sbr_segment="SBR*P*18*******MB~", include_pat_segment=False)
     now = draft.now
     st_to_hl_segments = draft.st_to_hl_segments
 

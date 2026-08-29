@@ -372,7 +372,12 @@ class _BaseClaimStatusBuilder(EdiTransactionBuilder):
             # NM1 whenever it returns a non-None dependent_loop.
             dependent_nm1 = find_segment(loops.dependent_loop.member_segments, "NM1")
             dependent_dmg = find_segment(loops.dependent_loop.member_segments, "DMG")
-            dependent = build_patient_from_nm1_dmg(dependent_nm1, dependent_dmg, recorder=recorder)
+            dependent = build_patient_from_nm1_dmg(
+                dependent_nm1,
+                dependent_dmg,
+                recorder=recorder,
+                members=nm1_members(loops.dependent_loop.member_segments, dependent_nm1),
+            )
             resources.append(dependent)
             tasks.extend(
                 _build_tasks_for_patient_loop(

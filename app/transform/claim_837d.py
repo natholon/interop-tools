@@ -206,11 +206,11 @@ class Edi837dBuilder(MessageBuilder):
             f"BHT*0019*00*{bht_reference}*{format_x12_date(now)}*{format_x12_time(now)}*CH~",
             "HL*1**20*1~",
             org_or_person_nm1("85", billing_provider),
-            f"HL*2*1*22*{0 if patient_loop_is_dependent else 1}~",
+            f"HL*2*1*22*{1 if patient_loop_is_dependent else 0}~",
         ]
         # SBR precedes NM1*IL in the 2000B loop, which is where the forward
         # direction reads it from.
-        sbr = build_sbr_segment(find_resource(bundle, "Coverage"))
+        sbr = build_sbr_segment(find_resource(bundle, "Coverage"), not patient_loop_is_dependent)
         if sbr:
             st_to_hl_segments.append(sbr)
         st_to_hl_segments.extend([
