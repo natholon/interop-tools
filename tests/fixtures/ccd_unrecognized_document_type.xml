@@ -5,7 +5,7 @@
   <templateId root="2.16.840.1.113883.10.20.22.1.4"/>
   <id root="2.16.840.1.113883.19.5.99999.1" extension="CN001"/>
   <code code="11488-4" codeSystem="2.16.840.1.113883.6.1" displayName="Consultation Note"/>
-  <title>Consultation Note</title>
+  <title>Consultation Note</title><effectiveTime value="20260101120000+0000"/>
   <confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>
   <languageCode code="en-US"/>
   <recordTarget>
@@ -17,5 +17,5 @@
         </name>
       </patient>
     </patientRole>
-  </recordTarget>
+  </recordTarget><author><time value="20260101120000+0000"/><assignedAuthor><id root="2.16.840.1.113883.19.5" extension="AUTH1"/><assignedPerson><name><given>Ada</given><family>Byron</family></name></assignedPerson></assignedAuthor></author><custodian><assignedCustodian><representedCustodianOrganization><id root="2.16.840.1.113883.19.5" extension="CUST1"/><name>Fieldstone Health Network</name></representedCustodianOrganization></assignedCustodian></custodian>
 </ClinicalDocument>

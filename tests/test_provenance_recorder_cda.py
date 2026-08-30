@@ -47,6 +47,18 @@ def _deterministic_uuids():
     return (uuid.UUID(int=i) for i in itertools.count())
 
 
+def _entry_index(bundle, resource_type: str, occurrence: int = 0) -> int:
+    """The Bundle.entry index of the nth resource of a type.
+
+    Hardcoding the index breaks whenever the header gains a resource -
+    which it did the moment the fixtures were made conformant and every
+    one of them grew a Composition plus the author's Practitioner and the
+    custodian's Organization.
+    """
+    matches = [i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == resource_type]
+    return matches[occurrence]
+
+
 def _build_bundle(fixture_name: str, recorder=None):
     document = parse_document(read_fixture(fixture_name))
     builder = get_document_builder(document)
@@ -256,37 +268,42 @@ def test_ccd_effective_time_variants_records_bare_value_vs_low_high_shapes():
     entries = resolve_bundle_paths(bundle, recorder)
     by_path = {e.fhir_path: e for e in entries}
 
-    # Bare @value entry (entry[1]) - onset and abatement share the
-    # identical bare-value location, not a fabricated low/high one.
-    bare_onset = by_path["Bundle.entry[1].resource.onsetDateTime"]
+    bare = f"Bundle.entry[{_entry_index(bundle, 'Condition', 0)}].resource"
+    low_only = f"Bundle.entry[{_entry_index(bundle, 'Condition', 1)}].resource"
+
+    # Bare @value entry - onset and abatement share the identical
+    # bare-value location, not a fabricated low/high one.
+    bare_onset = by_path[f"{bare}.onsetDateTime"]
     assert bare_onset.source_location == xpath_location(
         "act/entryRelationship[SUBJ][0]/observation/effectiveTime/@value"
     )
-    bare_abatement = by_path["Bundle.entry[1].resource.abatementDateTime"]
+    bare_abatement = by_path[f"{bare}.abatementDateTime"]
     assert bare_abatement.source_location == bare_onset.source_location
 
-    # low-only entry (entry[2]) - onset present via low/@value, no
-    # abatement fact at all (nullFlavor/absent high).
-    low_only_onset = by_path["Bundle.entry[2].resource.onsetDateTime"]
+    # low-only entry - onset present via low/@value, no abatement fact at
+    # all (nullFlavor/absent high).
+    low_only_onset = by_path[f"{low_only}.onsetDateTime"]
     assert low_only_onset.source_location == xpath_location(
         "act/entryRelationship[SUBJ][0]/observation/effectiveTime/low/@value"
     )
-    assert "Bundle.entry[2].resource.abatementDateTime" not in by_path
+    assert f"{low_only}.abatementDateTime" not in by_path
 
-    # low+high entry (entry[3]) - both bounds present via their own
-    # dedicated children.
-    both_onset = by_path["Bundle.entry[3].resource.onsetDateTime"]
+    # low+high entry - both bounds present via their own dedicated
+    # children.
+    both = f"Bundle.entry[{_entry_index(bundle, 'Condition', 2)}].resource"
+    both_onset = by_path[f"{both}.onsetDateTime"]
     assert both_onset.source_location == xpath_location(
         "act/entryRelationship[SUBJ][0]/observation/effectiveTime/low/@value"
     )
-    both_abatement = by_path["Bundle.entry[3].resource.abatementDateTime"]
+    both_abatement = by_path[f"{both}.abatementDateTime"]
     assert both_abatement.source_location == xpath_location(
         "act/entryRelationship[SUBJ][0]/observation/effectiveTime/high/@value"
     )
 
     # nullFlavor entry (entry[4]) - fully unknown, no onset/abatement fact.
-    assert "Bundle.entry[4].resource.onsetDateTime" not in by_path
-    assert "Bundle.entry[4].resource.abatementDateTime" not in by_path
+    null_flavor = f"Bundle.entry[{_entry_index(bundle, 'Condition', 3)}].resource"
+    assert f"{null_flavor}.onsetDateTime" not in by_path
+    assert f"{null_flavor}.abatementDateTime" not in by_path
 
 
 def test_ccd_problem_status_observation_overrides_act_status_records_nested_location():
@@ -299,7 +316,8 @@ def test_ccd_problem_status_observation_overrides_act_status_records_nested_loca
     entries = resolve_bundle_paths(bundle, recorder)
     by_path = {e.fhir_path: e for e in entries}
 
-    status_entry = by_path["Bundle.entry[1].resource.clinicalStatus.coding[0].code"]
+    condition = f"Bundle.entry[{_entry_index(bundle, 'Condition')}].resource"
+    status_entry = by_path[f"{condition}.clinicalStatus.coding[0].code"]
     assert status_entry.value == "resolved"
     assert status_entry.source_location == xpath_location(
         "act",
@@ -321,7 +339,11 @@ def test_ccd_problem_negated_produces_no_condition_facts():
     assert not any(e.resource.get_resource_type() == "Condition" for e in bundle.entry)
     entries = resolve_bundle_paths(bundle, recorder)
     assert len(entries) == len(recorder.facts)
-    assert not any("Condition" in e.fhir_path or "code.coding" in e.fhir_path for e in entries)
+    # The Composition has a code.coding of its own (the document type),
+    # so this looks only at the entries a Condition would have produced.
+    composition = f"Bundle.entry[{_entry_index(bundle, 'Composition')}]."
+    body = [e for e in entries if not e.fhir_path.startswith(composition)]
+    assert not any("Condition" in e.fhir_path or "code.coding" in e.fhir_path for e in body)
 
 
 def test_ccd_medications_basic_crosswalk_matches_known_field_values():
@@ -939,7 +961,8 @@ def test_history_and_physical_header_only_fixture_records_header_facts():
     assert not any(e.resource.get_resource_type() == "Condition" for e in bundle.entry)
     entries = resolve_bundle_paths(bundle, recorder)
     by_path = {e.fhir_path: e for e in entries}
-    assert by_path["Bundle.entry[0].resource.name[0].family"].value == "Pilford"
+    patient = f"Bundle.entry[{_entry_index(bundle, 'Patient')}].resource"
+    assert by_path[f"{patient}.name[0].family"].value == "Pilford"
     assert by_path["Bundle.identifier.value"].value == "HP100"
 
 

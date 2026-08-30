@@ -6,7 +6,7 @@
   <templateId root="2.16.840.1.113883.10.20.22.1.2"/>
   <id root="2.16.840.1.113883.19.5.99999.1" extension="TT002"/>
   <code code="34133-9" codeSystem="2.16.840.1.113883.6.1" displayName="Summarization of Episode Note"/>
-  <title>Continuity of Care Document</title>
+  <title>Continuity of Care Document</title><effectiveTime value="20260101120000+0000"/>
   <confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>
   <languageCode code="en-US"/>
   <recordTarget>
@@ -18,7 +18,7 @@
         </name>
       </patient>
     </patientRole>
-  </recordTarget>
+  </recordTarget><author><time value="20260101120000+0000"/><assignedAuthor><id root="2.16.840.1.113883.19.5" extension="AUTH1"/><assignedPerson><name><given>Ada</given><family>Byron</family></name></assignedPerson></assignedAuthor></author><custodian><assignedCustodian><representedCustodianOrganization><id root="2.16.840.1.113883.19.5" extension="CUST1"/><name>Fieldstone Health Network</name></representedCustodianOrganization></assignedCustodian></custodian>
   <component>
     <structuredBody>
       <component>

@@ -483,10 +483,8 @@ def _cda_decisions(fixture: str):
 def test_cda_reports_dropped_values():
     decisions = _cda_decisions("ccd_effective_time_variants.xml")
     dropped = _by_location([d for d in decisions if d.kind == "dropped"])
-    assert dropped, "a CCD drops real values - languageCode is never mapped"
-    # A wholly unmapped element reports once, naming the element rather
-    # than one row per attribute.
-    assert any(loc.endswith("/languageCode") for loc in dropped)
+    # The Problem Concern Act's own id is "not supported by target".
+    assert any(loc.endswith("/act/id") for loc in dropped)
 
 
 def test_cda_transformed_values_are_not_reported_as_dropped():
@@ -518,7 +516,10 @@ def test_cda_code_system_is_reported_only_when_its_code_is_unmapped():
     # ClinicalDocument/code is not mapped at all, so it reports as one
     # element-level row whose detail names every attribute it carried,
     # codeSystem included.
-    doc_code = next(d for d in _cda_decisions("ccd_effective_time_variants.xml")
+    # ClinicalDocument/code maps to Composition.type, so it only reports
+    # as a drop for a document that builds no Composition at all -
+    # ccd_minimal is the fixture kept that way deliberately.
+    doc_code = next(d for d in _cda_decisions("ccd_minimal.xml")
                     if d.source_location == "ClinicalDocument/code")
     assert "@codeSystem=" in (doc_code.detail or "")
     assert "@displayName=" in (doc_code.detail or "")
@@ -554,7 +555,9 @@ def test_cda_wholly_unmapped_element_reports_once_not_per_attribute():
     """An unmapped <code> produced three rows (@code, @codeSystem,
     @displayName) telling a reviewer one fact. The HL7v2 half already
     reports a wholly unmapped field once; this brings C-CDA in line."""
-    dropped = _by_location(_cda_decisions("ccd_effective_time_variants.xml"))
+    # ccd_minimal builds no Composition, so its document <code> has
+    # nowhere to go - the one fixture where this element still drops.
+    dropped = _by_location(_cda_decisions("ccd_minimal.xml"))
     doc_code = dropped["ClinicalDocument/code"]
     assert "@code=" in doc_code.detail and "@codeSystem=" in doc_code.detail
     assert not [loc for loc in dropped if loc.startswith("ClinicalDocument/code/@")]
@@ -574,7 +577,10 @@ def test_cda_repeated_shapes_collapse_with_a_count():
 def test_cda_a_single_occurrence_keeps_its_exact_location():
     """Collapsing must not cost precision where there is nothing to
     collapse - one occurrence still names the indexed path it came from."""
-    dropped = _by_location(_cda_decisions("ccd_vitals_basic.xml"))
+    # An allergy entry's nested Reaction and Criticality observations sit
+    # at the same depth under identically-named tags, so each keeps its own
+    # entryRelationship[N] index.
+    dropped = _by_location(_cda_decisions("ccd_allergies_basic.xml"))
     assert any("[" in loc for loc in dropped), dropped.keys()
 
 

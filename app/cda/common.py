@@ -40,6 +40,11 @@ from app.provenance.location import xpath_location
 # "unknown" (which means "not recorded" rather than "recorded as neither").
 _GENDER_MAP = {"F": "female", "M": "male", "UN": "other"}
 
+# The US Realm Header profile. It tightens two of the base CDA header's
+# optional elements to 1..1 (title, languageCode), so whether a document
+# declares it changes which elements are required of it.
+US_REALM_HEADER_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.1.1"
+
 # Disclosed, extensible OID -> FHIR canonical system URI table (same
 # category as app/mappings/mdm.py's TXA-3 MIME crosswalk) - covers the code
 # systems this slice's Problems mapping actually needs (SNOMED CT) plus a

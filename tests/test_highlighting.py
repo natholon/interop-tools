@@ -58,6 +58,15 @@ def _resolved_fhir_text(payload, match):
     return payload.fhir_json_text[match.fhir_span[0] : match.fhir_span[1]]
 
 
+def _patient_path(bundle, suffix: str) -> str:
+    """The Patient's own Bundle path. Not entry[0] for a C-CDA document -
+    the Composition leads it, per R4's bdl-11."""
+    index = next(
+        i for i, e in enumerate(bundle.entry) if e.resource.get_resource_type() == "Patient"
+    )
+    return f"Bundle.entry[{index}].resource.{suffix}"
+
+
 # --- end-to-end, one real fixture per format ---
 
 
@@ -99,7 +108,7 @@ def test_cda_allergies_end_to_end_resolves_both_sides():
     payload = build_highlighting_payload(bundle, report, raw, report.source_format)
     by_path = _match_by_path(report, payload)
 
-    entry, match = by_path["Bundle.entry[0].resource.name[0].family"]
+    entry, match = by_path[_patient_path(bundle, "name[0].family")]
     assert _resolved_source_text(payload, match) == "Gierson"
     assert _resolved_fhir_text(payload, match) == '"Gierson"'
 
@@ -146,8 +155,8 @@ def test_cda_bare_trailing_tag_resolves_to_text_not_start_tag():
     payload = build_highlighting_payload(bundle, report, raw, report.source_format)
     by_path = _match_by_path(report, payload)
 
-    family_entry, family_match = by_path["Bundle.entry[0].resource.name[0].family"]
-    given_entry, given_match = by_path["Bundle.entry[0].resource.name[0].given[0]"]
+    family_entry, family_match = by_path[_patient_path(bundle, "name[0].family")]
+    given_entry, given_match = by_path[_patient_path(bundle, "name[0].given[0]")]
     # Before the fix, these resolved to "<family>"/"<given>" (the element's
     # own start tag) instead of its text content.
     assert _resolved_source_text(payload, family_match) == "Gierson"

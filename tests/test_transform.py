@@ -527,8 +527,13 @@ def test_ccd_round_trip_preserves_a_medication_requester():
     bundle = convert_cda_to_bundle(forward_xml)
     round_tripped = convert_cda_to_bundle(build_message_from_bundle(bundle, "CDA", "CCD", ""))
 
+    # "Byron" is the fixture's own header author, which every conformant
+    # C-CDA document carries; this test is about the medication's own.
     practitioners = [
-        e.resource for e in round_tripped.entry if e.resource.get_resource_type() == "Practitioner"
+        e.resource
+        for e in round_tripped.entry
+        if e.resource.get_resource_type() == "Practitioner"
+        and str(e.resource.name[0].family) != "Byron"
     ]
     assert [str(p.name[0].family) for p in practitioners] == ["Prescriber"]
     assert practitioners[0].identifier[0].value == "9988776655"
@@ -549,14 +554,19 @@ def test_ccd_round_trip_preserves_a_device_author():
     bundle = convert_cda_to_bundle(forward_xml)
     message = build_message_from_bundle(bundle, "CDA", "CCD", "")
     assert "<assignedAuthoringDevice>" in message
-    assert "<assignedPerson>" not in message
+    # The medication's own author is the Device. The document header
+    # carries a person author too - required of every C-CDA document - so
+    # this checks the medication entry rather than the whole message.
+    medication_entry = message.split("<substanceAdministration")[1]
+    assert "<assignedPerson>" not in medication_entry
 
     round_tripped = convert_cda_to_bundle(message)
     devices = [e.resource for e in round_tripped.entry if e.resource.get_resource_type() == "Device"]
     assert len(devices) == 1
     assert [n.name for n in devices[0].deviceName] == ["Acme EHR 9000", "Acme Charting Suite"]
     assert devices[0].identifier[0].value == "EHR-1"
-    assert not [e for e in round_tripped.entry if e.resource.get_resource_type() == "Practitioner"]
+    practitioners = [e.resource for e in round_tripped.entry if e.resource.get_resource_type() == "Practitioner"]
+    assert [str(p.name[0].family) for p in practitioners] == ["Byron"]
 
 
 def test_ccd_round_trip_preserves_vital_signs_panel_and_members():
@@ -937,6 +947,12 @@ def test_discharge_summary_round_trip_produces_a_convertible_document_again():
     round_tripped_bundle = convert_cda_to_bundle(document_text)
     resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
     assert resource_types == {
+        # Every conformant C-CDA document carries an author and a
+        # custodian, so a Composition plus their Practitioner and
+        # Organization are always present.
+        "Composition",
+        "Practitioner",
+        "Organization",
         "Patient",
         "Encounter",
         "Condition",
@@ -1186,6 +1202,12 @@ def test_history_and_physical_round_trip_produces_a_convertible_document_again()
     round_tripped_bundle = convert_cda_to_bundle(document_text)
     resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
     assert resource_types == {
+        # Every conformant C-CDA document carries an author and a
+        # custodian, so a Composition plus their Practitioner and
+        # Organization are always present.
+        "Composition",
+        "Practitioner",
+        "Organization",
         "Patient",
         "Procedure",
         "DocumentReference",

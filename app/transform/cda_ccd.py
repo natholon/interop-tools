@@ -38,6 +38,7 @@ from app.cda.allergies import TYPE_MAP as ALLERGY_TYPE_MAP
 from app.cda.allergies import SECTION_TEMPLATE_ID as ALLERGIES_SECTION_TEMPLATE_ID
 from app.cda.ccd import CCD_TEMPLATE_ID
 from app.cda.common import (
+    US_REALM_HEADER_TEMPLATE_ID,
     CD_FALLBACK_SYSTEM,
     OID_TO_FHIR_SYSTEM,
     RECOGNIZED_ENCOUNTER_CLASSES,
@@ -133,7 +134,7 @@ _ALLERGY_VALUE_CANDIDATES = [
     for code in dict.fromkeys([*ALLERGY_TYPE_MAP, *ALLERGY_CATEGORY_MAP])
 ]
 
-_US_HEADER_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.1.1"
+
 # Reverse of app/cda/common.py::_GENDER_MAP ({"F": "female", "M": "male",
 # "UN": "other"}).
 _GENDER_TO_CDA_CODE = {"female": "F", "male": "M", "other": "UN"}
@@ -2015,7 +2016,7 @@ def build_sectioned_document(
         # so the prefix has to be bound whether or not this document
         # happens to use one - an unbound prefix is a parse error.
         ' xmlns:sdtc="urn:hl7-org:sdtc">'
-        f'<templateId root="{_US_HEADER_TEMPLATE_ID}"/><templateId root="{template_id}"/>'
+        f'<templateId root="{US_REALM_HEADER_TEMPLATE_ID}"/><templateId root="{template_id}"/>'
         f'<id root="{document_root}" extension="{document_id}"/>'
         f'<code code="{doc_code}" codeSystem="2.16.840.1.113883.6.1" displayName="{doc_code_display}"/>'
         f"<title>{title}</title>"

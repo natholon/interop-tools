@@ -136,7 +136,15 @@ def test_unrecognized_section_is_silently_skipped():
     # Encounters has no registered section builder - its entry must not
     # appear as any resource, but the sibling recognized Problems section
     # must still be processed normally.
-    assert set(entries.keys()) == {"Patient", "Condition"}
+    # Composition/Practitioner/Organization come from the header author
+    # and custodian every conformant C-CDA document carries.
+    assert set(entries.keys()) == {
+        "Patient",
+        "Condition",
+        "Composition",
+        "Practitioner",
+        "Organization",
+    }
     assert entries["Condition"][0].resource.code.coding[0].display == "Osteoarthritis"
 
 
@@ -512,6 +520,12 @@ def test_discharge_summary_maps_header_and_all_six_of_its_sections():
     # Plan of Treatment's own structured Planned Observation entry also
     # produces a real CarePlan (see app/cda/plan_of_treatment.py).
     assert set(entries.keys()) == {
+        # Every conformant C-CDA document carries an author and a
+        # custodian, so a Composition plus their Practitioner and
+        # Organization are always present.
+        "Composition",
+        "Practitioner",
+        "Organization",
         "Patient",
         "Encounter",
         "Condition",
@@ -594,6 +608,12 @@ def test_history_and_physical_maps_header_recognized_section_and_all_nine_narrat
     # alongside their narrative pair (see app/cda/social_history.py/
     # family_history.py/plan_of_treatment.py).
     assert set(entries.keys()) == {
+        # Every conformant C-CDA document carries an author and a
+        # custodian, so a Composition plus their Practitioner and
+        # Organization are always present.
+        "Composition",
+        "Practitioner",
+        "Organization",
         "Patient",
         "Procedure",
         "DocumentReference",

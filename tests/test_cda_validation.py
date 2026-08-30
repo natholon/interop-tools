@@ -1,11 +1,17 @@
 import pytest
 
 from app.cda.validation import validate_document
-from app.cda.parser import parse_document
+from app.cda.parser import find_child, parse_document
 from app.hl7.errors import MissingSegmentError
 
 _XSI = 'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
-_CCD_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.1.2"/>'
+# Both, as a real CCD declares and as this app's own generator and
+# reverse builder emit - US Realm Header is what tightens title and
+# languageCode from 0..1 to 1..1.
+_CCD_TEMPLATE = (
+    '<templateId root="2.16.840.1.113883.10.20.22.1.1"/>'
+    '<templateId root="2.16.840.1.113883.10.20.22.1.2"/>'
+)
 _PROBLEMS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.5.1"/>'
 _MEDICATIONS_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.2.1.1"/>'
 _MEDICATION_ACTIVITY_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.16"/>'
@@ -41,9 +47,82 @@ _PLAN_OF_TREATMENT_SECTION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20
 _PLANNED_OBSERVATION_TEMPLATE = '<templateId root="2.16.840.1.113883.10.20.22.4.44"/>'
 
 
-def _doc(body: str, ccd: bool = True) -> object:
+# The header elements the CDA StructureDefinition requires of every
+# document, in CDA's own sequence order. Without them each of these inline
+# documents trips cda.header-missing-required-element seven times over,
+# burying the rule the test is actually about.
+#
+# Only gaps are filled: an element the body already supplies is left
+# alone (so a test can put its own effectiveTime in the future), and
+# `omit` drops one entirely (so a test can be about its absence).
+_HEADER_ELEMENTS = (
+    ("id", '<id root="2.16.840.1.113883.19.5" extension="TT001"/>'),
+    ("code", '<code code="34133-9" codeSystem="2.16.840.1.113883.6.1"/>'),
+    ("title", "<title>Test Document</title>"),
+    ("effectiveTime", '<effectiveTime value="20260101120000+0000"/>'),
+    ("confidentialityCode", '<confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>'),
+    ("languageCode", '<languageCode code="en-US"/>'),
+)
+_HEADER_PARTICIPATIONS = (
+    (
+        "author",
+        '<author><time value="20260101120000+0000"/><assignedAuthor>'
+        '<id root="2.16.840.1.113883.19.5" extension="A1"/>'
+        "<assignedPerson><name><given>Ada</given><family>Byron</family></name></assignedPerson>"
+        "</assignedAuthor></author>",
+    ),
+    (
+        "custodian",
+        "<custodian><assignedCustodian><representedCustodianOrganization>"
+        "<name>Test Custodian</name>"
+        "</representedCustodianOrganization></assignedCustodian></custodian>",
+    ),
+)
+
+
+# Findings about the document header rather than about the entry under
+# test. A conformant document always produces one: confidentialityCode is
+# 1..1 in CDA, and this app reports that the FHIR US Realm Header profile
+# constrains Composition.confidentiality to 0..0. A section test asserting
+# "no findings" means no findings *about its section*.
+_HEADER_RULE_IDS = frozenset(
+    {"cda.header-missing-required-element", "cda.composition-confidentiality-not-us-realm-conformant"}
+)
+
+
+def _body_findings(report) -> list:
+    return [f for f in report.findings if f.rule_id not in _HEADER_RULE_IDS]
+
+
+def _doc(body: str, ccd: bool = True, omit: tuple[str, ...] = ()) -> object:
+    # Which header elements the body already supplies is decided by
+    # parsing it and looking at the document's own direct children - a
+    # substring scan cannot tell ClinicalDocument/code from the <code>
+    # inside every section and entry below it.
+    provisional = parse_document(
+        f'<ClinicalDocument xmlns="urn:hl7-org:v3" {_XSI}>{body}</ClinicalDocument>'
+    )
+
+    def fill(elements):
+        return "".join(
+            xml
+            for tag, xml in elements
+            if tag not in omit and find_child(provisional, tag) is None
+        )
+
     template = _CCD_TEMPLATE if ccd else ""
-    xml = f'<ClinicalDocument xmlns="urn:hl7-org:v3" {_XSI}>{template}{body}</ClinicalDocument>'
+    # CDA's header is a sequence: the plain elements, then recordTarget,
+    # then author and custodian.
+    patient = (
+        ""
+        if "recordTarget" in omit or find_child(provisional, "recordTarget") is not None
+        else _patient()
+    )
+    xml = (
+        f'<ClinicalDocument xmlns="urn:hl7-org:v3" {_XSI}>'
+        f"{template}{fill(_HEADER_ELEMENTS)}{patient}{fill(_HEADER_PARTICIPATIONS)}{body}"
+        "</ClinicalDocument>"
+    )
     return parse_document(xml)
 
 
@@ -151,13 +230,13 @@ def test_clean_document_is_valid_with_no_findings():
     document = _doc(_patient())
     report = validate_document(document)
     assert report.is_valid is True
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.message_type == "CDA"
     assert report.trigger_event == "CCD"
 
 
 def test_missing_patient_role_raises_missing_segment_error_from_convertibility():
-    document = _doc("")
+    document = _doc("", omit=("recordTarget",))
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.would-not-convert")
     assert finding.severity == "error"
@@ -221,7 +300,7 @@ def test_clean_encounter_produces_no_findings():
     )
     document = _doc(body)
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -249,7 +328,7 @@ def test_encounter_high_only_in_past_produces_no_finding():
     )
     document = _doc(body)
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
 
 
 def test_encounter_class_unrecognized_and_period_inverted_fire_together():
@@ -260,7 +339,7 @@ def test_encounter_class_unrecognized_and_period_inverted_fire_together():
     )
     document = _doc(body)
     report = validate_document(document)
-    rule_ids = {f.rule_id for f in report.findings}
+    rule_ids = {f.rule_id for f in _body_findings(report)}
     assert rule_ids == {"cda.encounter-class-unrecognized", "cda.encounter-period-end-before-start"}
 
 
@@ -351,7 +430,7 @@ def test_clean_medication_produces_no_findings():
     entry = _medication_entry(status="active")
     document = _doc(_patient() + _medications_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -371,7 +450,7 @@ def test_negated_medication_with_no_code_produces_no_finding():
     entry = _medication_entry(code='<code nullFlavor="UNK"/>', negation=' negationInd="true"')
     document = _doc(_patient() + _medications_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
 
 
 def test_medication_status_unrecognized_is_info():
@@ -387,7 +466,7 @@ def test_medication_recognized_status_produces_no_status_finding():
     entry = _medication_entry(status="suspended")
     document = _doc(_patient() + _medications_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
 
 
 def test_medication_period_end_before_start_is_error():
@@ -405,14 +484,14 @@ def test_medication_period_with_only_low_produces_no_finding():
     entry = _medication_entry(effective_time=effective_time)
     document = _doc(_patient() + _medications_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
 
 
 def test_clean_allergy_produces_no_findings():
     entry = _allergy_entry()
     document = _doc(_patient() + _allergies_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -463,7 +542,7 @@ def test_negated_allergy_with_no_allergen_produces_no_missing_allergen_finding()
     entry = _allergy_entry(allergen=no_allergen, negation=' negationInd="true"')
     document = _doc(_patient() + _allergies_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
 
 
 def test_allergy_onset_in_future_is_warning():
@@ -498,14 +577,14 @@ def test_allergy_reaction_with_manifestation_produces_no_finding():
     entry = _allergy_entry(reaction=_reaction())
     document = _doc(_patient() + _allergies_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
 
 
 def test_clean_immunization_produces_no_findings():
     entry = _immunization_entry()
     document = _doc(_patient() + _immunizations_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -535,7 +614,7 @@ def test_negated_immunization_with_unrecognized_status_produces_no_status_findin
     entry = _immunization_entry(status="draft", negation=' negationInd="true"')
     document = _doc(_patient() + _immunizations_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
 
 
 def test_immunization_occurrence_in_future_is_warning():
@@ -573,7 +652,7 @@ def test_planned_immunization_status_unrecognized_is_info():
 def test_planned_immunization_with_recognized_status_produces_no_findings():
     entry = _immunization_entry(mood="INT", status="active")
     document = _doc(_patient() + _immunizations_section(entry))
-    assert validate_document(document).findings == []
+    assert _body_findings(validate_document(document)) == []
 
 
 def _vital_sign_observation(code: str = "", effective_time: str = "") -> str:
@@ -602,7 +681,7 @@ def test_clean_vitals_produces_no_findings():
     entry = _vitals_organizer(_vital_sign_observation())
     document = _doc(_patient() + _vitals_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -723,7 +802,7 @@ def test_clean_result_produces_no_findings():
     entry = _results_organizer(_result_observation())
     document = _doc(_patient() + _results_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -802,7 +881,7 @@ def test_clean_procedure_produces_no_findings():
     entry = _procedure_entry()
     document = _doc(_patient() + _procedures_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -824,7 +903,7 @@ def test_negated_procedure_with_unrecognized_status_produces_no_status_finding()
     entry = _procedure_entry(status="held", negation=' negationInd="true"')
     document = _doc(_patient() + _procedures_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
 
 
 def test_procedure_effective_time_in_future_is_warning():
@@ -1023,7 +1102,7 @@ def test_clean_hospital_discharge_diagnosis_produces_no_findings():
     entry = _hospital_discharge_diagnosis_entry()
     document = _doc(_patient() + _hospital_discharge_diagnosis_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -1078,7 +1157,7 @@ def test_clean_discharge_medication_produces_no_findings():
     entry = _discharge_medication_entry()
     document = _doc(_patient() + _discharge_medications_section(entry))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -1167,7 +1246,7 @@ def _social_history_section(entries: str) -> str:
 def test_clean_social_history_produces_no_findings():
     document = _doc(_patient() + _social_history_section(_social_history_observation()))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -1218,7 +1297,7 @@ def _family_history_section(entries: str) -> str:
 def test_clean_family_history_produces_no_findings():
     document = _doc(_patient() + _family_history_section(_family_history_organizer()))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -1262,7 +1341,7 @@ def _plan_of_treatment_section(entries: str) -> str:
 def test_clean_plan_of_treatment_produces_no_findings():
     document = _doc(_patient() + _plan_of_treatment_section(_planned_observation_entry()))
     report = validate_document(document)
-    assert report.findings == []
+    assert _body_findings(report) == []
     assert report.is_valid is True
 
 
@@ -1336,6 +1415,57 @@ def test_validate_document_never_raises_missing_segment_error_directly():
 _US_REALM_RULE = "cda.composition-confidentiality-not-us-realm-conformant"
 
 
+def test_missing_required_header_element_is_error():
+    # author is 1..* in the base CDA StructureDefinition, and its absence
+    # costs the whole Composition - Composition.author is 1..* in R4 too,
+    # R4 restricts data-absent-reason to primitives, and it forbids
+    # fabricating a value. So there is nothing to build.
+    report = validate_document(_doc(_patient(), omit=("author",)))
+    finding = next(f for f in report.findings if f.rule_id == "cda.header-missing-required-element")
+    assert finding.severity == "error"
+    assert finding.segment == "ClinicalDocument/author"
+    assert "1..*" in finding.message
+    assert report.is_valid is False
+
+
+def test_every_required_header_element_is_checked():
+    report = validate_document(
+        _doc(
+            "",
+            omit=("id", "code", "title", "effectiveTime", "confidentialityCode",
+                  "languageCode", "recordTarget", "author", "custodian"),
+        )
+    )
+    missing = {
+        f.segment.split("/")[-1]
+        for f in report.findings
+        if f.rule_id == "cda.header-missing-required-element"
+    }
+    # Seven from base CDA, plus the two US Realm Header tightens to 1..1.
+    assert missing == {
+        "id", "code", "effectiveTime", "confidentialityCode", "recordTarget",
+        "author", "custodian", "title", "languageCode",
+    }
+
+
+def test_us_realm_only_requirements_are_not_checked_without_that_template():
+    # title and languageCode are 0..1 in base CDA and 1..1 only under the
+    # US Realm Header, so a document not claiming that profile keeps them
+    # optional. _doc(ccd=False) emits no templateId at all.
+    report = validate_document(_doc(_patient(), ccd=False, omit=("title", "languageCode")))
+    missing = {
+        f.segment.split("/")[-1]
+        for f in report.findings
+        if f.rule_id == "cda.header-missing-required-element"
+    }
+    assert missing == set()
+
+
+def test_conformant_header_produces_no_missing_element_findings():
+    report = validate_document(_doc(_patient()))
+    assert [f for f in report.findings if f.rule_id == "cda.header-missing-required-element"] == []
+
+
 def test_confidentiality_code_reports_the_us_realm_prohibition():
     # The value is carried (the base R4 Composition mapping names the
     # target), but US Realm Header constrains .confidentiality to 0..0 -
@@ -1351,5 +1481,6 @@ def test_confidentiality_code_reports_the_us_realm_prohibition():
 
 
 def test_no_confidentiality_code_produces_no_us_realm_finding():
-    matching = [f for f in validate_document(_doc(_patient())).findings if f.rule_id == _US_REALM_RULE]
+    document = _doc(_patient(), omit=("confidentialityCode",))
+    matching = [f for f in validate_document(document).findings if f.rule_id == _US_REALM_RULE]
     assert matching == []

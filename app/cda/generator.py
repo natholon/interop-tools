@@ -30,6 +30,7 @@ the HL7v2 generators' precedent exactly.
 import random
 import xml.etree.ElementTree as ET
 
+from app.cda.common import US_REALM_HEADER_TEMPLATE_ID
 from app.cda.allergies import (
     ALLERGY_CONCERN_ACT_TEMPLATE_ID,
     ALLERGY_OBSERVATION_TEMPLATE_ID,
@@ -120,7 +121,7 @@ from app.generators.base import (
     random_time_range,
 )
 
-_US_HEADER_TEMPLATE_ID = "2.16.840.1.113883.10.20.22.1.1"
+
 _HEX_DIGITS = "0123456789abcdef"
 
 # A representative SNOMED CT problem pool - overlaps with the codes used in
@@ -1828,7 +1829,7 @@ def _generate_sectioned_document(
         # sdtc is how C-CDA spells a repeated raceCode/ethnicGroupCode;
         # an unbound prefix is a parse error, so it is always declared.
         ' xmlns:sdtc="urn:hl7-org:sdtc">'
-        f'<templateId root="{_US_HEADER_TEMPLATE_ID}"/><templateId root="{document_template_id}"/>'
+        f'<templateId root="{US_REALM_HEADER_TEMPLATE_ID}"/><templateId root="{document_template_id}"/>'
         f"{ids}"
         f'<code code="{doc_code}" codeSystem="2.16.840.1.113883.6.1" displayName="{doc_code_display}"/>'
         f"<title>{title}</title>"

@@ -22,7 +22,7 @@
         <birthTime value="19700315"/>
       </patient>
     </patientRole>
-  </recordTarget>
+  </recordTarget><author><time value="20260101120000+0000"/><assignedAuthor><id root="2.16.840.1.113883.19.5" extension="AUTH1"/><assignedPerson><name><given>Ada</given><family>Byron</family></name></assignedPerson></assignedAuthor></author><custodian><assignedCustodian><representedCustodianOrganization><id root="2.16.840.1.113883.19.5" extension="CUST1"/><name>Fieldstone Health Network</name></representedCustodianOrganization></assignedCustodian></custodian>
   <component>
     <structuredBody>
       <component>

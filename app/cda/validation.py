@@ -47,6 +47,7 @@ from app.cda.immunizations import SECTION_TEMPLATE_ID as IMMUNIZATIONS_SECTION_T
 from app.cda.medications import MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP as MEDICATION_STATUS_MAP
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.narrative_sections import ALL_TEMPLATE_IDS as NARRATIVE_SECTION_TEMPLATE_IDS, extract_narrative_text
+from app.cda.common import US_REALM_HEADER_TEMPLATE_ID
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
 from app.cda.plan_of_treatment import PLANNED_OBSERVATION_TEMPLATE_ID, PLANNED_PROCEDURE_TEMPLATE_ID
 from app.cda.plan_of_treatment import SECTION_TEMPLATE_ID as PLAN_OF_TREATMENT_SECTION_TEMPLATE_ID
@@ -259,6 +260,84 @@ def _rule_document_effective_time(document, now: datetime) -> list[ValidationFin
             )
         ]
     return []
+
+
+# Required of every ClinicalDocument by the base CDA StructureDefinition
+# (hl7.org/cda/stds/core), read off it directly rather than from memory.
+# `custodian`, `code`, `effectiveTime`, `id` and `confidentialityCode` are
+# 1..1; `author` and `recordTarget` are 1..*. Either way the element must
+# be present, which is all this checks.
+_REQUIRED_HEADER_ELEMENTS = (
+    ("id", "1..1"),
+    ("code", "1..1"),
+    ("effectiveTime", "1..1"),
+    ("confidentialityCode", "1..1"),
+    ("recordTarget", "1..*"),
+    ("author", "1..*"),
+    ("custodian", "1..1"),
+)
+
+# Optional in base CDA (0..1) and tightened to 1..1 by US Realm Header, so
+# these are only required of a document that declares that profile.
+_US_REALM_REQUIRED_HEADER_ELEMENTS = (
+    ("title", "1..1"),
+    ("languageCode", "1..1"),
+)
+
+# What a reader loses when one is absent, named rather than left implicit.
+_HEADER_ELEMENT_CONSEQUENCE = {
+    "author": (
+        "Composition.author is itself 1..* in FHIR R4, and R4 restricts data-absent-reason to primitives "
+        "and forbids fabricating a value, so no Composition is built at all - the document header, its "
+        "attesters and every section's metadata are dropped with it"
+    ),
+    "code": ("Composition.type has no source, so no Composition is built - the whole document header is dropped"),
+    "effectiveTime": (
+        "Composition.date has no source, so no Composition is built - the whole document header is dropped"
+    ),
+    "custodian": "Composition.custodian is left unset",
+    "confidentialityCode": "Composition.confidentiality is left unset",
+    "id": "Bundle.identifier is left unset",
+    "title": "Composition.title falls back to the document code's own display",
+    "languageCode": "Composition.language is left unset",
+    "recordTarget": "there is no patient to convert and the document does not convert at all",
+}
+
+
+def _rule_required_header_elements(document) -> list[ValidationFinding]:
+    """Header elements the CDA StructureDefinition requires and this
+    document does not carry.
+
+    The only rules here that check a *cardinality* rather than a value.
+    They exist because the converter's response to a missing one is
+    silent and large: `build_composition` returns None without a document
+    code, a parseable effectiveTime or an author, and the entire header
+    then converts to nothing. A validator whose job is to say "this is
+    missing something required" said nothing about it.
+
+    `error` because these are 1..1 or 1..* in the published
+    StructureDefinition - a document missing one is non-conformant, not a
+    plausible variant a real sender produces.
+    """
+    findings = []
+    required = list(_REQUIRED_HEADER_ELEMENTS)
+    if has_template_id(document, US_REALM_HEADER_TEMPLATE_ID):
+        required += list(_US_REALM_REQUIRED_HEADER_ELEMENTS)
+    for name, cardinality in required:
+        if find_child(document, name) is not None:
+            continue
+        findings.append(
+            ValidationFinding(
+                severity="error",
+                rule_id="cda.header-missing-required-element",
+                segment=f"ClinicalDocument/{name}",
+                message=(
+                    f"{name} is {cardinality} and is absent - "
+                    f"{_HEADER_ELEMENT_CONSEQUENCE[name]}."
+                ),
+            )
+        )
+    return findings
 
 
 def _rule_composition_confidentiality(document) -> list[ValidationFinding]:
@@ -1321,6 +1400,7 @@ def validate_document(document) -> ValidationReport:
     now = datetime.now(timezone.utc)
 
     findings.extend(_rule_document_effective_time(document, now))
+    findings.extend(_rule_required_header_elements(document))
     findings.extend(_rule_composition_confidentiality(document))
 
     patient = _find_patient(document)
