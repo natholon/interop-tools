@@ -1631,6 +1631,12 @@ def _random_hp_narrative_sections(rng: random.Random) -> str:
     return sections
 
 
+# ClinicalDocument/languageCode is 1..1, so every document carries one.
+# Varied because en-US alone would let a reverse builder hardcode the
+# value and still round-trip cleanly - which is exactly what it did.
+_DOCUMENT_LANGUAGES = ("en-US", "en", "es-US", "fr-CA")
+
+
 def _random_patient(rng: random.Random) -> str:
     sex = random_sex(rng) if maybe(rng) else None
     ids = "".join(_random_id_element(rng) for _ in range(rng.choice((1, 2))))
@@ -1828,7 +1834,7 @@ def _generate_sectioned_document(
         f"<title>{title}</title>"
         f"{effective_time}"
         '<confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>'
-        '<languageCode code="en-US"/>'
+        f'<languageCode code="{rng.choice(_DOCUMENT_LANGUAGES)}"/>'
         # author (1..*) and custodian (1..1) are required of every C-CDA
         # document, and the header is a sequence: recordTarget, author,
         # custodian, then componentOf. Omitting them made every generated

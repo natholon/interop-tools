@@ -442,6 +442,24 @@ def build_composition(
         composition.identifier = identifier
         record_identifier(recorder, composition_id, "identifier", set_id_element, xpath_location("setId"), identifier)
 
+    # ClinicalDocument/languageCode -> Resource.language, "the base
+    # language in which the resource is written". The Composition *is* the
+    # document, so the document's language is its own; the clinical
+    # resources beside it are facts the document narrates, and stamping
+    # each one would assert a language the source only stated once.
+    #
+    # Carried verbatim: C-CDA's languageCode holds a bare BCP-47 tag with
+    # no codeSystem of its own, which is exactly what Resource.language
+    # binds to - the same direct carry Patient.communication already uses.
+    language_element = find_child(document, "languageCode")
+    language = language_element.get("code") if language_element is not None else None
+    if language:
+        composition.language = language
+        if recorder:
+            recorder.record(
+                composition_id, "language", xpath_location("languageCode", "@code"), language
+            )
+
     confidentiality_element = find_child(document, "confidentialityCode")
     confidentiality = confidentiality_element.get("code") if confidentiality_element is not None else None
     if confidentiality:

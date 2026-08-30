@@ -695,6 +695,22 @@ def test_ccd_round_trip_preserves_result_report_and_observations():
     assert creatinine.specimen.reference == f"urn:uuid:{specimen.id}"
 
 
+def test_ccd_round_trip_preserves_a_non_default_document_language():
+    # languageCode is 1..1, so the reverse builder must emit one whether or
+    # not the Composition carries a language - which is why it hardcoded
+    # "en-US" and round-tripped cleanly while carrying nothing. A language
+    # that is not the default is what actually tests the mapping.
+    source = (FIXTURES / "ccd_basic.xml").read_text().replace(
+        '<languageCode code="en-US"/>', '<languageCode code="fr-CA"/>'
+    )
+    bundle = convert_cda_to_bundle(source)
+    assert bundle.entry[0].resource.language == "fr-CA"
+
+    regenerated = build_message_from_bundle(bundle, "CDA", "CCD", "")
+    assert '<languageCode code="fr-CA"/>' in regenerated
+    assert convert_cda_to_bundle(regenerated).entry[0].resource.language == "fr-CA"
+
+
 def test_ccd_round_trip_preserves_original_text_as_codeable_concept_text():
     # ccd_procedures_basic.xml's own completed entry carries the
     # narrative-anchor originalText shape (<reference value="#Proc1"/>,

@@ -145,6 +145,11 @@ _GENDER_TO_CDA_CODE = {"female": "F", "male": "M", "other": "UN"}
 # came from).
 _CLINICAL_STATUS_TO_ACT_STATUS = {"active": "active", "inactive": "suspended", "resolved": "completed"}
 _PLACEHOLDER_ROOT = "2.16.840.1.113883.19.5.99999.1"
+# languageCode is 1..1 on ClinicalDocument, so a Bundle carrying no
+# Composition.language still needs one emitted. US Realm documents are
+# overwhelmingly en-US, and the value is regenerated rather than
+# recovered, so it is a disclosed default like every other one here.
+_DEFAULT_LANGUAGE = "en-US"
 
 # Reverse of app.cda.plan_of_treatment.STATUS_MAP - not a clean bijection
 # (both "aborted"/"cancelled" map forward to "cancelled", both "suspended"/
@@ -1836,9 +1841,9 @@ _ATTESTER_MODE_TO_TAG = {"legal": "legalAuthenticator", "professional": "authent
 
 def _reverse_composition_header(
     bundle: Bundle, authors_by_id: dict, organizations_by_id: dict
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str, str, str, str]:
     """(setId element, author+custodian+attester elements, confidentiality
-    code) from the Bundle's Composition - the reverse of
+    code, date, language) from the Bundle's Composition - the reverse of
     app.cda.composition.build_composition.
 
     Returns the pieces separately because CDA's header is a sequence:
@@ -1853,7 +1858,7 @@ def _reverse_composition_header(
     """
     composition = find_resource(bundle, "Composition")
     if composition is None:
-        return "", "", "N", ""
+        return "", "", "N", "", _DEFAULT_LANGUAGE
 
     set_id = ""
     if composition.identifier is not None and composition.identifier.value:
@@ -1895,7 +1900,13 @@ def _reverse_composition_header(
             continue
         parts.append(f"<{tag}>{time}{party}</{tag}>")
 
-    return set_id, "".join(parts), composition.confidentiality or "N", format_hl7_ts(composition.date)
+    return (
+        set_id,
+        "".join(parts),
+        composition.confidentiality or "N",
+        format_hl7_ts(composition.date),
+        composition.language or _DEFAULT_LANGUAGE,
+    )
 
 
 def build_sectioned_document(
@@ -1948,7 +1959,7 @@ def build_sectioned_document(
     authors_by_id = dict(practitioners_by_id)
     authors_by_id.update({d.id: d for d in find_resources(bundle, "Device")})
     organizations_by_id = {o.id: o for o in find_resources(bundle, "Organization")}
-    set_id, header_participations, confidentiality, composition_date = _reverse_composition_header(
+    set_id, header_participations, confidentiality, composition_date, language = _reverse_composition_header(
         bundle, authors_by_id, organizations_by_id
     )
     locations_by_id = {loc.id: loc for loc in find_resources(bundle, "Location")}
@@ -2010,7 +2021,7 @@ def build_sectioned_document(
         f"<title>{title}</title>"
         f'{f"<effectiveTime value=\"{effective_time}\"/>" if effective_time else ""}'
         f'<confidentialityCode code="{_esc(confidentiality)}" codeSystem="2.16.840.1.113883.5.25"/>'
-        '<languageCode code="en-US"/>'
+        f'<languageCode code="{_esc(language)}"/>'
         f"{set_id}"
         # CDA's header is a sequence: recordTarget, author, custodian,
         # the authenticators, then componentOf.

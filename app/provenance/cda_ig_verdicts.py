@@ -365,25 +365,49 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
         "target for the author's own time; only .attester (authenticators) has a time.",
     ),
     # author (1..*) and custodian (1..1) are required of every C-CDA
-    # document, so these two are dropped by every real conversion - worth
-    # stating precisely rather than leaving to the generic header note.
-    # Their FHIR home would be Composition.author/.custodian, and this app
-    # deliberately emits Bundle(type="collection") with no Composition
-    # (see app/cda/common.py::assemble_bundle for why). The IG publishes
-    # no header table either, so there is also no named target being
-    # missed - this is "no map specified", not a gap.
+    # document, so a verdict for them has to be right. Both now map, to
+    # Composition.author/.custodian, and normally do not reach here at all.
+    #
+    # **These reasons said "this app builds no Composition - it emits a
+    # collection Bundle".** That was true when written and false the day
+    # app/cda/composition.py shipped, and nothing re-checked it: the same
+    # trap that once froze an implementation choice into the Discharge
+    # Medications disclosure as though it were a standards constraint. A
+    # verdict asserting what this app does is a claim with an expiry date.
+    #
+    # What is left is genuinely per-document: Composition eagerly requires
+    # a type, a date and an author at construction, and none has an honest
+    # default, so a document missing any of them builds no Composition at
+    # all and these two have nothing to hang on.
+    #
+    # Not the same thing as the Bundle staying a "collection" - a date-only
+    # effectiveTime supplies no Bundle.timestamp, so bdl-10 blocks
+    # type="document", but the Composition is still built and the author
+    # and custodian still map. Confirming that against a real Bundle is
+    # what caught a *replacement* for the stale reason above being wrong in
+    # its own new way.
     "ClinicalDocument/author": (
         NO_MAP,
-        "No header mapping is published. The document author's FHIR home would be Composition.author, "
-        "and this app builds no Composition - it emits a collection Bundle, not a FHIR Document.",
+        "No header mapping is published. The author maps to Composition.author, and this document built "
+        "no Composition - that needs a document code, a parseable effectiveTime and an author, and one of "
+        "those is missing here.",
     ),
     "ClinicalDocument/custodian": (
         NO_MAP,
-        "No header mapping is published. The custodian's FHIR home would be Composition.custodian, "
-        "and this app builds no Composition - it emits a collection Bundle, not a FHIR Document.",
+        "No header mapping is published. The custodian maps to Composition.custodian, and this document "
+        "built no Composition - that needs a document code, a parseable effectiveTime and an author, and "
+        "one of those is missing here.",
     ),
     "ClinicalDocument/title": (NO_MAP, "No header mapping is published."),
-    "ClinicalDocument/languageCode": (NO_MAP, "No header mapping is published."),
+    # Reaches here for the same reason author and custodian do, and only
+    # then: the language maps to Resource.language on the Composition,
+    # so a document that builds none has nowhere to put it.
+    "ClinicalDocument/languageCode": (
+        NO_MAP,
+        "No header mapping is published. The document language maps to Composition.language, and this "
+        "document built no Composition - that needs a document code, a parseable effectiveTime and an "
+        "author, and one of those is missing here.",
+    ),
     "ClinicalDocument/confidentialityCode": (NO_MAP, "No header mapping is published."),
     "ClinicalDocument/effectiveTime": (NO_MAP, "No header mapping is published."),
     "component/section/code": (NO_MAP, "Section-level metadata has no specified FHIR target; the IG maps entries."),

@@ -853,6 +853,7 @@ def test_composition_maps_every_header_field_the_base_cda_mapping_names():
     assert composition.date is not None                          # <- .effectiveTime
     assert composition.confidentiality == "N"                    # <- .confidentialityCode
     assert composition.status == "final"                         # no CDA source
+    assert composition.language == "en-US"                       # <- .languageCode
 
     author = _resolve_reference(bundle, composition.author[0].reference)
     assert author.get_resource_type() == "Practitioner"
@@ -889,6 +890,17 @@ def test_composition_maps_documentation_of_to_event():
     assert event.code[0].coding[0].code == "428191000124101"
     assert event.period.start.isoformat().startswith("2026-04-01")
     assert event.period.end.isoformat().startswith("2026-04-02")
+
+
+def test_document_language_lands_on_the_composition_only():
+    # ClinicalDocument/languageCode states the language of the *document*,
+    # and the Composition is the document - so it lands there and nowhere
+    # else. Stamping .language on each clinical resource would assert a
+    # language the source only ever stated once.
+    bundle = convert_cda_to_bundle(read_fixture("ccd_basic.xml"))
+    assert bundle.entry[0].resource.language == "en-US"
+    others = [e.resource for e in bundle.entry[1:]]
+    assert others and all(r.language is None for r in others)
 
 
 def test_document_without_an_author_stays_a_collection():

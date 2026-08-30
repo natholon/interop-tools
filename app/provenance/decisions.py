@@ -672,10 +672,15 @@ def _unread_header_participation_paths(leaves: list[_CdaLeaf], is_mapped) -> set
     """Paths of header participations with no mapped leaf anywhere beneath.
 
     Two of these are required of every C-CDA document (`author` 1..*,
-    `custodian` 1..1), so a real document always carries them and this app
-    always drops them - a Bundle(type="collection") has no Composition to
-    hang them on. Reporting that as one row per participation, rather than
-    one per name part and id, says the thing worth reviewing.
+    `custodian` 1..1), so a real document always carries them - and when
+    one is not read, reporting it as one row per participation rather than
+    one per name part and id says the thing worth reviewing.
+
+    Both do map now, to `Composition.author`/`.custodian`, so this
+    normally finds nothing for them. It still fires for a document that
+    built no Composition at all - one is only built with a document code,
+    a parseable effectiveTime and an author - which is a fact about that
+    document rather than about this converter.
     """
     read: set[str] = set()
     participations: set[str] = set()

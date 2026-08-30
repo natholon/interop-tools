@@ -99,6 +99,21 @@ def test_cda_provenance_recording_does_not_change_bundle_output(fixture):
     assert len(entries) == len(recorder.facts)
 
 
+def test_ccd_records_the_document_language_against_its_own_attribute():
+    # The Composition is the document, so the document's language lands on
+    # it and on nothing else - one recorded fact, not one per resource.
+    recorder = ProvenanceRecorder(source_format="CDA")
+    bundle = _build_bundle("ccd_basic.xml", recorder=recorder)
+    entries = resolve_bundle_paths(bundle, recorder)
+
+    language = [e for e in entries if e.fhir_path.endswith(".language")]
+    assert len(language) == 1
+    assert language[0].fhir_path == "Bundle.entry[0].resource.language"
+    assert language[0].source_location == xpath_location("languageCode", "@code")
+    assert language[0].value == "en-US"
+    assert language[0].derivation == "direct"
+
+
 def test_ccd_basic_crosswalk_matches_known_field_values():
     # Direct content-correctness check against ccd_basic.xml's own
     # already-known values (test_ccd_mapping.py's own assertions).
