@@ -180,6 +180,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const outputPane = document.getElementById("crosswalk-output-pane");
     const dedupCheckbox = document.getElementById("crosswalk-deduplicate");
     const dedupSummaryEl = document.getElementById("crosswalk-dedup-summary");
+    const conformanceSummaryEl = document.getElementById("conformance-summary");
     const unsupportedBanner = document.getElementById("crosswalk-unsupported-banner");
     const tableWrapper = document.getElementById("crosswalk-table-wrapper");
     const tableBody = document.getElementById("crosswalk-table-body");
@@ -960,7 +961,7 @@ function renderCrosswalkTable(entries) {
     watchPre(sourcePre, () => sourcePositions, sourceCaret, "Source location:");
     watchPre(fhirPre, () => fhirPositions, fhirCaret, "FHIR path:");
 
-    function showCrosswalk(report, highlighting, dedupSummary) {
+    function showCrosswalk(report, highlighting, dedupSummary, conformance) {
         if (!outputPane) return;
         // A pin refers to marks about to be replaced wholesale.
         clearPin();
@@ -985,6 +986,30 @@ function renderCrosswalkTable(entries) {
                 dedupSummaryEl.hidden = false;
             } else {
                 dedupSummaryEl.hidden = true;
+            }
+        }
+
+        // Whether the Bundle just built is conformant FHIR R4. Reported
+        // whichever way it came out - "conformant" is the answer most of
+        // the time and is worth saying, not just the failures.
+        if (conformanceSummaryEl) {
+            if (conformance) {
+                const errors = (conformance.findings || []).filter((f) => f.severity === "error");
+                const warnings = (conformance.findings || []).filter((f) => f.severity === "warning");
+                if (errors.length) {
+                    const first = errors[0];
+                    conformanceSummaryEl.textContent =
+                        `FHIR R4 conformance: ${errors.length} error${errors.length === 1 ? "" : "s"}` +
+                        ` - ${first.message} (${first.segment})`;
+                } else if (warnings.length) {
+                    conformanceSummaryEl.textContent =
+                        `FHIR R4 conformance: no errors, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}.`;
+                } else {
+                    conformanceSummaryEl.textContent = "FHIR R4 conformance: no issues found.";
+                }
+                conformanceSummaryEl.hidden = false;
+            } else {
+                conformanceSummaryEl.hidden = true;
             }
         }
 
@@ -1389,7 +1414,7 @@ function renderCrosswalkTable(entries) {
             // populated before the table renders or every inferred row
             // draws a blank decision cell.
             renderDecisions(data.decisions || [], data.rejection_outcomes || []);
-            showCrosswalk(data.report, data.highlighting, data.deduplication);
+            showCrosswalk(data.report, data.highlighting, data.deduplication, data.conformance);
         } catch (err) {
             showError("Network error", String(err));
         } finally {

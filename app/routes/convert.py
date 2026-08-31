@@ -10,6 +10,7 @@ from app.dedup import deduplicate_bundle
 from app.generators.registry import generate as generate_sample
 from app.hl7.errors import MappingError
 from app.pipeline import convert_to_bundle, validate_any
+from app.fhir_conformance.checker import check_bundle
 from app.routes.errors import ERROR_STATUS, VALIDATION_ERROR_STATUS, resolve_raw_text
 from app.routes.page_context import default_page_context
 from app.routes.static_assets import static_url
@@ -23,6 +24,10 @@ templates.env.globals["static_url"] = static_url
 class ConvertResult(BaseModel):
     bundle_json: str | None = None
     dedup_summary: dict | None = None
+    # FHIR R4 conformance of the Bundle just built - see
+    # app/fhir_conformance/checker.py. Always computed: it is cheap, and a
+    # caller should not have to ask whether the output is valid FHIR.
+    conformance_json: str | None = None
     error_category: str | None = None
     error_message: str | None = None
     status_code: int = 200
@@ -56,6 +61,7 @@ def _run_conversion(raw_text: str, deduplicate: bool = False) -> ConvertResult:
     return ConvertResult(
         bundle_json=bundle.model_dump_json(indent=2, exclude_none=True),
         dedup_summary=dedup_summary,
+        conformance_json=check_bundle(bundle).model_dump_json(exclude_none=True),
     )
 
 
@@ -170,6 +176,8 @@ async def convert_api(payload: ConvertApiRequest):
     content = {"bundle": json.loads(outcome.bundle_json)}
     if outcome.dedup_summary is not None:
         content["deduplication"] = outcome.dedup_summary
+    if outcome.conformance_json is not None:
+        content["conformance"] = json.loads(outcome.conformance_json)
     return JSONResponse(content=content)
 
 

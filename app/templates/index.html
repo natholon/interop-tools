@@ -32,6 +32,11 @@
             </div>
             <div id="fhir-placeholder" class="crosswalk-placeholder">Convert to see the resulting FHIR Bundle here.</div>
             <pre id="fhir-highlighted" class="xwalk-pre" hidden><code id="fhir-highlighted-code"></code></pre>
+            {# Whether the Bundle beside it is conformant FHIR R4 - filled
+               in by app.js from the conformance key, and placed here
+               rather than with the request summaries because it
+               describes this pane. #}
+            <div id="conformance-summary" class="dedup-summary" hidden></div>
             <p class="caret-readout" id="fhir-caret" aria-live="polite"></p>
         </div>
     </div>

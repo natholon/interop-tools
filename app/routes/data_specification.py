@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from app.provenance.decisions import apply_rejections, compute_decisions
 from app.provenance.dispatch import convert_with_provenance
 from app.provenance.highlighting import build_highlighting_payload
+from app.fhir_conformance.checker import check_bundle
 from app.provenance.source_index import build_source_index
 from app.routes.errors import ERROR_STATUS, resolve_raw_text
 from app.routes.page_context import default_page_context
@@ -35,6 +36,9 @@ class CrosswalkResult(BaseModel):
     rejection_outcomes_json: str | None = None
     highlighting_json: str | None = None
     dedup_summary: dict | None = None
+    # FHIR R4 conformance of the Bundle this crosswalk describes -
+    # the same key /api/convert returns, so both render alike.
+    conformance_json: str | None = None
     error_category: str | None = None
     error_message: str | None = None
     status_code: int = 200
@@ -101,6 +105,7 @@ def _run_crosswalk(
         rejection_outcomes_json=json.dumps([o.model_dump(exclude_none=True) for o in outcomes]),
         highlighting_json=highlighting.model_dump_json(exclude_none=True),
         dedup_summary=dedup_summary,
+        conformance_json=check_bundle(bundle).model_dump_json(exclude_none=True),
     )
 
 
@@ -199,4 +204,6 @@ async def data_specification_api(payload: CrosswalkApiRequest):
     }
     if outcome.dedup_summary is not None:
         content["deduplication"] = outcome.dedup_summary
+    if outcome.conformance_json is not None:
+        content["conformance"] = json.loads(outcome.conformance_json)
     return JSONResponse(content=content)
