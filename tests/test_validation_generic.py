@@ -28,13 +28,17 @@ def test_pid_missing_is_error():
     assert report.is_valid is False
 
 
-def test_pid_3_and_5_missing_are_warnings():
+def test_pid_3_and_5_missing_are_required_field_errors():
+    # PID-3 and PID-5 are 1..* in the standard, so they are reported by
+    # the table-driven rule rather than named one at a time - and as
+    # errors, which is what a cardinality violation is.
     report = validate_hl7(read_fixture("validation_generic_pid_3_5_missing.hl7"))
-    findings_by_rule = {f.rule_id: f for f in report.findings}
-    assert findings_by_rule["generic.pid-3-missing"].severity == "warning"
-    assert findings_by_rule["generic.pid-3-missing"].field == 3
-    assert findings_by_rule["generic.pid-5-missing"].severity == "warning"
-    assert findings_by_rule["generic.pid-5-missing"].field == 5
+    missing = {
+        f.field: f for f in report.findings if f.rule_id == "hl7.segment-missing-required-field" and f.segment == "PID"
+    }
+    assert missing[3].severity == "error"
+    assert missing[5].severity == "error"
+    assert "Patient Name" in missing[5].message
 
 
 def test_pid_7_unparseable_is_warning():
@@ -84,14 +88,21 @@ def test_msh_9_incomplete_is_error():
     assert report.is_valid is False
 
 
-def test_msh_7_missing_is_warning():
-    assert "generic.msh-7-missing" in _rule_ids("validation_generic_msh7_missing.hl7")
+def test_msh_7_missing_is_a_required_field_error():
+    report = validate_hl7(read_fixture("validation_generic_msh7_missing.hl7"))
+    finding = next(
+        f for f in report.findings if f.rule_id == "hl7.segment-missing-required-field" and f.field == 7
+    )
+    assert finding.severity == "error"
+    assert finding.segment == "MSH"
 
 
-def test_msh_10_missing_is_info():
+def test_msh_10_missing_is_a_required_field_error():
     report = validate_hl7(read_fixture("validation_generic_msh10_missing.hl7"))
-    finding = next(f for f in report.findings if f.rule_id == "generic.msh-10-missing")
-    assert finding.severity == "info"
+    finding = next(
+        f for f in report.findings if f.rule_id == "hl7.segment-missing-required-field" and f.field == 10
+    )
+    assert finding.severity == "error"
 
 
 def test_msh_encoding_characters_unusual_is_warning():

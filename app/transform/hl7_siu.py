@@ -66,8 +66,12 @@ APPOINTMENT_STATUS_TO_FILLER_STATUS = {
 }
 
 
-def _build_sch(appointment) -> str:
+def _build_sch(appointment, contacts: dict | None = None) -> str:
     fields: dict[int, str] = {}
+    # SCH-12/-16/-20 are 1..1, so they come back whenever the
+    # participant list carried the contact people they produced.
+    for field_num, practitioner in (contacts or {}).items():
+        fields[field_num] = _reverse_practitioner_xcn(practitioner)
     for identifier in appointment.identifier or []:
         if identifier.system == "urn:interop-tools:placer-appointment-id" and identifier.value:
             fields[1] = identifier.value
@@ -121,12 +125,26 @@ def _build_ais_segments(appointment) -> list[str]:
     ]
 
 
-def _build_aip(index: int, practitioner) -> str:
+_ENTERER_CODE = "enterer"
+
+
+def _reverse_practitioner_xcn(practitioner) -> str:
+    """XCN components 1/2/3 from a Practitioner - the reverse of
+    build_practitioner_from_xcn, shared by AIP-3 and SCH-12/-16/-20."""
     identifier = practitioner.identifier[0].value if practitioner.identifier else ""
     name = practitioner.name[0] if practitioner.name else None
     family = name.family or "" if name else ""
     given = name.given[0] if name and name.given else ""
-    return segment("AIP", {1: str(index), 3: f"{identifier}^{family}^{given}"}, 3)
+    return f"{identifier}^{family}^{given}"
+
+
+def _build_aip(index: int, practitioner, participant=None) -> str:
+    fields = {1: str(index), 3: _reverse_practitioner_xcn(practitioner)}
+    # AIP-4 is 1..1 and the IG maps it to participant.type, so it comes
+    # back from whatever coded role the participant carries.
+    if participant is not None and participant.type and participant.type[0].coding:
+        fields[4] = reverse_cwe(participant.type[0])
+    return segment("AIP", fields, 4)
 
 
 def _build_ail(index: int, location, locations_by_id: dict) -> str:
@@ -174,7 +192,7 @@ class _BaseSiuBuilder(MessageBuilder):
         by_id = {r.id: r for r in (e.resource for e in bundle.entry or [])}
 
         msh, _msh_dt = build_msh(bundle, "SIU", self.trigger_event)
-        sch = _build_sch(appointment)
+
         tq1 = _build_tq1(appointment)
         nte_segments = _build_nte_segments(appointment)
         pid = build_pid(patient)
@@ -183,6 +201,7 @@ class _BaseSiuBuilder(MessageBuilder):
         aip_segments = []
         ail_segments = []
         aig_segments = []
+        sch_contacts: dict[int, object] = {}
         locations_by_id = {loc.id: loc for loc in find_resources(bundle, "Location")}
         for participant in appointment.participant or []:
             if not participant.actor or not participant.actor.reference:
@@ -195,7 +214,22 @@ class _BaseSiuBuilder(MessageBuilder):
                 continue
             resource_type = resource.get_resource_type()
             if resource_type == "Practitioner":
-                aip_segments.append(_build_aip(len(aip_segments) + 1, resource))
+                # SCH's own contact people come back to SCH-12/-16/-20
+                # rather than becoming AIP personnel. They are told apart
+                # the same way AIL and AIG already are: by an asymmetry the
+                # forward mapper leaves, not a stored marker. SCH-20 alone
+                # carries a type (the IG names a real code only for it), so
+                # the type-less ones are SCH-12 then SCH-16 in order, and
+                # anything with any other type is an AIP.
+                code = None
+                if participant.type and participant.type[0].coding:
+                    code = participant.type[0].coding[0].code
+                if code == _ENTERER_CODE:
+                    sch_contacts[20] = resource
+                elif code is None and len(sch_contacts) < 2:
+                    sch_contacts[12 if 12 not in sch_contacts else 16] = resource
+                else:
+                    aip_segments.append(_build_aip(len(aip_segments) + 1, resource, participant))
             elif resource_type == "Device":
                 aig_segments.append(_build_aig(len(aig_segments) + 1, resource, "Device"))
             elif resource_type == "Location":
@@ -205,7 +239,7 @@ class _BaseSiuBuilder(MessageBuilder):
                 else:
                     ail_segments.append(_build_ail(len(ail_segments) + 1, resource, locations_by_id))
 
-        segments = [msh, sch]
+        segments = [msh, _build_sch(appointment, sch_contacts)]
         if tq1:
             segments.append(tq1)
         segments.extend(nte_segments)

@@ -22,9 +22,10 @@ def test_basic_fixture_maps_every_field():
     bundle = SiuS12Mapper().to_bundle(message)
 
     assert bundle.type == "collection"
-    # Patient + Appointment + materialized Practitioner (AIP) + Location (AIL) + Device (AIG)
-    # Grew by the extra Locations in AIL-3's own PL chain.
-    assert len(bundle.entry) == 8
+    # Patient + Appointment + materialized Practitioner (AIP) + Location (AIL) + Device (AIG),
+    # plus the extra Locations in AIL-3's own PL chain and one Practitioner
+    # each for SCH-12/-16/-20, which the IG maps to participant[1..3].
+    assert len(bundle.entry) == 11
 
     entries = _entries_by_type(bundle)
     patient = entries["Patient"].resource
@@ -64,13 +65,38 @@ def test_basic_fixture_maps_every_field():
     # (not display-only text) but still carry a human-readable `display` too,
     # per FHIR's own guidance that Reference.display SHOULD be set even when
     # `reference` is present.
-    assert len(appointment.participant) == 4
-    patient_participant, practitioner_participant, location_participant, device_participant = appointment.participant
+    # The patient, SCH-12/-16/-20's three contact people, then one each for
+    # AIP/AIL/AIG - the order the IG's own participant[1..3] rows imply.
+    assert len(appointment.participant) == 7
+    (
+        patient_participant,
+        placer_participant,
+        filler_participant,
+        enterer_participant,
+        practitioner_participant,
+        location_participant,
+        device_participant,
+    ) = appointment.participant
     assert patient_participant.actor.reference == f"urn:uuid:{patient.id}"
     assert patient_participant.type is None
+    # SCH-12 and SCH-16 get an actor but no type: the IG's own cells there
+    # read "#placer contact#"/"#filler contact#", its placeholder notation.
+    assert placer_participant.actor.display == "Placer, Contact"
+    assert placer_participant.type is None
+    assert filler_participant.actor.display == "Filler, Contact"
+    assert filler_participant.type is None
+    # SCH-20 is the one the IG gives a real code and system for.
+    assert enterer_participant.actor.display == "Enterer, Contact"
+    assert enterer_participant.type[0].coding[0].code == "enterer"
+    assert (
+        enterer_participant.type[0].coding[0].system
+        == "http://terminology.hl7.org/CodeSystem/provenance-participant-type"
+    )
     assert practitioner_participant.actor.reference == f"urn:uuid:{practitioner.id}"
     assert practitioner_participant.actor.display == "Smith, John"
-    assert practitioner_participant.type[0].coding[0].code == "ATND"
+    # AIP-4 is the source's own coded role, which the IG maps to
+    # participant.type - preferred over the fixed ATND used before it.
+    assert practitioner_participant.type[0].coding[0].code == "PROVIDER"
     assert location_participant.actor.reference == f"urn:uuid:{location.id}"
     assert location_participant.actor.display == "HOSP, W456, 101, B"
     assert location_participant.type is None
@@ -89,7 +115,9 @@ def test_minimal_fixture_omits_optional_fields():
 
     assert appointment.status == "booked"
     assert appointment.start is not None
-    assert len(appointment.participant) == 1
+    # The patient, plus SCH-12/-16/-20's contact people - all three are
+    # 1..1 in the standard, so even a minimal conformant SCH carries them.
+    assert len(appointment.participant) == 4
     assert appointment.serviceType is None
     assert appointment.comment is None
     assert appointment.appointmentType is None

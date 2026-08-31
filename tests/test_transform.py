@@ -1958,8 +1958,11 @@ def test_siu_s12_round_trip_preserves_practitioner_location_and_device():
     resource_types = {e.resource.get_resource_type() for e in round_tripped_bundle.entry}
     assert resource_types == {"Patient", "Appointment", "Practitioner", "Location", "Device"}
 
-    practitioner = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Practitioner")
-    assert practitioner.name[0].family == "Smith"
+    # SCH-12/-16/-20's contact people are Practitioners too, and come
+    # first; this is about the AIP one, which is the only typed personnel.
+    practitioners = [e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Practitioner"]
+    assert {str(p.name[0].family) for p in practitioners} == {"Placer", "Filler", "Enterer", "Smith"}
+    practitioner = next(p for p in practitioners if str(p.name[0].family) == "Smith")
     assert practitioner.name[0].given == ["John"]
 
     device = next(e.resource for e in round_tripped_bundle.entry if e.resource.get_resource_type() == "Device")

@@ -1,1 +1,1 @@
-MSH|^~\&|SENDAPP|SENDFAC|RECVAPP|RECVFAC|20260812113000||MDM^T02|MDMMSG010|P|2.5PID|1||913456^^^HOSP^MR||Haddad^Layla||19890303|FTXA||CN^Consultation Note^LOCAL|TEXT||||||||||||||||AV|||||||||OBX|1|TX|||Grade II^ tear noted on exam; recommend follow-up|||||||||||||
+MSH|^~\&|SENDAPP|SENDFAC|RECVAPP|RECVFAC|20260812113000||MDM^T02|MDMMSG010|P|2.5PID|1||913456^^^HOSP^MR||Haddad^Layla||19890303|FTXA|1|CN^Consultation Note^LOCAL|TEXT|||||||||DOC-000001|||||AU||AV|||||||||OBX|1|TX|DOCTEXT^Document text^LOCAL||Grade II^ tear noted on exam; recommend follow-up||||||F|||||||

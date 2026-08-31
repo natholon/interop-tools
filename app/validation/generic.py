@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from app.hl7.parser import field_str, optional_segment
 from app.validation.common import is_before, not_in_future, parse_comparable_datetime
 from app.validation.models import ValidationFinding
+from app.validation.required_fields import check_required_fields
 
 _RECOGNIZED_SEX_CODES = {"M", "F", "O", "U", "A", "N"}
 _MAX_PLAUSIBLE_AGE_YEARS = 120
@@ -56,19 +57,12 @@ def _rule_msh_type_and_trigger(msh) -> list[ValidationFinding]:
 
 
 def _rule_msh_timestamp_and_control_id(msh) -> list[ValidationFinding]:
+    """MSH-7's *value*. Its presence, and MSH-10's, are the standard's own
+    1..1 minimums and are checked by `check_required_fields` against the
+    IG's cardinality column, rather than named one at a time here."""
     findings = []
     raw_timestamp = field_str(msh, 7)
-    if not raw_timestamp:
-        findings.append(
-            ValidationFinding(
-                severity="warning",
-                rule_id="generic.msh-7-missing",
-                segment="MSH",
-                field=7,
-                message="MSH-7 (message date/time) is missing.",
-            )
-        )
-    elif parse_comparable_datetime(raw_timestamp) is None:
+    if raw_timestamp and parse_comparable_datetime(raw_timestamp) is None:
         findings.append(
             ValidationFinding(
                 severity="warning",
@@ -76,41 +70,6 @@ def _rule_msh_timestamp_and_control_id(msh) -> list[ValidationFinding]:
                 segment="MSH",
                 field=7,
                 message=f"MSH-7 (message date/time) {raw_timestamp!r} does not parse as a valid HL7 timestamp.",
-            )
-        )
-    if not field_str(msh, 10):
-        findings.append(
-            ValidationFinding(
-                severity="info",
-                rule_id="generic.msh-10-missing",
-                segment="MSH",
-                field=10,
-                message="MSH-10 (message control ID) is missing.",
-            )
-        )
-    return findings
-
-
-def _rule_pid_presence(pid) -> list[ValidationFinding]:
-    findings = []
-    if not field_str(pid, 3):
-        findings.append(
-            ValidationFinding(
-                severity="warning",
-                rule_id="generic.pid-3-missing",
-                segment="PID",
-                field=3,
-                message="PID-3 (patient identifier) is missing.",
-            )
-        )
-    if not field_str(pid, 5):
-        findings.append(
-            ValidationFinding(
-                severity="warning",
-                rule_id="generic.pid-5-missing",
-                segment="PID",
-                field=5,
-                message="PID-5 (patient name) is missing.",
             )
         )
     return findings
@@ -287,6 +246,13 @@ def validate(message, trigger_event: str) -> list[ValidationFinding]:
     findings: list[ValidationFinding] = []
     now = datetime.now(timezone.utc)
 
+    # Every segment in the message, against the standard's own required
+    # fields. Message-type agnostic on purpose: a required field is
+    # required wherever its segment appears.
+    for segment in message:
+        name = str(segment[0][0]) if len(segment) and len(segment[0]) else ""
+        findings.extend(check_required_fields(segment, name))
+
     msh = optional_segment(message, "MSH")
     if msh is not None:
         findings.extend(_rule_msh_encoding(msh))
@@ -299,7 +265,6 @@ def validate(message, trigger_event: str) -> list[ValidationFinding]:
             ValidationFinding(severity="error", rule_id="generic.pid-missing", segment="PID", message="PID segment is missing.")
         )
     else:
-        findings.extend(_rule_pid_presence(pid))
         findings.extend(_rule_pid_birth_date(pid, now))
         findings.extend(_rule_pid_sex(pid))
         findings.extend(_rule_pid_death(pid, now))

@@ -31,3 +31,13 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.pytest.ini_options]
+markers = [
+    # Fetches a published spec to confirm a transcribed table still
+    # matches it. Deselected by default (`-m "not network"` is the
+    # default addopts) so the suite stays offline and fast; run with
+    # `pytest -m network` when a table is edited.
+    "network: verifies a transcribed table against the live published source",
+]
+addopts = "-m 'not network'"

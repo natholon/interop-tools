@@ -38,9 +38,18 @@ def _generate_pv1(rng: random.Random) -> str:
 
 def _generate_txa(rng: random.Random) -> str:
     doc_code, doc_display = random_document_type(rng)
+    # TXA-1, -2, -12 and -17 are 1..1 in the HL7 v2 standard (see
+    # app/validation/required_fields.py). TXA-17 (Document Completion
+    # Status) is required of the *message* even though this app
+    # deliberately does not map it - no verified crosswalk to
+    # DocumentReference.docStatus exists, see app/mappings/mdm.py - so it
+    # is generated and left unmapped, which is the honest combination.
     fields = {
+        1: "1",
         2: f"{doc_code}^{doc_display}^LOCAL",
         3: random_content_presentation_code(rng),
+        12: f"DOC-{random_identifier(rng, 6)}",
+        17: rng.choice(("DO", "IP", "IN", "PA", "AU", "LA")),
         19: "AV",
     }
     if maybe(rng):
@@ -50,8 +59,6 @@ def _generate_txa(rng: random.Random) -> str:
         fields[9] = random_physician_xcn(rng)
     if maybe(rng):
         fields[10] = random_physician_xcn(rng)
-    if maybe(rng):
-        fields[12] = f"DOC-{random_identifier(rng, 6)}"
     if maybe(rng):
         fields[18] = rng.choice(("R", "U", "V"))
     if maybe(rng):
@@ -64,7 +71,21 @@ def _generate_obx_content(rng: random.Random) -> list[str]:
         return []
     num_lines = rng.randint(1, 3)
     return [
-        segment("OBX", {1: str(i), 2: "TX", 5: random_document_body_line(rng)}, 18) for i in range(1, num_lines + 1)
+        segment(
+            "OBX",
+            {
+                1: str(i),
+                2: "TX",
+                # OBX-3 and OBX-11 are 1..1. A document body's OBX
+                # carries text rather than a measurement, so its
+                # observation identifier names the document line itself.
+                3: "DOCTEXT^Document text^LOCAL",
+                5: random_document_body_line(rng),
+                11: "F",
+            },
+            18,
+        )
+        for i in range(1, num_lines + 1)
     ]
 
 

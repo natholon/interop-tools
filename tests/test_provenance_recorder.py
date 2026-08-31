@@ -350,7 +350,8 @@ def test_siu_s12_basic_crosswalk_matches_known_field_values():
     assert practitioner_entry is not None
     assert practitioner_entry.source_location == hl7_location("AIP", 3, repetition=0, component=2)
 
-    participant_entry = by_path["Bundle.entry[1].resource.participant[1].actor.display"]
+    # participant[1..3] are SCH-12/-16/-20's contacts, so AIP's is [4].
+    participant_entry = by_path["Bundle.entry[1].resource.participant[4].actor.display"]
     assert participant_entry.value == "Smith, John"
     assert participant_entry.source_location == hl7_location("AIP", 3)
 

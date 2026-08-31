@@ -44,8 +44,24 @@ _FILLER_STATUS_BY_TRIGGER = {
 }
 
 
+# SCH-11 (Appointment Timing Quantity) is 1..1, but its start/end
+# components are not - a TQ1-timed or untimed appointment carries the
+# field with a bare quantity and nothing that could contradict the
+# timing in force. TQ.1 is the quantity; TQ.4/TQ.5 are start and end.
+_EMPTY_TIMING_QUANTITY = "1"
+
+
 def _sch_common_fields(rng: random.Random, trigger_event: str) -> dict:
-    fields = {1: f"PLC{random_identifier(rng, 4)}"}
+    # SCH-6, -12, -16 and -20 are 1..1 in the HL7 v2 standard (see
+    # app/validation/required_fields.py), so they are always emitted -
+    # generated output has to be conformant, not merely convertible.
+    fields = {
+        1: f"PLC{random_identifier(rng, 4)}",
+        6: "NORMAL^Routine appointment request^LOCAL",
+        12: random_physician_xcn(rng),
+        16: random_physician_xcn(rng),
+        20: random_physician_xcn(rng),
+    }
     if maybe(rng, p=0.5):
         fields[2] = f"FIL{random_identifier(rng, 4)}"
     if maybe(rng, p=0.5):
@@ -89,6 +105,11 @@ def _apply_required_timing(rng: random.Random, sch_fields: dict) -> list[str]:
     start, end = random_time_range(rng, min_days=0, max_days=30)
     _apply_sch_duration(rng, sch_fields, start, end)
     if maybe(rng, p=0.75):
+        # SCH-11 is 1..1, so it is present either way - TQ1 simply wins
+        # the timing, which is what resolve_appointment_timing prefers.
+        # Only its quantity component is filled, so nothing here can
+        # contradict the TQ1 the appointment actually uses.
+        sch_fields[11] = _EMPTY_TIMING_QUANTITY
         return [_tq1_segment(rng, start, end)]
     sch_fields[11] = f"^^^{format_hl7_datetime(start)}^{format_hl7_datetime(end)}"
     return []
@@ -102,6 +123,7 @@ def _apply_optional_timing(rng: random.Random, sch_fields: dict) -> list[str]:
     it is generated there too, just from its own duration rather than
     from a start/end pair nothing else uses.
     """
+    sch_fields[11] = _EMPTY_TIMING_QUANTITY
     if not maybe(rng, p=0.4):
         if maybe(rng, p=0.4):
             sch_fields[9] = str(rng.choice((15, 20, 30, 45, 60)))
@@ -139,7 +161,9 @@ def _resource_group_segments(rng: random.Random) -> list[str]:
     if maybe(rng, p=0.5):
         resource_segments.append(segment("AIL", {1: "1", 3: random_location_field(rng)}, 12))
     if maybe(rng, p=0.5):
-        resource_segments.append(segment("AIP", {1: "1", 3: random_physician_xcn(rng)}, 12))
+        resource_segments.append(
+            segment("AIP", {1: "1", 3: random_physician_xcn(rng), 4: "PROVIDER^Provider^LOCAL"}, 12)
+        )
 
     if resource_segments:
         segments.append(segment("RGS", {1: "1"}, 3))

@@ -118,6 +118,15 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
     # the same shape as PL's own "/extension??-poc/", which this app already
     # declines to invent a value for.
     # --- SCH (Segment - SCH[Appointment]) -------------------------------
+    # SCH-6's FHIR Attribute is blank on the SCH[Appointment] map. The
+    # SCH[ServiceRequest] map does route it to .intent, but this app builds
+    # no ServiceRequest from a SIU - so no target exists for what it does
+    # build, which is not the same as the IG naming none at all.
+    "SCH-6": (
+        NO_TARGET,
+        "SCH-6 (Event Reason) has a blank FHIR Attribute on the SCH[Appointment] map. The "
+        "SCH[ServiceRequest] map routes it to .intent, on a resource a SIU conversion does not produce.",
+    ),
     "SCH-9": (
         SUPERSEDED,
         "SCH-9 maps to minutesDuration, which this app builds - preferring TQ1-6 when present, "
@@ -139,6 +148,35 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
         SUPERSEDED,
         "SCH-11 maps to the appointment timing as a whole, which this app reads as the legacy "
         "fallback when TQ1 is absent.",
+    ),
+    # --- TXA (Segment - TXA[DocumentReference]) --------------------------
+    # The map does name a target, so this is not "no map specified" - what
+    # is missing is the crosswalk. TXA-17 draws on HL7 table 0271 (AU, DI,
+    # DO, IN, IP, LA, PA) and DocumentReference.docStatus is bound to
+    # composition-status (preliminary|final|amended|entered-in-error); the
+    # IG publishes no ConceptMap between them. The one candidate in its
+    # codesystems directory, "CompletionStatus", is table 0322 - medication
+    # administration - which was checked rather than assumed from the name.
+    "TXA-17": (
+        NO_TARGET,
+        "TXA-17 maps to DocumentReference.docStatus, but the IG publishes no ConceptMap from its "
+        "table 0271 codes to the four composition-status values, so mapping it would mean inventing one.",
+    ),
+    # --- OBX (Segment - OBX[DocumentReference]) --------------------------
+    # OBX maps to Observation.code and .status elsewhere, and this app
+    # builds both for ORU. In an MDM the OBX segments carry the document's
+    # own text, and the OBX[DocumentReference] map leaves every one of
+    # their FHIR Attributes blank - the content becomes a Binary, which has
+    # no field for either.
+    "OBX-3": (
+        NO_TARGET,
+        "OBX-3 has a blank FHIR Attribute on the OBX[DocumentReference] map. A document body's OBX "
+        "becomes Binary content, which carries no observation identifier.",
+    ),
+    "OBX-11": (
+        NO_TARGET,
+        "OBX-11 has a blank FHIR Attribute on the OBX[DocumentReference] map. A document body's OBX "
+        "becomes Binary content, which carries no result status.",
     ),
     # --- AIG (Segment - AIG[Appointment]) --------------------------------
     "AIG-4": (

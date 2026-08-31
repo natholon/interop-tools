@@ -164,8 +164,23 @@ def _build_aig_resource(aig, recorder=None) -> tuple[Resource, str] | None:
     return device, resource_display
 
 
+# SCH-20 (Entered By Person) -> participant.type, per the v2-to-FHIR
+# SCH[Appointment] map, which names this exact code and system. SCH-12 and
+# SCH-16 get an actor but no type: the map's own cells for theirs read
+# "#placer contact#"/"#filler contact#", its notation for a placeholder it
+# has not resolved to a real code, and Appointment.participant.type's
+# recommended value set has nothing fitting - so nothing is invented.
+PROVENANCE_PARTICIPANT_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/provenance-participant-type"
+
+
 def _build_participants(
-    patient, aip_segments, ail_segments, aig_segments, appointment_id: str, recorder=None
+    patient,
+    sch,
+    aip_segments,
+    ail_segments,
+    aig_segments,
+    appointment_id: str,
+    recorder=None,
 ) -> tuple[list[AppointmentParticipant], list[Resource]]:
     """Patient first (referencing the real Patient resource), then one entry
     per AIP (personnel), AIL (location), and AIG (general resource/equipment)
@@ -192,27 +207,70 @@ def _build_participants(
     ]
     extra_resources: list[Resource] = []
 
-    def add_participant(resource: Resource | None, display: str, source_location: str, type_coding: Coding | None = None) -> None:
+    def add_participant(
+        resource: Resource | None,
+        display: str,
+        source_location: str,
+        type_coding: Coding | None = None,
+        type_source: tuple | None = None,
+    ) -> None:
         if resource is None:
             return
         extra_resources.append(resource)
         participant_index = len(participants)
+        concept = None
+        if type_source is not None:
+            # Built here rather than by the caller because the shared CWE
+            # builder records against the participant's own index, which is
+            # only known once the list position is fixed.
+            type_segment, type_field = type_source
+            concept = build_codeable_concept_from_cwe(
+                type_segment,
+                type_field,
+                resource_id=appointment_id,
+                relative_path=f"participant[{participant_index}].type[0]",
+                recorder=recorder,
+            )
+        if concept is not None:
+            types = [concept]
+        elif type_coding is not None:
+            types = [CodeableConcept(coding=[type_coding])]
+        else:
+            types = None
         participants.append(
             AppointmentParticipant(
                 status="accepted",
                 actor=build_reference_with_optional_display(resource.id, display),
-                type=[CodeableConcept(coding=[type_coding])] if type_coding else None,
+                type=types,
             )
         )
         if recorder and display:
             recorder.record(appointment_id, f"participant[{participant_index}].actor.display", source_location, display)
 
+    # SCH's own contact people, per the IG's participant[1..3] rows. They
+    # come before the resource groups because the map numbers them first.
+    for field_num, type_coding in (
+        (12, None),
+        (16, None),
+        (20, Coding(system=PROVENANCE_PARTICIPANT_TYPE_SYSTEM, code="enterer")),
+    ):
+        add_participant(
+            build_practitioner_from_xcn(sch, field_num, recorder=recorder),
+            person_display(sch, field_num),
+            hl7_location("SCH", field_num),
+            type_coding,
+        )
     for aip in aip_segments:
+        # AIP-4 (Resource Type) is the source's own coded role. The IG maps
+        # it to participant.type, so it is preferred over the fixed ATND
+        # this used unconditionally - which said "attender" of a personnel
+        # resource the message had already described.
         add_participant(
             build_practitioner_from_xcn(aip, 3, recorder=recorder),
             person_display(aip, 3),
             hl7_location("AIP", 3),
             Coding(system=PARTICIPATION_TYPE_SYSTEM, code="ATND"),
+            type_source=(aip, 4),
         )
     for ail in ail_segments:
         # AIL-3 is PL-shaped, so it yields a chain of Locations (one per
@@ -428,7 +486,7 @@ class BaseSiuMapper(MessageMapper):
         # built (see that function's own docstring for why).
         appointment_id = str(uuid.uuid4())
         participants, extra_resources = _build_participants(
-            patient, aip_segments, ail_segments, aig_segments, appointment_id, recorder=recorder
+            patient, sch, aip_segments, ail_segments, aig_segments, appointment_id, recorder=recorder
         )
 
         appointment = self.build_appointment(
