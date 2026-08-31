@@ -39,13 +39,13 @@
               <id root="e1000001-0000-0000-0000-000000000001"/>
               <code code="CONC" codeSystem="2.16.840.1.113883.5.6" displayName="Concern"/>
               <statusCode code="active"/>
-              <entryRelationship typeCode="SUBJ">
+              <effectiveTime><low value="20250601"/></effectiveTime><entryRelationship typeCode="SUBJ">
                 <observation classCode="OBS" moodCode="EVN">
                   <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
                   <id root="e1000001-0000-0000-0000-000000000002"/>
                   <code code="55607006" codeSystem="2.16.840.1.113883.6.96" displayName="Problem"/>
                   <statusCode code="active"/>
-                  <value xsi:type="CD" code="195967001" codeSystem="2.16.840.1.113883.6.96" displayName="Asthma"/>
+                  <effectiveTime><low value="20250601"/></effectiveTime><value xsi:type="CD" code="195967001" codeSystem="2.16.840.1.113883.6.96" displayName="Asthma"/>
                 </observation>
               </entryRelationship>
               <entryRelationship typeCode="SUBJ">
@@ -54,7 +54,7 @@
                   <id root="e1000001-0000-0000-0000-000000000003"/>
                   <code code="55607006" codeSystem="2.16.840.1.113883.6.96" displayName="Problem"/>
                   <statusCode code="active"/>
-                  <value xsi:type="CD" code="271737000" codeSystem="2.16.840.1.113883.6.96" displayName="Anemia"/>
+                  <effectiveTime><low value="20250601"/></effectiveTime><value xsi:type="CD" code="271737000" codeSystem="2.16.840.1.113883.6.96" displayName="Anemia"/>
                 </observation>
               </entryRelationship>
             </act>
@@ -69,10 +69,11 @@
               <id root="e1000002-0000-0000-0000-000000000001"/>
               <code code="CONC" codeSystem="2.16.840.1.113883.5.6" displayName="Concern"/>
               <statusCode code="active"/>
-              <entryRelationship typeCode="SUBJ">
+              <effectiveTime><low value="20250601"/></effectiveTime><entryRelationship typeCode="SUBJ">
                 <observation classCode="OBS" moodCode="EVN">
                   <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
                   <id root="e1000002-0000-0000-0000-000000000002"/>
+                  <effectiveTime><low value="20250601"/></effectiveTime>
                   <code code="55607006" codeSystem="2.16.840.1.113883.6.96" displayName="Problem"/>
                   <statusCode code="active"/>
                 </observation>
@@ -87,6 +88,7 @@
             <act classCode="ACT" moodCode="EVN">
               <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
               <id root="e1000003-0000-0000-0000-000000000001"/>
+              <effectiveTime><low value="20250601"/></effectiveTime>
               <code code="CONC" codeSystem="2.16.840.1.113883.5.6" displayName="Concern"/>
               <statusCode code="active"/>
               <entryRelationship typeCode="REFR">
@@ -95,7 +97,7 @@
                   <id root="e1000003-0000-0000-0000-000000000002"/>
                   <code code="55607006" codeSystem="2.16.840.1.113883.6.96" displayName="Problem"/>
                   <statusCode code="completed"/>
-                  <value xsi:type="CD" code="999999999" codeSystem="2.16.840.1.113883.6.96" displayName="Should not appear (wrong typeCode)"/>
+                  <effectiveTime><low value="20250601"/></effectiveTime><value xsi:type="CD" code="999999999" codeSystem="2.16.840.1.113883.6.96" displayName="Should not appear (wrong typeCode)"/>
                 </observation>
               </entryRelationship>
             </act>

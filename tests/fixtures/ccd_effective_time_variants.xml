@@ -37,7 +37,7 @@
               <id root="c1000001-0000-0000-0000-000000000001"/>
               <code code="CONC" codeSystem="2.16.840.1.113883.5.6" displayName="Concern"/>
               <statusCode code="active"/>
-              <entryRelationship typeCode="SUBJ">
+              <effectiveTime><low value="20250601"/></effectiveTime><entryRelationship typeCode="SUBJ">
                 <observation classCode="OBS" moodCode="EVN">
                   <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
                   <id root="c1000001-0000-0000-0000-000000000002"/>
@@ -57,7 +57,7 @@
               <id root="c1000002-0000-0000-0000-000000000001"/>
               <code code="CONC" codeSystem="2.16.840.1.113883.5.6" displayName="Concern"/>
               <statusCode code="active"/>
-              <entryRelationship typeCode="SUBJ">
+              <effectiveTime><low value="20250601"/></effectiveTime><entryRelationship typeCode="SUBJ">
                 <observation classCode="OBS" moodCode="EVN">
                   <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
                   <id root="c1000002-0000-0000-0000-000000000002"/>
@@ -79,7 +79,7 @@
               <id root="c1000003-0000-0000-0000-000000000001"/>
               <code code="CONC" codeSystem="2.16.840.1.113883.5.6" displayName="Concern"/>
               <statusCode code="completed"/>
-              <entryRelationship typeCode="SUBJ">
+              <effectiveTime><low value="20250601"/></effectiveTime><entryRelationship typeCode="SUBJ">
                 <observation classCode="OBS" moodCode="EVN">
                   <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
                   <id root="c1000003-0000-0000-0000-000000000002"/>
@@ -102,7 +102,7 @@
               <id root="c1000004-0000-0000-0000-000000000001"/>
               <code code="CONC" codeSystem="2.16.840.1.113883.5.6" displayName="Concern"/>
               <statusCode code="active"/>
-              <entryRelationship typeCode="SUBJ">
+              <effectiveTime><low value="20250601"/></effectiveTime><entryRelationship typeCode="SUBJ">
                 <observation classCode="OBS" moodCode="EVN">
                   <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
                   <id root="c1000004-0000-0000-0000-000000000002"/>

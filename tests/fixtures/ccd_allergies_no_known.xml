@@ -33,13 +33,13 @@
               <id root="d2b3c4e5-0001-4a1a-8a1a-000000000001"/>
               <code code="CONC" codeSystem="2.16.840.1.113883.5.6"/>
               <statusCode code="active"/>
-              <entryRelationship typeCode="SUBJ">
+              <effectiveTime><low value="20250601"/></effectiveTime><entryRelationship typeCode="SUBJ">
                 <observation classCode="OBS" moodCode="EVN" negationInd="true">
                   <templateId root="2.16.840.1.113883.10.20.22.4.7"/>
                   <id root="d2b3c4e5-0002-4a1a-8a1a-000000000002"/>
                   <code code="ASSERTION" codeSystem="2.16.840.1.113883.5.4"/>
                   <statusCode code="completed"/>
-                  <value xsi:type="CD" code="419199007" codeSystem="2.16.840.1.113883.6.96" displayName="Allergy to substance (finding)"/>
+                  <effectiveTime><low value="20250601"/></effectiveTime><value xsi:type="CD" code="419199007" codeSystem="2.16.840.1.113883.6.96" displayName="Allergy to substance (finding)"/>
                   <participant typeCode="CSM">
                     <participantRole classCode="MANU">
                       <playingEntity classCode="MMAT">

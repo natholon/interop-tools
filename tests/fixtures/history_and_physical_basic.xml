@@ -140,6 +140,7 @@
           <entry>
             <observation classCode="OBS" moodCode="EVN">
               <templateId root="2.16.840.1.113883.10.20.22.4.78" extension="2014-06-09"/>
+              <id root="2.16.840.1.113883.19.5" extension="SH01"/>
               <code code="72166-2" codeSystem="2.16.840.1.113883.6.1" displayName="Tobacco smoking status NHIS"/>
               <statusCode code="completed"/>
               <effectiveTime value="20260810"/>
@@ -165,9 +166,10 @@
             <observation classCode="OBS" moodCode="EVN">
               <templateId root="2.16.840.1.113883.10.20.22.4.38"/>
               <templateId root="2.16.840.1.113883.10.20.34.3.45" extension="2023-05-01"/>
+              <id root="2.16.840.1.113883.19.5" extension="GI01"/>
               <code code="76691-5" codeSystem="2.16.840.1.113883.6.1" displayName="Gender identity"/>
               <statusCode code="completed"/>
-              <value xsi:type="CD" code="446141000124107" codeSystem="2.16.840.1.113883.6.96" displayName="Identifies as female gender"/>
+              <effectiveTime value="20250601"/><value xsi:type="CD" code="446141000124107" codeSystem="2.16.840.1.113883.6.96" displayName="Identifies as female gender"/>
             </observation>
           </entry>
         </section>
@@ -190,6 +192,7 @@
           <entry>
             <organizer classCode="CLUSTER" moodCode="EVN">
               <templateId root="2.16.840.1.113883.10.20.22.4.45" extension="2015-08-01"/>
+              <id root="2.16.840.1.113883.19.5" extension="FH01"/>
               <statusCode code="completed"/>
               <subject>
                 <relatedSubject classCode="PRS">
@@ -205,6 +208,7 @@
               <component>
                 <observation classCode="OBS" moodCode="EVN">
                   <templateId root="2.16.840.1.113883.10.20.22.4.46" extension="2015-08-01"/>
+                  <id root="2.16.840.1.113883.19.5" extension="FH02"/>
                   <code code="75323-6" codeSystem="2.16.840.1.113883.6.1" displayName="Condition"/>
                   <statusCode code="completed"/>
                   <effectiveTime value="1998"/>
@@ -254,6 +258,7 @@
           <entry>
             <procedure classCode="PROC" moodCode="RQO">
               <templateId root="2.16.840.1.113883.10.20.22.4.41" extension="2014-06-09"/>
+              <id root="2.16.840.1.113883.19.5" extension="PP01"/>
               <code code="52734007" codeSystem="2.16.840.1.113883.6.96" displayName="Total knee replacement"/>
               <statusCode code="active"/>
               <effectiveTime value="20260902"/>

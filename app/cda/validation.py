@@ -48,6 +48,7 @@ from app.cda.medications import MEDICATION_ACTIVITY_TEMPLATE_ID, STATUS_MAP as M
 from app.cda.medications import SECTION_TEMPLATE_ID as MEDICATIONS_SECTION_TEMPLATE_ID
 from app.cda.narrative_sections import ALL_TEMPLATE_IDS as NARRATIVE_SECTION_TEMPLATE_IDS, extract_narrative_text
 from app.cda.common import US_REALM_HEADER_TEMPLATE_ID
+from app.cda.required_elements import check_required_elements
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds, ts_value
 from app.cda.plan_of_treatment import PLANNED_OBSERVATION_TEMPLATE_ID, PLANNED_PROCEDURE_TEMPLATE_ID
 from app.cda.plan_of_treatment import SECTION_TEMPLATE_ID as PLAN_OF_TREATMENT_SECTION_TEMPLATE_ID
@@ -1401,6 +1402,10 @@ def validate_document(document) -> ValidationReport:
 
     findings.extend(_rule_document_effective_time(document, now))
     findings.extend(_rule_required_header_elements(document))
+    # Every recognized entry template, against its own snapshot's
+    # minimums - template-driven, so an entry is checked wherever in
+    # the document it appears.
+    findings.extend(check_required_elements(document))
     findings.extend(_rule_composition_confidentiality(document))
 
     patient = _find_patient(document)

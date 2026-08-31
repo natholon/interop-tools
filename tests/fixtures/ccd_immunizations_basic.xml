@@ -62,7 +62,7 @@
               <templateId root="2.16.840.1.113883.10.20.22.4.52"/>
               <id root="e6f1ba43-0002-4b9b-9f12-000000000002"/>
               <statusCode code="completed"/>
-              <consumable>
+              <effectiveTime nullFlavor="UNK"/><consumable>
                 <manufacturedProduct classCode="MANU">
                   <templateId root="2.16.840.1.113883.10.20.22.4.54"/>
                   <manufacturedMaterial>
@@ -80,7 +80,7 @@
               <repeatNumber value="2"/>
               <routeCode code="C28161" codeSystem="2.16.840.1.113883.3.26.1.1" displayName="INTRAMUSCULAR"/>
               <doseQuantity value="0.5" unit="mL"/>
-              <consumable>
+              <effectiveTime value="20250601"/><consumable>
                 <manufacturedProduct classCode="MANU">
                   <templateId root="2.16.840.1.113883.10.20.22.4.54"/>
                   <manufacturedMaterial>

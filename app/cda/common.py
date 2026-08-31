@@ -352,19 +352,29 @@ def build_identifier(id_element, fallback_system: str) -> Identifier | None:
 
 
 def build_identifiers(
-    id_elements, fallback_system: str, resource_id: str | None = None, location_prefix: str | None = None, recorder=None
+    id_elements,
+    fallback_system: str,
+    resource_id: str | None = None,
+    location_prefix: str | None = None,
+    recorder=None,
+    fhir_index_offset: int = 0,
 ) -> list[Identifier]:
     """`resource_id`/`location_prefix`/`recorder` are optional (see
     app/provenance/recorder.py) - when all three are given, each kept
     identifier's `.value` is recorded against `{location_prefix}[{index}]`
     (the 0-based index into the *kept* list, matching FHIR's own array
     index - an `<id>` element with neither `@root` nor `@extension` is
-    skipped by build_identifier and correctly never consumes an index)."""
+    skipped by build_identifier and correctly never consumes an index).
+
+    `fhir_index_offset` is for a resource whose identifier list is filled
+    from several source elements in turn - Plan of Treatment builds one
+    CarePlan across every planned entry - so the recorded index still
+    matches the resource's real array position."""
     identifiers = []
     for id_element in id_elements:
         identifier = build_identifier(id_element, fallback_system)
         if identifier:
-            index = len(identifiers)
+            index = fhir_index_offset + len(identifiers)
             identifiers.append(identifier)
             if recorder and resource_id and location_prefix:
                 # Point at the attribute the value actually came from, not
@@ -376,7 +386,9 @@ def build_identifiers(
                 recorder.record(
                     resource_id,
                     f"identifier[{index}].value",
-                    xpath_location(f"{location_prefix}[{index}]", value_attribute),
+                    # The source index counts within this element list; the
+                    # FHIR one continues across the whole resource.
+                    xpath_location(f"{location_prefix}[{index - fhir_index_offset}]", value_attribute),
                     identifier.value,
                     source_value=id_element.get(value_attribute.lstrip("@")),
                 )

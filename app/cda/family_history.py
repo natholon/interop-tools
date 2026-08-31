@@ -52,6 +52,7 @@ from fhir.resources.R4B.familymemberhistory import FamilyMemberHistory, FamilyMe
 from fhir.resources.R4B.reference import Reference
 
 from app.cda.common import (
+    build_identifiers,
     build_codeable_concept_from_cd,
     build_quantity_from_pq,
     record_coding,
@@ -207,6 +208,20 @@ def _build_family_member_history(organizer_element, patient_id: str, recorder=No
         relationship=relationship,
         condition=conditions,
     )
+
+    # The IG maps an entry's own <id> as a source value to that
+    # resource's .identifier. Five other C-CDA resource types already
+    # build it; these did not, which is the same parity gap within
+    # C-CDA the register found once before.
+    identifiers = build_identifiers(
+        find_all(organizer_element, "id"),
+        "urn:interop-tools:cda-family-history-id",
+        resource_id=history_id,
+        location_prefix=xpath_location("id"),
+        recorder=recorder,
+    )
+    if identifiers:
+        history.identifier = identifiers
 
     if recorder:
         relationship_code = relationship_code_element.get("code")

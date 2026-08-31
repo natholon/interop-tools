@@ -32,7 +32,7 @@
               <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
               <id root="b2c3d4e5-0001-4a1a-8a1a-000000000001"/>
               <statusCode code="completed"/>
-              <consumable>
+              <doseQuantity value="1" unit="tablet"/><effectiveTime><low value="20250601"/></effectiveTime><consumable>
                 <manufacturedProduct classCode="MANU">
                   <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
                   <manufacturedMaterial>

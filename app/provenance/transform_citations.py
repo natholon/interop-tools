@@ -275,6 +275,10 @@ TRANSFORM_CITATIONS: dict[tuple[str, str], Citation] = {
     ("CDA", "telecom[].use"): _CDA_TELECOM_USE,
     ("CDA", "telecom[].value"): _CDA_TELECOM_VALUE,
     ("CDA", "identifier[].value"): _CDA_OID_IDENTIFIER,
+    # A planned (INT-mood) entry's own effectiveTime bounds, reformatted
+    # the same way every other CDA timestamp is.
+    ("CDA", "dosageInstruction[].timing.repeat.boundsPeriod.start"): CDA_DATETIME,
+    ("CDA", "dosageInstruction[].timing.repeat.boundsPeriod.end"): CDA_DATETIME,
     # --- X12 EDI -------------------------------------------------------
     ("EDI", "Bundle.timestamp"): X12_DATETIME,
     ("EDI", "created"): X12_DATETIME,

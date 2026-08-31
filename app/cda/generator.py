@@ -439,6 +439,9 @@ def _random_problem_entry(rng: random.Random) -> str:
         f'<templateId root="{CONCERN_ACT_TEMPLATE_ID}"/><id root="{act_id}"/>'
         '<code code="CONC" codeSystem="2.16.840.1.113883.5.6" displayName="Concern"/>'
         f'<statusCode code="{act_status}"/>'
+        # The Act's own effectiveTime is 1..1 - the concern's span, distinct
+        # from the Observation's onset/abatement nested below it.
+        f'<effectiveTime><low value="{format_hl7_datetime(start)[:8]}"/></effectiveTime>'
         f'<entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN"{negation_attr}>'
         f'<templateId root="{PROBLEM_OBSERVATION_TEMPLATE_ID}"/><id root="{obs_id}"/>'
         '<code code="55607006" codeSystem="2.16.840.1.113883.6.96" displayName="Problem"/>'
@@ -508,30 +511,39 @@ def _random_medication_entry(rng: random.Random) -> str:
     negation_attr = ' negationInd="true"' if negated else ""
     code, display = rng.choice(_MEDICATION_CODES)
 
-    # Structured dosing (route/dose/rate/effectiveTime) and free-text SIG
-    # are alternatives in real C-CDA, not always both present - split
-    # ~45/35/20 across structured-only, free-text-only, and neither, direct
-    # fuzz coverage of _build_dosage's "no dosage info at all -> None"
-    # branch alongside its two populated branches.
+    # Structured dosing and a free-text SIG are alternatives in real
+    # C-CDA - split ~45/35/20 across structured-only, free-text-only and
+    # neither, direct fuzz coverage of _build_dosage's three branches.
+    #
+    # effectiveTime and doseQuantity are 1..1 on Medication Activity
+    # regardless, so every entry carries them and what varies is the
+    # *shape* of the dosing around them: whether a route, a rate or a
+    # free-text SIG accompanies them. Omitting them made every free-text
+    # and every dosing-free entry non-conformant.
     # <author> -> MedicationRequest.requester, the one Medications row the
     # IG maps to a plain attribute rather than only Provenance.
     author = _random_entry_author(rng) if maybe(rng, 0.5) else ""
 
+    start, end = random_time_range(rng, min_days=-60, max_days=0)
+    required_dosing = (
+        f"{_random_ivl_ts(rng, start, end)}"
+        f'<doseQuantity value="{rng.choice((5, 10, 20, 25, 50, 100, 200, 500))}" unit="mg"/>'
+    )
+
     dosing_choice = rng.random()
-    dosing = ""
+    dosing = required_dosing
     if dosing_choice < 0.45:
         route_code, route_display = rng.choice(_MEDICATION_ROUTES)
-        start, end = random_time_range(rng, min_days=-60, max_days=0)
-        dose_value = rng.choice((5, 10, 20, 25, 50, 100, 200, 500))
         rate = f'<rateQuantity value="{rng.choice((1, 2, 5))}" unit="mL/h"/>' if maybe(rng, 0.15) else ""
         dosing = (
-            f"{_random_ivl_ts(rng, start, end)}"
+            f"{required_dosing}"
             f'<routeCode code="{route_code}" codeSystem="2.16.840.1.113883.3.26.1.1" displayName="{route_display}"/>'
-            f'<doseQuantity value="{dose_value}" unit="mg"/>{rate}'
+            f"{rate}"
         )
     elif dosing_choice < 0.80:
         sig_text = rng.choice(_SIG_TEXTS)
         dosing = (
+            f"{required_dosing}"
             f'<entryRelationship typeCode="COMP"><substanceAdministration classCode="SBADM" moodCode="{mood_code}">'
             f'<templateId root="{FREE_TEXT_SIG_TEMPLATE_ID}"/>'
             '<code code="76662-6" codeSystem="2.16.840.1.113883.6.1" displayName="Medication Instructions"/>'
@@ -573,13 +585,16 @@ def _random_discharge_medication_entry(rng: random.Random) -> str:
     subad_id = _random_uuid_like(rng)
     code, display = rng.choice(_MEDICATION_CODES)
     status_code = rng.choice(list(STATUS_MAP)) if maybe(rng, 0.85) else "new"
-    dosing = ""
+    # This wraps a Medication Activity, so effectiveTime and doseQuantity
+    # are 1..1 here for the same reason they are there. The route is what
+    # varies.
+    start, end = random_time_range(rng, min_days=-60, max_days=0)
+    dose_value = rng.choice((5, 10, 20, 25, 50, 100, 200, 500))
+    dosing = f'{_random_ivl_ts(rng, start, end)}<doseQuantity value="{dose_value}" unit="mg"/>'
     if maybe(rng, 0.7):
         route_code, route_display = rng.choice(_MEDICATION_ROUTES)
-        dose_value = rng.choice((5, 10, 20, 25, 50, 100, 200, 500))
-        dosing = (
+        dosing += (
             f'<routeCode code="{route_code}" codeSystem="2.16.840.1.113883.3.26.1.1" displayName="{route_display}"/>'
-            f'<doseQuantity value="{dose_value}" unit="mg"/>'
         )
     author = _random_entry_author(rng) if maybe(rng, 0.5) else ""
     return (
@@ -697,6 +712,8 @@ def _random_allergy_entry(rng: random.Random) -> str:
         f'<entry typeCode="DRIV"><act classCode="ACT" moodCode="EVN">'
         f'<templateId root="{ALLERGY_CONCERN_ACT_TEMPLATE_ID}"/><id root="{act_id}"/>'
         '<code code="CONC" codeSystem="2.16.840.1.113883.5.6"/><statusCode code="active"/>'
+        # 1..1 on the Act: the concern's own span, not the Observation's.
+        f'<effectiveTime><low value="{format_hl7_datetime(start)[:8]}"/></effectiveTime>'
         f'<entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN"{negation_attr}>'
         f'<templateId root="{ALLERGY_OBSERVATION_TEMPLATE_ID}"/><id root="{obs_id}"/>'
         '<code code="ASSERTION" codeSystem="2.16.840.1.113883.5.4"/><statusCode code="completed"/>'
@@ -746,7 +763,9 @@ def _random_immunization_entry(rng: random.Random, start, end) -> str:
     status_code = rng.choice(list(status_pool)) if maybe(rng, 0.85) else "draft"
     code, display = rng.choice(_VACCINE_CODES)
 
-    effective_time = _random_ivl_ts(rng, start, end) if maybe(rng, 0.7) else ""
+    # 1..1 on Immunization Activity. Which IVL_TS shape it takes still
+    # varies; whether it is there does not.
+    effective_time = _random_ivl_ts(rng, start, end)
 
     dosing = ""
     if maybe(rng, 0.5):
@@ -1387,8 +1406,10 @@ def _random_patient_extension_entries(rng: random.Random) -> str:
             '<entry><observation classCode="OBS" moodCode="EVN">'
             f'<templateId root="{SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID}"/>'
             f'<templateId root="{GENDER_IDENTITY_TEMPLATE_ID}" extension="2023-05-01"/>'
+            f'<id root="{_random_uuid_like(rng)}"/>'
             '<code code="76691-5" codeSystem="2.16.840.1.113883.6.1" displayName="Gender identity"/>'
             '<statusCode code="completed"/>'
+            f'<effectiveTime value="{format_hl7_datetime(random_datetime_near_now(rng))[:8]}"/>'
             f'<value xsi:type="CD" code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
             "</observation></entry>"
         )
@@ -1405,11 +1426,14 @@ def _random_social_history_entry(rng: random.Random) -> str:
     recognizes."""
     point_in_time, _ = random_time_range(rng, min_days=-400, max_days=0)
     effective_time = f'<effectiveTime value="{format_hl7_datetime(point_in_time)[:8]}"/>'
+    # id is 1..1 on Social History Observation, and Smoking Status
+    # specialises it, so both variants carry one.
+    entry_id = f'<id root="{_random_uuid_like(rng)}"/>'
     if maybe(rng, 0.6):
         code, display = rng.choice(_SMOKING_STATUS_VALUES)
         return (
             f'<entry><observation classCode="OBS" moodCode="EVN">'
-            f'<templateId root="{SMOKING_STATUS_TEMPLATE_ID}"/>'
+            f'<templateId root="{SMOKING_STATUS_TEMPLATE_ID}"/>{entry_id}'
             '<code code="72166-2" codeSystem="2.16.840.1.113883.6.1" displayName="Tobacco smoking status NHIS"/>'
             f'<statusCode code="completed"/>{effective_time}'
             f'<value xsi:type="CD" code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
@@ -1417,7 +1441,7 @@ def _random_social_history_entry(rng: random.Random) -> str:
         )
     return (
         f'<entry><observation classCode="OBS" moodCode="EVN">'
-        f'<templateId root="{SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID}"/>'
+        f'<templateId root="{SOCIAL_HISTORY_OBSERVATION_TEMPLATE_ID}"/>{entry_id}'
         '<code code="160573003" codeSystem="2.16.840.1.113883.6.96" displayName="Alcohol intake"/>'
         f'<statusCode code="completed"/>{effective_time}'
         f'<value xsi:type="PQ" value="{rng.randint(0, 14)}" unit="/wk"/>'
@@ -1470,13 +1494,15 @@ def _random_family_history_entry(rng: random.Random) -> str:
 
     return (
         f'<entry><organizer classCode="CLUSTER" moodCode="EVN">'
-        f'<templateId root="{FAMILY_HISTORY_ORGANIZER_TEMPLATE_ID}"/><statusCode code="completed"/>'
+        f'<templateId root="{FAMILY_HISTORY_ORGANIZER_TEMPLATE_ID}"/>'
+        f'<id root="{_random_uuid_like(rng)}"/><statusCode code="completed"/>'
         '<subject><relatedSubject classCode="PRS" xmlns:sdtc="urn:hl7-org:sdtc">'
         f'<code code="{relationship_code}" displayName="{relationship_display}" codeSystemName="HL7 FamilyMember" codeSystem="2.16.840.1.113883.5.111"/>'
         f"<subject>{gender}{deceased_extension}</subject>"
         "</relatedSubject></subject>"
         '<component><observation classCode="OBS" moodCode="EVN">'
         f'<templateId root="{FAMILY_HISTORY_OBSERVATION_TEMPLATE_ID}"/>'
+        f'<id root="{_random_uuid_like(rng)}"/>'
         '<code code="75323-6" codeSystem="2.16.840.1.113883.6.1" displayName="Condition"/>'
         '<statusCode code="completed"/>'
         f'<value xsi:type="CD" code="{condition_code}" codeSystem="2.16.840.1.113883.6.96" displayName="{condition_display}"/>'
@@ -1521,6 +1547,7 @@ def _random_plan_of_treatment_entry(rng: random.Random) -> str:
         return (
             f'<entry><procedure classCode="PROC" moodCode="RQO">'
             f'<templateId root="{PLANNED_PROCEDURE_TEMPLATE_ID}"/>'
+            f'<id root="{_random_uuid_like(rng)}"/>'
             f'<code code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
             f'<statusCode code="{status_code}"/>'
             f'<effectiveTime value="{format_hl7_datetime(point_in_time)[:8]}"/>'

@@ -43,7 +43,12 @@ from fhir.resources.R4B.careplan import CarePlan, CarePlanActivity, CarePlanActi
 from fhir.resources.R4B.period import Period
 from fhir.resources.R4B.reference import Reference
 
-from app.cda.common import build_codeable_concept_from_cd, effective_time_location, parse_partial_ts
+from app.cda.common import (
+    build_codeable_concept_from_cd,
+    build_identifiers,
+    effective_time_location,
+    parse_partial_ts,
+)
 from app.cda.narrative_sections import PLAN_OF_TREATMENT_TEMPLATE_ID, build_narrative_document_reference
 from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds
 from app.provenance.location import xpath_location
@@ -203,11 +208,25 @@ def build_plan_of_treatment_resources(section, patient_id: str, recorder=None) -
 
     care_plan_id = str(uuid.uuid4())
     activities = []
+    identifiers = []
     for index, entry in enumerate(find_all(section, "entry")):
         for entry_tag, template_id, kind in _RECOGNIZED_ENTRY_SHAPES:
             planned_element = find_child(entry, entry_tag)
             if planned_element is None or not has_template_id(planned_element, template_id):
                 continue
+            # The IG maps an entry's own <id> to its resource's
+            # .identifier. One CarePlan wraps every planned entry here, so
+            # each entry's id lands on that one CarePlan's identifier list.
+            identifiers.extend(
+                build_identifiers(
+                    find_all(planned_element, "id"),
+                    "urn:interop-tools:cda-plan-of-treatment-id",
+                    resource_id=care_plan_id,
+                    location_prefix=xpath_location(f"entry[{index}]", entry_tag, "id"),
+                    fhir_index_offset=len(identifiers),
+                    recorder=recorder,
+                )
+            )
             detail = _build_activity_detail(
                 planned_element, entry_tag, index, len(activities), kind,
                 resource_id=care_plan_id, recorder=recorder,
@@ -221,6 +240,7 @@ def build_plan_of_treatment_resources(section, patient_id: str, recorder=None) -
 
     care_plan = CarePlan(
         id=care_plan_id,
+        identifier=identifiers or None,
         status="active",
         intent="plan",
         subject=Reference(reference=f"urn:uuid:{patient_id}"),

@@ -80,18 +80,32 @@ _HEADER_PARTICIPATIONS = (
 )
 
 
-# Findings about the document header rather than about the entry under
-# test. A conformant document always produces one: confidentialityCode is
-# 1..1 in CDA, and this app reports that the FHIR US Realm Header profile
-# constrains Composition.confidentiality to 0..0. A section test asserting
-# "no findings" means no findings *about its section*.
-_HEADER_RULE_IDS = frozenset(
-    {"cda.header-missing-required-element", "cda.composition-confidentiality-not-us-realm-conformant"}
+# The two cardinality rules, plus the one finding a conformant document
+# always produces (confidentialityCode is 1..1 in CDA, and this app
+# reports that the FHIR US Realm Header profile constrains
+# Composition.confidentiality to 0..0).
+#
+# These tests build the smallest entry that exercises one rule, so a
+# template's full 1..1 set is noise here - the corpus-wide check that
+# every *fixture* satisfies it lives in test_required_elements.py. A test
+# asserting "no findings" means no findings about the thing it is testing.
+_STRUCTURAL_RULE_IDS = frozenset(
+    {
+        "cda.header-missing-required-element",
+        "cda.entry-missing-required-element",
+        "cda.composition-confidentiality-not-us-realm-conformant",
+    }
 )
 
 
 def _body_findings(report) -> list:
-    return [f for f in report.findings if f.rule_id not in _HEADER_RULE_IDS]
+    return [f for f in report.findings if f.rule_id not in _STRUCTURAL_RULE_IDS]
+
+
+def _body_is_valid(report) -> bool:
+    """Whether the rule under test judged the entry valid, ignoring the
+    cardinality rules - these entries are minimal by design."""
+    return not any(f.severity == "error" for f in _body_findings(report))
 
 
 def _doc(body: str, ccd: bool = True, omit: tuple[str, ...] = ()) -> object:
@@ -229,7 +243,7 @@ def _immunizations_section(entries: str) -> str:
 def test_clean_document_is_valid_with_no_findings():
     document = _doc(_patient())
     report = validate_document(document)
-    assert report.is_valid is True
+    assert _body_is_valid(report)
     assert _body_findings(report) == []
     assert report.message_type == "CDA"
     assert report.trigger_event == "CCD"
@@ -301,7 +315,7 @@ def test_clean_encounter_produces_no_findings():
     document = _doc(body)
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_encounter_high_only_in_future_is_warning():
@@ -377,7 +391,7 @@ def test_encounter_class_unrecognized_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.encounter-class-unrecognized")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_problem_missing_value_is_info():
@@ -386,7 +400,7 @@ def test_problem_missing_value_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.problem-missing-value")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_negated_problem_with_no_value_produces_no_finding():
@@ -431,7 +445,7 @@ def test_clean_medication_produces_no_findings():
     document = _doc(_patient() + _medications_section(entry))
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_medication_missing_code_is_info():
@@ -440,7 +454,7 @@ def test_medication_missing_code_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.medication-missing-code")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_negated_medication_with_no_code_produces_no_finding():
@@ -459,7 +473,7 @@ def test_medication_status_unrecognized_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.medication-status-unrecognized")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_medication_recognized_status_produces_no_status_finding():
@@ -492,7 +506,7 @@ def test_clean_allergy_produces_no_findings():
     document = _doc(_patient() + _allergies_section(entry))
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_allergy_missing_allergen_is_info():
@@ -506,7 +520,7 @@ def test_allergy_missing_allergen_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.allergy-missing-allergen")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_allergy_rules_also_run_against_entries_optional_section_variant():
@@ -570,7 +584,7 @@ def test_allergy_reaction_missing_manifestation_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.allergy-reaction-missing-manifestation")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_allergy_reaction_with_manifestation_produces_no_finding():
@@ -585,7 +599,7 @@ def test_clean_immunization_produces_no_findings():
     document = _doc(_patient() + _immunizations_section(entry))
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_immunization_missing_vaccine_code_is_info():
@@ -594,7 +608,7 @@ def test_immunization_missing_vaccine_code_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.immunization-missing-vaccine-code")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_immunization_status_unrecognized_is_info():
@@ -603,7 +617,7 @@ def test_immunization_status_unrecognized_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.immunization-status-unrecognized")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_negated_immunization_with_unrecognized_status_produces_no_status_finding():
@@ -682,7 +696,7 @@ def test_clean_vitals_produces_no_findings():
     document = _doc(_patient() + _vitals_section(entry))
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_vitals_missing_code_is_info():
@@ -691,7 +705,7 @@ def test_vitals_missing_code_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.vitals-missing-code")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_vitals_effective_time_in_future_is_warning():
@@ -732,7 +746,7 @@ def test_vitals_incomplete_blood_pressure_pair_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.vitals-incomplete-blood-pressure-pair")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_vitals_complete_blood_pressure_pair_produces_no_finding():
@@ -760,7 +774,7 @@ def test_vitals_orphaned_pulse_oximetry_component_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.vitals-orphaned-pulse-oximetry-component")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_vitals_pulse_oximetry_with_primary_produces_no_finding():
@@ -803,7 +817,7 @@ def test_clean_result_produces_no_findings():
     document = _doc(_patient() + _results_section(entry))
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_result_missing_code_is_info():
@@ -812,7 +826,7 @@ def test_result_missing_code_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.result-missing-code")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_result_status_unrecognized_is_info():
@@ -821,7 +835,7 @@ def test_result_status_unrecognized_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.result-status-unrecognized")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_result_effective_time_in_future_is_warning():
@@ -850,7 +864,7 @@ def test_result_specimen_missing_role_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.result-specimen-missing-role")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_result_specimen_with_role_produces_no_finding():
@@ -882,7 +896,7 @@ def test_clean_procedure_produces_no_findings():
     document = _doc(_patient() + _procedures_section(entry))
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_procedure_status_unrecognized_is_info():
@@ -891,7 +905,7 @@ def test_procedure_status_unrecognized_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.procedure-status-unrecognized")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_negated_procedure_with_unrecognized_status_produces_no_status_finding():
@@ -936,7 +950,7 @@ def test_procedure_performer_missing_identity_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.procedure-performer-missing-identity")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_procedure_performer_with_id_only_produces_no_finding():
@@ -964,7 +978,7 @@ def test_procedure_participant_missing_identity_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.procedure-participant-missing-identity")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_procedure_participant_with_type_only_produces_no_finding():
@@ -1008,7 +1022,7 @@ def test_procedure_indication_missing_value_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.procedure-indication-missing-value")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_procedure_indication_with_value_produces_no_finding():
@@ -1039,7 +1053,7 @@ def test_procedure_comment_missing_text_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.procedure-comment-missing-text")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_procedure_comment_with_text_produces_no_finding():
@@ -1065,7 +1079,7 @@ def test_procedure_recorder_missing_author_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.procedure-recorder-missing-author")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_procedure_recorder_with_assigned_author_produces_no_finding():
@@ -1103,7 +1117,7 @@ def test_clean_hospital_discharge_diagnosis_produces_no_findings():
     document = _doc(_patient() + _hospital_discharge_diagnosis_section(entry))
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_hospital_discharge_diagnosis_missing_value_is_info():
@@ -1112,7 +1126,7 @@ def test_hospital_discharge_diagnosis_missing_value_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.hospital-discharge-diagnosis-missing-value")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_hospital_discharge_diagnosis_onset_in_future_is_warning():
@@ -1158,7 +1172,7 @@ def test_clean_discharge_medication_produces_no_findings():
     document = _doc(_patient() + _discharge_medications_section(entry))
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_discharge_medication_missing_code_is_info():
@@ -1167,7 +1181,7 @@ def test_discharge_medication_missing_code_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.discharge-medication-missing-code")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_discharge_medication_status_unrecognized_is_info():
@@ -1176,7 +1190,7 @@ def test_discharge_medication_status_unrecognized_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.discharge-medication-status-unrecognized")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_narrative_section_missing_text_is_info():
@@ -1192,7 +1206,7 @@ def test_narrative_section_missing_text_is_info():
     assert finding.severity == "info"
     assert finding.segment == "Hospital Course/text"
     assert "Hospital Course" in finding.message
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_narrative_section_with_text_produces_no_finding():
@@ -1247,7 +1261,7 @@ def test_clean_social_history_produces_no_findings():
     document = _doc(_patient() + _social_history_section(_social_history_observation()))
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_social_history_missing_code_is_info():
@@ -1256,7 +1270,7 @@ def test_social_history_missing_code_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.social-history-missing-code")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_social_history_effective_time_in_future_is_warning():
@@ -1298,7 +1312,7 @@ def test_clean_family_history_produces_no_findings():
     document = _doc(_patient() + _family_history_section(_family_history_organizer()))
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_family_history_missing_relationship_is_info():
@@ -1307,7 +1321,7 @@ def test_family_history_missing_relationship_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.family-history-missing-relationship")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_family_history_missing_condition_code_is_info():
@@ -1316,7 +1330,7 @@ def test_family_history_missing_condition_code_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.family-history-missing-condition-code")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def _planned_observation_entry(code: str = "", status: str = "active") -> str:
@@ -1342,7 +1356,7 @@ def test_clean_plan_of_treatment_produces_no_findings():
     document = _doc(_patient() + _plan_of_treatment_section(_planned_observation_entry()))
     report = validate_document(document)
     assert _body_findings(report) == []
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_plan_of_treatment_missing_code_is_info():
@@ -1351,7 +1365,7 @@ def test_plan_of_treatment_missing_code_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.plan-of-treatment-missing-code")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_plan_of_treatment_status_unrecognized_is_info():
@@ -1360,7 +1374,7 @@ def test_plan_of_treatment_status_unrecognized_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.plan-of-treatment-status-unrecognized")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
 
 
 def test_unregistered_document_type_is_info():
@@ -1368,7 +1382,7 @@ def test_unregistered_document_type_is_info():
     report = validate_document(document)
     finding = next(f for f in report.findings if f.rule_id == "cda.unsupported-document-type")
     assert finding.severity == "info"
-    assert report.is_valid is True
+    assert _body_is_valid(report)
     assert report.trigger_event is None
 
 

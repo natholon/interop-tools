@@ -717,8 +717,13 @@ def test_pulse_oximetry_reading_and_optional_components_vary_across_seeds():
     # Direct fuzz coverage of app/cda/vitals.py's own Pulse Oximetry Panel
     # grouping: the primary O2 saturation reading must occur both with and
     # without its own optional concentration/flow-rate siblings.
+    #
+    # 240 seeds, not 80: a pulse-ox reading occurs in ~30% of documents and
+    # carries neither optional sibling in ~20% of those, so the rarest arm
+    # is roughly 1 document in 17. At 80 it hit zero purely by luck the
+    # moment an unrelated generator change shifted the RNG.
     with_components = without_components = absent = 0
-    for seed in range(80):
+    for seed in range(240):
         for organizer in _vital_signs_organizers(_document(seed)):
             codes = _observation_codes(organizer)
             if "59408-5" not in codes:

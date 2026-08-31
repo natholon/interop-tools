@@ -49,10 +49,10 @@
               <statusCode code="active"/>
               <entryRelationship typeCode="SUBJ">
                 <observation classCode="OBS" moodCode="EVN">
-                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/><id root="2.16.840.1.113883.19.5" extension="F011"/>
                   <code code="55607006" codeSystem="2.16.840.1.113883.6.96"/>
                   <statusCode code="completed"/>
-                  <value xsi:type="CD" code="385093006" codeSystem="2.16.840.1.113883.6.96" displayName="Community-acquired pneumonia"/>
+                  <effectiveTime><low value="20250601"/></effectiveTime><value xsi:type="CD" code="385093006" codeSystem="2.16.840.1.113883.6.96" displayName="Community-acquired pneumonia"/>
                 </observation>
               </entryRelationship>
             </act>
@@ -68,15 +68,15 @@
           <text>Hypertension.</text>
           <entry typeCode="DRIV">
             <act classCode="ACT" moodCode="EVN">
-              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/><id root="2.16.840.1.113883.19.5" extension="F013"/>
               <code code="CONC" codeSystem="2.16.840.1.113883.5.6"/>
               <statusCode code="active"/>
-              <entryRelationship typeCode="SUBJ">
+              <effectiveTime><low value="20250601"/></effectiveTime><entryRelationship typeCode="SUBJ">
                 <observation classCode="OBS" moodCode="EVN">
-                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/><id root="2.16.840.1.113883.19.5" extension="F015"/>
                   <code code="55607006" codeSystem="2.16.840.1.113883.6.96"/>
                   <statusCode code="completed"/>
-                  <value xsi:type="CD" code="38341003" codeSystem="2.16.840.1.113883.6.96" displayName="Hypertensive disorder"/>
+                  <effectiveTime><low value="20250601"/></effectiveTime><value xsi:type="CD" code="38341003" codeSystem="2.16.840.1.113883.6.96" displayName="Hypertensive disorder"/>
                 </observation>
               </entryRelationship>
             </act>
@@ -97,9 +97,9 @@
               <statusCode code="active"/>
               <entryRelationship typeCode="SUBJ">
                 <substanceAdministration classCode="SBADM" moodCode="EVN">
-                  <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+                  <templateId root="2.16.840.1.113883.10.20.22.4.16"/><id root="2.16.840.1.113883.19.5" extension="F018"/>
                   <statusCode code="active"/>
-                  <consumable>
+                  <doseQuantity value="1" unit="tablet"/><effectiveTime><low value="20250601"/></effectiveTime><consumable>
                     <manufacturedProduct classCode="MANU">
                       <manufacturedMaterial>
                         <code code="308191" codeSystem="2.16.840.1.113883.6.88" displayName="Amoxicillin 500 MG Oral Capsule"/>

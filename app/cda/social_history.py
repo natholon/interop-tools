@@ -52,6 +52,7 @@ from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.extension import Extension
 
 from app.cda.common import (
+    build_identifiers,
     build_codeable_concept_from_cd,
     build_quantity_from_pq,
     effective_time_location,
@@ -177,6 +178,20 @@ def _build_social_history_observation(observation_element, patient_id: str, reco
         code=code,
         subject=Reference(reference=f"urn:uuid:{patient_id}"),
     )
+
+    # The IG maps an entry's own <id> as a source value to that
+    # resource's .identifier. Five other C-CDA resource types already
+    # build it; these did not, which is the same parity gap within
+    # C-CDA the register found once before.
+    identifiers = build_identifiers(
+        find_all(observation_element, "id"),
+        "urn:interop-tools:cda-social-history-id",
+        resource_id=observation_id,
+        location_prefix=xpath_location(_ENTRY_BASE, "id"),
+        recorder=recorder,
+    )
+    if identifiers:
+        observation.identifier = identifiers
 
     if recorder:
         code_value = code_element.get("code")
