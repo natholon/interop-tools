@@ -53,7 +53,7 @@ from app.cda.parser import find_all, find_child, has_template_id, ivl_ts_bounds,
 from app.cda.plan_of_treatment import PLANNED_OBSERVATION_TEMPLATE_ID, PLANNED_PROCEDURE_TEMPLATE_ID
 from app.cda.plan_of_treatment import SECTION_TEMPLATE_ID as PLAN_OF_TREATMENT_SECTION_TEMPLATE_ID
 from app.cda.plan_of_treatment import STATUS_MAP as PLAN_OF_TREATMENT_STATUS_MAP
-from app.cda.problems import CONCERN_ACT_TEMPLATE_ID, PROBLEM_OBSERVATION_TEMPLATE_ID
+from app.cda.problems import CONCERN_ACT_TEMPLATE_ID, resolve_clinical_status, PROBLEM_OBSERVATION_TEMPLATE_ID
 from app.cda.problems import SECTION_TEMPLATE_ID as PROBLEMS_SECTION_TEMPLATE_ID
 from app.cda.procedures import PROCEDURE_TEMPLATE_ID, STATUS_MAP as PROCEDURE_STATUS_MAP
 from app.cda.procedures import SECTION_TEMPLATE_ID as PROCEDURES_SECTION_TEMPLATE_ID
@@ -423,8 +423,8 @@ def _rule_encounter(encompassing_encounter, now: datetime) -> list[ValidationFin
     return findings
 
 
-def _iter_problem_observations(section):
-    """Yield each Problem Observation element found via the exact same
+def _iter_problem_entries(section):
+    """Yield each (Concern Act, Problem Observation) pair found via the exact same
     act/entryRelationship[SUBJ] walk app.cda.problems.build_conditions()
     uses, so validation can never see a different set of entries than
     conversion does."""
@@ -438,7 +438,56 @@ def _iter_problem_observations(section):
             observation = find_child(relationship, "observation")
             if observation is None or not has_template_id(observation, PROBLEM_OBSERVATION_TEMPLATE_ID):
                 continue
-            yield observation
+            yield act, observation
+
+
+def _iter_problem_observations(section):
+    """Just the observations, for the rules that need no act."""
+    for _, observation in _iter_problem_entries(section):
+        yield observation
+
+
+def _rule_abated_problem_is_still_active(entries, rule_prefix: str, segment: str) -> list[ValidationFinding]:
+    """A problem with an end date whose status still says active.
+
+    Not a rule about C-CDA - the document is well-formed - but about what
+    it converts into. R4's con-4 reads:
+
+        abatement.empty() or clinicalStatus.coding.where(
+            system='...condition-clinical' and
+            (code='resolved' or code='remission' or code='inactive')).exists()
+
+    so a Condition carrying an abatement must be inactive, resolved or in
+    remission. The abatement comes from the Problem Observation's own
+    effectiveTime/high and the status from the Concern Act's statusCode or
+    a nested Status Observation - two independent elements - so a document
+    can assert both and convert to an invalid Condition. Neither value can
+    be inferred from the other, so this reports rather than resolving it.
+    """
+    findings = []
+    for act, observation in entries:
+        effective_time = find_child(observation, "effectiveTime")
+        # A real <high>, not the zero-width interval a bare @value
+        # collapses to - see app/cda/problems.py::build_condition.
+        if effective_time is None or find_child(effective_time, "high") is None:
+            continue
+        status, _ = resolve_clinical_status(act, observation)
+        code = status.coding[0].code if status is not None and status.coding else None
+        if code in (None, "resolved", "remission", "inactive"):
+            continue
+        findings.append(
+            ValidationFinding(
+                severity="error",
+                rule_id=f"{rule_prefix}-abated-but-active",
+                segment=segment,
+                message=(
+                    f"The problem has an end date but its status resolves to {code!r}. FHIR R4's "
+                    f"con-4 requires an abated Condition to be inactive, resolved or in remission, "
+                    f"so this converts to an invalid Condition."
+                ),
+            )
+        )
+    return findings
 
 
 def _rule_problem_observations(
@@ -509,7 +558,13 @@ def _rule_problem_observations(
 
 
 def _rule_problems(section, patient, now: datetime) -> list[ValidationFinding]:
-    return _rule_problem_observations(_iter_problem_observations(section), "cda.problem", "Problems/...", patient, now)
+    return _rule_problem_observations(
+        _iter_problem_observations(section), "cda.problem", "Problems/...", patient, now
+    ) + _rule_abated_problem_is_still_active(
+        _iter_problem_entries(section),
+        "cda.problem",
+        "Problems/entry/act/entryRelationship/observation/effectiveTime/high",
+    )
 
 
 def _iter_medication_activities(section):
@@ -1265,7 +1320,13 @@ def _rule_plan_of_treatment(section) -> list[ValidationFinding]:
 
 
 def _iter_hospital_discharge_diagnosis_observations(section):
-    """Yield each Problem Observation nested under a Hospital Discharge
+    """Just the observations, for the rules that need no act."""
+    for _, observation in _iter_hospital_discharge_diagnosis_entries(section):
+        yield observation
+
+
+def _iter_hospital_discharge_diagnosis_entries(section):
+    """Yield each (Act, Problem Observation) pair nested under a Hospital Discharge
     Diagnosis Act, via the same walk
     app.cda.hospital_discharge_diagnosis.build_hospital_discharge_diagnoses()
     uses, so validation can never see a different set of entries than
@@ -1280,7 +1341,7 @@ def _iter_hospital_discharge_diagnosis_observations(section):
             observation = find_child(relationship, "observation")
             if observation is None or not has_template_id(observation, PROBLEM_OBSERVATION_TEMPLATE_ID):
                 continue
-            yield observation
+            yield act, observation
 
 
 def _rule_hospital_discharge_diagnoses(section, patient, now: datetime) -> list[ValidationFinding]:
@@ -1290,6 +1351,10 @@ def _rule_hospital_discharge_diagnoses(section, patient, now: datetime) -> list[
         "HospitalDischargeDiagnosis/...",
         patient,
         now,
+    ) + _rule_abated_problem_is_still_active(
+        _iter_hospital_discharge_diagnosis_entries(section),
+        "cda.hospital-discharge-diagnosis",
+        "HospitalDischargeDiagnosis/entry/act/entryRelationship/observation/effectiveTime/high",
     )
 
 

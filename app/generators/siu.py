@@ -222,5 +222,11 @@ def generate_siu_s15(rng: random.Random) -> str:
 
 
 def generate_siu_s17(rng: random.Random) -> str:
-    # S17 (delete) doesn't require resolvable timing, same as S15's cancel.
-    return _generate_untimed(rng, "S17")
+    # S17 needs resolvable timing even though the mapper does not demand
+    # it. S17 maps to Appointment.status "entered-in-error", and R4's
+    # app-3 requires start and end for every status except proposed,
+    # cancelled and waitlist - so an untimed S17 converts to an invalid
+    # Appointment, and neither value can be inferred from anything else.
+    # S15's cancel is genuinely exempt, which is why it still uses
+    # _generate_untimed.
+    return _generate_booked(rng, "S17")

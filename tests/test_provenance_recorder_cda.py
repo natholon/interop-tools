@@ -271,14 +271,16 @@ def test_ccd_effective_time_variants_records_bare_value_vs_low_high_shapes():
     bare = f"Bundle.entry[{_entry_index(bundle, 'Condition', 0)}].resource"
     low_only = f"Bundle.entry[{_entry_index(bundle, 'Condition', 1)}].resource"
 
-    # Bare @value entry - onset and abatement share the identical
-    # bare-value location, not a fabricated low/high one.
+    # Bare @value entry - the onset alone, recorded against the bare-value
+    # location rather than a fabricated low/high one. It records no
+    # abatement: ivl_ts_bounds collapses the point to (X, X), and taking
+    # that as an end date claimed the problem resolved the instant it
+    # began (see app/cda/problems.py::build_condition).
     bare_onset = by_path[f"{bare}.onsetDateTime"]
     assert bare_onset.source_location == xpath_location(
         "act/entryRelationship[SUBJ][0]/observation/effectiveTime/@value"
     )
-    bare_abatement = by_path[f"{bare}.abatementDateTime"]
-    assert bare_abatement.source_location == bare_onset.source_location
+    assert f"{bare}.abatementDateTime" not in by_path
 
     # low-only entry - onset present via low/@value, no abatement fact at
     # all (nullFlavor/absent high).

@@ -18,8 +18,16 @@ _BOOKED_GENERATORS = [
     (generate_siu_s13, "S13"),
     (generate_siu_s14, "S14"),
 ]
-_TIMING_REQUIRED_GENERATORS = _BOOKED_GENERATORS + [(generate_siu_s26, "S26")]
-_UNTIMED_GENERATORS = [(generate_siu_s15, "S15"), (generate_siu_s17, "S17")]
+_TIMING_REQUIRED_GENERATORS = _BOOKED_GENERATORS + [
+    (generate_siu_s26, "S26"),
+    (generate_siu_s17, "S17"),
+]
+# S15 alone. S17 is in the timed set: it maps to Appointment.status
+# "entered-in-error", and R4's app-3 excuses a missing start/end only
+# for proposed, cancelled and waitlist - so an untimed S17 converts to
+# an invalid Appointment, and neither value can be inferred. S15's
+# cancelled is genuinely exempt.
+_UNTIMED_GENERATORS = [(generate_siu_s15, "S15")]
 _ALL_GENERATORS = _TIMING_REQUIRED_GENERATORS + _UNTIMED_GENERATORS
 _EXPECTED_STATUS = {
     "S12": "booked",

@@ -48,7 +48,7 @@ STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS = {
 }
 
 
-# Locations for _resolve_clinical_status's own two-vocabulary priority
+# Locations for resolve_clinical_status's own two-vocabulary priority
 # order - which branch actually fired matters for the crosswalk the same
 # way app/mappings/adt.py's PV1-44-vs-EVN-2 period.start resolution does,
 # so this function returns which one alongside the resolved CodeableConcept
@@ -69,7 +69,7 @@ def _status_observation_location(subject_index: int) -> str:
 _ACT_STATUS_LOCATION = xpath_location("act", "statusCode", "@code")
 
 
-def _resolve_clinical_status(
+def resolve_clinical_status(
     act, problem_observation, subject_index: int = 0
 ) -> tuple[CodeableConcept | None, str | None]:
     for status_observation in iter_nested_observations(problem_observation, "REFR"):
@@ -142,7 +142,7 @@ def build_condition(
     if identifiers:
         condition.identifier = identifiers
 
-    clinical_status, status_location = _resolve_clinical_status(act, problem_observation, subject_index)
+    clinical_status, status_location = resolve_clinical_status(act, problem_observation, subject_index)
     if clinical_status:
         condition.clinicalStatus = clinical_status
         if recorder:
@@ -158,7 +158,20 @@ def build_condition(
             recorder.record(
                 condition_id, "onsetDateTime", effective_time_location(effective_time_base, effective_time, "low"), onset
             )
-    abatement = parse_partial_ts(high)
+    # Only a real <high> is an abatement. `ivl_ts_bounds` collapses a bare
+    # point-in-time `<effectiveTime value="X"/>` to (X, X) - the zero-width
+    # interval its datatype implies - and taking that as an end date said
+    # the problem resolved the instant it began, which the document never
+    # stated. It also made the Condition invalid whenever the status was
+    # active, since R4's con-4 requires an abated Condition to be
+    # inactive, resolved or in remission.
+    #
+    # The IG names the two sources exactly: "effectiveTime\low -> source
+    # value -> Condition.onsetDateTime" and "effectiveTime\high -> source
+    # value -> Condition.abatementDateTime" (CCDA-FHIR Problem-Condition.csv).
+    # A bare @value is neither, so it supplies the onset alone.
+    has_high = effective_time is not None and find_child(effective_time, "high") is not None
+    abatement = parse_partial_ts(high) if has_high else None
     if abatement:
         condition.abatementDateTime = abatement
         if recorder:

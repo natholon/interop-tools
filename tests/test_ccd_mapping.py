@@ -113,9 +113,15 @@ def test_effective_time_variants_resolve_onset_and_abatement_per_shape():
     entries = _entries_by_type(bundle)
     conditions = {c.resource.code.coding[0].display: c.resource for c in entries["Condition"]}
 
+    # A bare point-in-time supplies the onset ALONE. ivl_ts_bounds
+    # collapses it to (X, X), the zero-width interval its datatype
+    # implies, and taking that as an abatement said the problem resolved
+    # the instant it began - which the document never stated, and which
+    # made the Condition violate R4's con-4 whenever the status was
+    # active. The IG maps only effectiveTime/high to abatementDateTime.
     bare_value = conditions["Acute bronchitis"]
     assert bare_value.onsetDateTime.isoformat() == "2022-03-01"
-    assert bare_value.abatementDateTime.isoformat() == "2022-03-01"
+    assert bare_value.abatementDateTime is None
 
     low_only = conditions["Asthma"]
     assert low_only.onsetDateTime.isoformat() == "2022-06-15"

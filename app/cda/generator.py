@@ -398,7 +398,6 @@ def _random_encounter(rng: random.Random, force: bool = False) -> str | None:
 def _random_problem_entry(rng: random.Random) -> str:
     act_id = _random_uuid_like(rng)
     obs_id = _random_uuid_like(rng)
-    act_status = "active" if maybe(rng, 0.7) else rng.choice(("suspended", "aborted", "completed"))
     code, display = rng.choice(_PROBLEM_CODES)
     negated = maybe(rng, 0.1)
 
@@ -413,6 +412,19 @@ def _random_problem_entry(rng: random.Random) -> str:
     start, end = random_time_range(rng, min_days=-300, max_days=0)
     effective_time = _random_ivl_ts(rng, start, end)
 
+    # R4's con-4 requires an abated Condition to be inactive, resolved or
+    # in remission, and this app maps "active" straight through - so a
+    # problem carrying an end date is never given an active status.
+    # Drawing the two independently produced documents that converted to
+    # invalid Conditions: the abatement and the status come from different
+    # elements, so nothing downstream can reconcile them.
+    abated = "<high" in effective_time
+    resolved_act_statuses = ("suspended", "aborted", "completed")
+    if abated:
+        act_status = rng.choice(resolved_act_statuses)
+    else:
+        act_status = "active" if maybe(rng, 0.7) else rng.choice(resolved_act_statuses)
+
     if negated:
         value = '<value xsi:type="CD" nullFlavor="NA"/>'
     else:
@@ -425,7 +437,15 @@ def _random_problem_entry(rng: random.Random) -> str:
     # app/cda/problems.py::_resolve_clinical_status.
     status_observation = ""
     if maybe(rng, 0.5):
-        status_code = rng.choice(list(STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS))
+        # The Status Observation wins over the Act's own statusCode, so it
+        # is constrained the same way.
+        status_code = rng.choice(
+            [
+                value
+                for value, mapped in STATUS_OBSERVATION_VALUE_TO_CLINICAL_STATUS.items()
+                if not abated or mapped != "active"
+            ]
+        )
         status_observation = (
             '<entryRelationship typeCode="REFR"><observation classCode="OBS" moodCode="EVN">'
             f'<code code="{STATUS_OBSERVATION_CODE}" codeSystem="2.16.840.1.113883.6.1" displayName="Status"/>'
@@ -471,12 +491,17 @@ def _random_hospital_discharge_diagnosis_entry(rng: random.Random) -> str:
     code, display = rng.choice(_PROBLEM_CODES)
     start, end = random_time_range(rng, min_days=-14, max_days=0)
     effective_time = _random_ivl_ts(rng, start, end)
+    # Same coherence con-4 needs of a plain Problems entry: a diagnosis
+    # carrying an end date cannot also be active, or it converts to an
+    # invalid Condition. This Act wraps the identical Problem Observation,
+    # so its own statusCode is what resolves the clinicalStatus.
+    act_status = "completed" if "<high" in effective_time else "active"
     value = f'<value xsi:type="CD" code="{code}" codeSystem="2.16.840.1.113883.6.96" displayName="{display}"/>'
     return (
         f'<entry typeCode="DRIV"><act classCode="ACT" moodCode="EVN">'
         f'<templateId root="{HOSPITAL_DISCHARGE_DIAGNOSIS_ACT_TEMPLATE_ID}"/><id root="{act_id}"/>'
         '<code code="11535-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital Discharge Diagnosis"/>'
-        '<statusCode code="active"/>'
+        f'<statusCode code="{act_status}"/>'
         f'<entryRelationship typeCode="SUBJ"><observation classCode="OBS" moodCode="EVN">'
         f'<templateId root="{PROBLEM_OBSERVATION_TEMPLATE_ID}"/><id root="{obs_id}"/>'
         '<code code="55607006" codeSystem="2.16.840.1.113883.6.96" displayName="Problem"/>'

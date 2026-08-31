@@ -1163,17 +1163,37 @@ def test_a_skipped_entry_cannot_borrow_a_siblings_read_by_value():
 
     from app.cda.generator import generate_discharge_summary
 
-    raw = generate_discharge_summary(random.Random(0))
-    dropped = [d for d in _cda_decisions_for_text(raw) if d.kind == "dropped"]
-    section = "ClinicalDocument/component/structuredBody/component[1]/section"
-
-    unconverted = [d for d in dropped if d.source_location == f"{section}/entry"]
-    assert len(unconverted) == 1
-    assert "produced no FHIR resource" in unconverted[0].summary
+    # Searched rather than pinned to one seed and section index: which
+    # document happens to contain a wholly skipped entry moves whenever an
+    # unrelated generator change shifts the RNG.
+    #
+    # An *indexed* one specifically. A single occurrence keeps its exact
+    # `component[N]` path, which the "nothing beneath it" check needs -
+    # several identical occurrences collapse to one unindexed row whose
+    # path is a prefix of every other section's entries too.
+    for seed in range(60):
+        raw = generate_discharge_summary(random.Random(seed))
+        dropped = [d for d in _cda_decisions_for_text(raw) if d.kind == "dropped"]
+        unconverted = [
+            d
+            for d in dropped
+            if (d.source_location or "").endswith("/entry")
+            and "component[" in (d.source_location or "")
+            and "produced no FHIR resource" in (d.summary or "")
+        ]
+        if unconverted:
+            break
+    else:
+        raise AssertionError("no generated Discharge Summary carried one wholly unconverted entry")
 
     # Nothing beneath it is reported separately any more.
-    beneath = [d.source_location for d in dropped if (d.source_location or "").startswith(f"{section}/entry/")]
-    assert beneath == [], beneath
+    for finding in unconverted:
+        beneath = [
+            d.source_location
+            for d in dropped
+            if (d.source_location or "").startswith(f"{finding.source_location}/")
+        ]
+        assert beneath == [], beneath
 
 
 _GENERATED_SAMPLE_TYPES = [(mt, te) for mt, te, _ in list_supported_types()]

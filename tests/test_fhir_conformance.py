@@ -17,24 +17,30 @@ from app.fhir_conformance.tables import REQUIRED_BINDINGS, REQUIRED_ELEMENTS, UN
 from app.generators.registry import generate, list_supported_types
 from app.pipeline import convert_to_bundle
 
-# The violations this app's own output currently has, with why each is
-# here rather than fixed. Pinned rather than tolerated: anything NEW fails
-# the sweep below immediately, and closing one of these means deleting its
-# line here.
-KNOWN_VIOLATIONS = {
-    # SIU^S17 maps to Appointment.status "entered-in-error", which app-3
-    # does not admit without start and end. The status is a deliberate
-    # mapping choice (see app/mappings/siu.py - the HL7 standard draws an
-    # explicit S17-vs-S15 distinction that "cancelled" would lose), and
-    # R4 forbids the resulting shape. Reported rather than silently
-    # resolved either way.
-    "app-3",
-    # A source document can say a problem concern is active while the
-    # problem observation carries an end date - the two come from
-    # different elements (see app/cda/problems.py). The mapper reflects
-    # what the document said; con-4 forbids the combination.
-    "con-4",
-}
+# Nothing. Both violations this checker first found have been closed at
+# source rather than tolerated:
+#
+#   app-3 - an S17 delete maps to Appointment.status "entered-in-error",
+#   which R4 does not excuse from carrying start and end. The status is
+#   right (the v2-to-FHIR FillerStatusCodes ConceptMap maps a Deleted
+#   filler status to exactly that), so what was missing was the timing -
+#   and it cannot be inferred. The generator now emits it and
+#   `siu.appointment-timing-required-for-status` flags a message that
+#   does not.
+#
+#   con-4 - a Condition carrying an abatement must be inactive, resolved
+#   or in remission. Most of these came from a real mapping defect:
+#   `ivl_ts_bounds` collapses a bare `<effectiveTime value="X"/>` to
+#   (X, X), and taking that as an end date claimed every point-in-time
+#   problem resolved the instant it began. The IG maps only
+#   effectiveTime\high to abatementDateTime, so a bare @value now supplies
+#   the onset alone. The rest were generated documents asserting an active
+#   status beside an end date, which `cda.problem-abated-but-active` now
+#   flags.
+#
+# A new entry here needs a reason of the same kind: why the output cannot
+# be made conformant, not merely that it currently is not.
+KNOWN_VIOLATIONS: set = set()
 
 
 def _bundle_with(*resources, bundle_type="collection"):
@@ -115,15 +121,39 @@ def test_generated_output_has_no_conformance_violation_beyond_the_known_ones(mes
 
 
 def test_the_known_violations_are_still_real():
-    """If one stops occurring it has been fixed, and its line in
-    KNOWN_VIOLATIONS should go - a pin that no longer pins anything hides
-    the next regression."""
+    """A pin that no longer pins anything hides the next regression, so a
+    violation that has stopped occurring must lose its entry."""
     seen = set()
     for message_type, trigger, _ in list_supported_types():
         for seed in range(8):
             report = check_bundle(convert_to_bundle(generate(message_type, trigger, seed=seed)))
             seen |= {f.message.split(":")[0] for f in report.findings}
     assert KNOWN_VIOLATIONS <= seen, f"no longer occurring: {KNOWN_VIOLATIONS - seen}"
+
+
+def test_every_hand_written_fixture_converts_to_conformant_fhir():
+    """The fixtures are the shapes a real sender produces, so their output
+    has to be valid FHIR too - generated output being clean is a weaker
+    claim, since the generator is this app's own."""
+    from pathlib import Path
+
+    # This one exists to be non-conformant: it is the S17 carrying no
+    # timing, which is what siu.appointment-timing-required-for-status is
+    # about. siu_s17_basic.hl7 is the representative, conformant S17.
+    deliberate = {"siu_s17_missing_timing.hl7"}
+
+    offenders = {}
+    for fixture in sorted((Path(__file__).parent / "fixtures").glob("*")):
+        if fixture.suffix not in (".hl7", ".xml", ".x12") or fixture.name in deliberate:
+            continue
+        try:
+            bundle = convert_to_bundle(fixture.read_text(encoding="utf-8"))
+        except Exception:
+            continue  # the deliberately malformed ones
+        findings = [f.message for f in check_bundle(bundle).findings]
+        if findings:
+            offenders[fixture.name] = findings
+    assert offenders == {}
 
 
 @pytest.mark.network

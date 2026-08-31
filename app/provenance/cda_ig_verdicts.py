@@ -587,6 +587,26 @@ IG_VERDICTS: dict[str, tuple[str, str]] = {
         "The Problem Status Observation's value transforms to Condition.clinicalStatus, built from "
         "the IG's own fixed vocabulary rather than the source display.",
     ),
+    # Gender Identity, Birth Sex and Sex specialise Social History
+    # Observation, so each declares its templateId and inherits its 1..1
+    # id. But the IG says explicitly that no Observation should be created
+    # for them - they map to a us-core extension on Patient, and an
+    # extension carries no identifier - so the id has nowhere to go.
+    "2.16.840.1.113883.10.20.34.3.45|observation/id": (
+        NOT_SUPPORTED,
+        "Gender Identity maps to the us-core-genderIdentity extension on Patient rather than to an "
+        "Observation, and an extension has no identifier for the entry's own id.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.200|observation/id": (
+        NOT_SUPPORTED,
+        "Birth Sex maps to the us-core-birthsex extension on Patient rather than to an Observation, "
+        "and an extension has no identifier for the entry's own id.",
+    ),
+    "2.16.840.1.113883.10.20.22.4.507|observation/id": (
+        NOT_SUPPORTED,
+        "Sex maps to the us-core-sex extension on Patient rather than to an Observation, and an "
+        "extension has no identifier for the entry's own id.",
+    ),
     # AllergyIntolerance.reaction is a backbone element with no identifier
     # (confirmed against the R4 resource, not assumed) - there is nowhere
     # for a Reaction Observation's own id to go.
