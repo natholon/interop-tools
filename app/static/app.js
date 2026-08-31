@@ -848,6 +848,114 @@ function renderCrosswalkTable(entries) {
         ["click", "keyup"].forEach((evt) => el.addEventListener(evt, update));
     }
 
+    // --- field hints while editing ----------------------------------
+    // Hovering the textarea names the field under the pointer - "PV1-19,
+    // Visit Number". The caret readout above answers the same question,
+    // but only after a conversion and only where the caret is; editing is
+    // exactly when the question comes up, and a message being typed may
+    // not convert at all.
+    //
+    // The index comes from /api/source-index, which parses the text and
+    // nothing else, so it works on a half-finished message. It is fetched
+    // on a debounce after typing stops rather than per hover.
+    let editorIndex = null;
+    let editorIndexText = null;
+    let editorIndexTimer = null;
+
+    function scheduleEditorIndex() {
+        editorIndex = null;
+        hideTooltip();
+        clearTimeout(editorIndexTimer);
+        editorIndexTimer = setTimeout(refreshEditorIndex, 250);
+    }
+
+    async function refreshEditorIndex() {
+        const text = textarea ? textarea.value : "";
+        if (!text.trim()) {
+            editorIndex = null;
+            return;
+        }
+        if (text === editorIndexText && editorIndex) return;
+        try {
+            const response = await fetch("/api/source-index", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ hl7_text: text }),
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            // Each locator normalises its own text - HL7v2 truncates to the
+            // first message, X12 strips a BOM and leading whitespace - so
+            // the indexed string can be a substring of what is on screen.
+            // Its position gives the offset shift; not finding it at all
+            // means the two have diverged and the index cannot be trusted.
+            const shift = text.indexOf(data.display_text);
+            if (shift < 0) {
+                editorIndex = null;
+                return;
+            }
+            editorIndexText = text;
+            editorIndex = { shift, positions: data.positions || [] };
+        } catch (err) {
+            editorIndex = null;
+        }
+    }
+
+    function editorEntryAt(offset) {
+        if (!editorIndex) return null;
+        const target = offset - editorIndex.shift;
+        let best = null;
+        for (const entry of editorIndex.positions) {
+            if (target < entry.start || target >= entry.end) continue;
+            // The innermost span is what the pointer is actually over.
+            if (!best || entry.end - entry.start < best.end - best.start) best = entry;
+        }
+        return best;
+    }
+
+    function handleEditorHover(event) {
+        if (!editorIndex || !tooltip) return;
+        // caretPositionFromPoint is the one API that resolves a point to
+        // an offset inside a <textarea> - caretRangeFromPoint returns the
+        // wrapper element instead (verified in a browser, not assumed).
+        if (!document.caretPositionFromPoint) return;
+        const position = document.caretPositionFromPoint(event.clientX, event.clientY);
+        if (!position || position.offsetNode !== textarea) {
+            hideTooltip();
+            return;
+        }
+        const entry = editorEntryAt(position.offset);
+        if (!entry) {
+            hideTooltip();
+            return;
+        }
+        const rows = [["Source Location", entry.path]];
+        if (entry.label) rows.push(["Source Field Name", entry.label]);
+        const dl = document.createElement("dl");
+        dl.style.margin = "0";
+        for (const [label, value] of rows) {
+            const dt = document.createElement("dt");
+            dt.textContent = label;
+            const dd = document.createElement("dd");
+            dd.textContent = value;
+            dl.append(dt, dd);
+        }
+        tooltip.innerHTML = "";
+        tooltip.appendChild(dl);
+        tooltip.hidden = false;
+        positionTooltip(event.clientX, event.clientY);
+    }
+
+    if (textarea) {
+        textarea.addEventListener("input", scheduleEditorIndex);
+        textarea.addEventListener("mousemove", handleEditorHover);
+        textarea.addEventListener("mouseleave", hideTooltip);
+        textarea.addEventListener("scroll", hideTooltip);
+        // Text can arrive without an input event - a server-rendered page,
+        // or the Generate sample button writing into the box.
+        refreshEditorIndex();
+    }
+
     watchTextarea(textarea, () => sourcePositions, sourceCaret, "Source location:");
     watchPre(sourcePre, () => sourcePositions, sourceCaret, "Source location:");
     watchPre(fhirPre, () => fhirPositions, fhirCaret, "FHIR path:");
@@ -1116,8 +1224,10 @@ function renderCrosswalkTable(entries) {
                 }
                 textarea.value = data.hl7_text;
                 // Setting .value programmatically fires no "input" event, so
-                // the badge has to be refreshed by hand here and below.
+                // everything derived from the text has to be refreshed by
+                // hand here and below.
                 updateFormatBadge();
+                scheduleEditorIndex();
                 showEditableSource();
             } catch (err) {
                 showError("Network error", String(err));
@@ -1136,6 +1246,7 @@ function renderCrosswalkTable(entries) {
                 textarea.value = reader.result;
                 fileInput.value = "";
                 updateFormatBadge();
+                scheduleEditorIndex();
                 showEditableSource();
             };
             reader.readAsText(file);

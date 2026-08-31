@@ -16,7 +16,7 @@ from app.provenance.recorder import ProvenanceRecorder
 from app.provenance.transform_citations import caveat_for, citation_for
 
 
-def _resolve_field_label(source_format: str, source_location: str | None) -> str | None:
+def resolve_field_label(source_format: str, source_location: str | None) -> str | None:
     """Dispatches to the field-name lookup for `source_format` - `app/
     provenance/hl7_field_names.py`/`edi_field_names.py`/`cda_field_names.py`,
     each scoped to exactly the segments/elements/xpath shapes that
@@ -93,7 +93,7 @@ def resolve_bundle_paths(bundle: Bundle, recorder: ProvenanceRecorder) -> list[P
                 fhir_path=fhir_path,
                 derivation=fact.derivation,
                 source_location=fact.source_location,
-                field_label=_resolve_field_label(recorder.source_format, fact.source_location),
+                field_label=resolve_field_label(recorder.source_format, fact.source_location),
                 transform_citation=_resolve_transform_citation(
                     recorder.source_format, fhir_path, fact
                 ),

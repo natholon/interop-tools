@@ -382,3 +382,46 @@ def test_crosswalk_page_has_no_separate_decision_register_block():
     # The table is where all of it lives now.
     assert "Specification Crosswalk" in response.text
     assert "<th>Mapping Decision</th>" in response.text
+
+
+def test_api_source_index_names_the_field_at_each_offset():
+    # Powers the editor's hover hints: no conversion involved, so it works
+    # on a message that is still being typed.
+    response = client.post(
+        "/api/source-index", json={"hl7_text": read_fixture("adt_a01_basic.hl7")}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source_format"] == "HL7v2"
+    by_path = {p["path"]: p for p in body["positions"]}
+    visit = by_path["PV1-19"]
+    assert visit["label"] == "Visit Number"
+    assert body["display_text"][visit["start"]:visit["end"]] == "V0001"
+
+
+@pytest.mark.parametrize(
+    "raw,expected_format",
+    [
+        (read_fixture("ccd_basic.xml"), "CDA"),
+        (read_fixture("edi_270_basic.x12"), "EDI"),
+    ],
+)
+def test_api_source_index_covers_every_input_format(raw, expected_format):
+    body = client.post("/api/source-index", json={"hl7_text": raw}).json()
+    assert body["source_format"] == expected_format
+    assert body["positions"]
+
+
+def test_api_source_index_still_names_what_a_half_typed_message_has():
+    # Editing is exactly when a message is incomplete, so a partial one
+    # gets whatever answer it can rather than an error - here the segment
+    # itself and the encoding characters, which are all that is typed.
+    response = client.post("/api/source-index", json={"hl7_text": "MSH|^~"})
+    assert response.status_code == 200
+    assert {p["path"] for p in response.json()["positions"]} == {"MSH", "MSH-2[0]"}
+
+
+def test_api_source_index_has_nothing_to_say_about_empty_text():
+    response = client.post("/api/source-index", json={"hl7_text": ""})
+    assert response.status_code == 200
+    assert response.json()["positions"] == []

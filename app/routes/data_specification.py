@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from app.provenance.decisions import apply_rejections, compute_decisions
 from app.provenance.dispatch import convert_with_provenance
 from app.provenance.highlighting import build_highlighting_payload
+from app.provenance.source_index import build_source_index
 from app.routes.errors import ERROR_STATUS, resolve_raw_text
 from app.routes.page_context import default_page_context
 from app.routes.static_assets import static_url
@@ -147,6 +148,34 @@ class CrosswalkApiRequest(BaseModel):
     # design - nothing is stored server-side; the browser holds the review
     # and replays it on each request.
     rejected_decision_ids: list[str] = []
+
+
+class SourceIndexRequest(BaseModel):
+    hl7_text: str = ""
+
+
+@router.post("/api/source-index")
+async def source_index_api(payload: SourceIndexRequest):
+    """What field sits at each offset of the pasted text, so the editor can
+    name the one under the pointer.
+
+    Deliberately separate from /api/data-specification: this answers a
+    question about the *text*, needs no conversion, and has to keep
+    working while a message is half-typed. Always 200 - unparseable text
+    yields an empty index rather than an error, since "no answer yet" is
+    the honest response to an unfinished message.
+    """
+    index = build_source_index(payload.hl7_text)
+    return JSONResponse(
+        content={
+            "source_format": index.source_format,
+            "display_text": index.display_text,
+            "positions": [
+                {"start": start, "end": end, "path": path, "label": label}
+                for start, end, path, label in index.entries
+            ],
+        }
+    )
 
 
 @router.post("/api/data-specification")
