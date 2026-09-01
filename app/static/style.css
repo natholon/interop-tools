@@ -991,3 +991,16 @@ pre {
     color: var(--text, inherit);
     font-weight: 600;
 }
+
+/* Was an inline style= attribute on the source-pane toggles. Moved here
+   so the Content-Security-Policy need not allow 'unsafe-inline'. */
+.btn-link-spaced {
+    margin-top: 0.4rem;
+}
+
+/* The tooltip's own <dl>. A class rather than an inline style so the
+   only inline style left on the page is the tooltip's position, which is
+   genuinely dynamic. */
+.tooltip-rows {
+    margin: 0;
+}

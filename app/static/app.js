@@ -933,7 +933,7 @@ function renderCrosswalkTable(entries) {
         const rows = [["Source Location", entry.path]];
         if (entry.label) rows.push(["Source Field Name", entry.label]);
         const dl = document.createElement("dl");
-        dl.style.margin = "0";
+        dl.className = "tooltip-rows";
         for (const [label, value] of rows) {
             const dt = document.createElement("dt");
             dt.textContent = label;
@@ -1089,7 +1089,7 @@ function renderCrosswalkTable(entries) {
         if (entry.value != null) rows.push(["FHIR Value", entry.value]);
 
         const dl = document.createElement("dl");
-        dl.style.margin = "0";
+        dl.className = "tooltip-rows";
         for (const [label, value] of rows) {
             const dt = document.createElement("dt");
             dt.textContent = label;

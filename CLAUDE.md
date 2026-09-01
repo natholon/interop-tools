@@ -221,6 +221,30 @@ route-level tests.
 **One thing per slice.** ADT^A01 before the other eight triggers; CCD's
 Problems section before the other six.
 
+## Hardening
+
+Two ASGI middlewares in `app/main.py`, both outside every route.
+
+- **`app/request_limits.py` caps a request body at 2MB.** Availability,
+  not correctness: measured through `/api/convert`, a 45KB ORU took 0.6s,
+  an 898KB one 11.3s and a 4.5MB one **79 seconds** — one request holding
+  one worker for over a minute, with nothing bounding it. The body is
+  counted rather than trusted (`Content-Length` is a client claim), and
+  an oversized one is drained before the 413 is sent, because answering
+  mid-upload makes the client see a dropped connection instead of a
+  message it can read.
+- **`app/security_headers.py` sets CSP, `nosniff`, `no-referrer`,
+  `DENY` and COOP.** `script-src` is strict — no inline, no `eval` — and
+  that is the directive doing the work. **`style-src` allows inline and
+  cannot not**: a tooltip is positioned by writing `style.left`/`.top`,
+  which no class replaces. A strict policy blocked 60 style writes and
+  parked the tooltip in a corner, found by driving the page rather than
+  by reading the policy. `/docs` and `/redoc` are exempt from the CSP
+  alone, their assets being CDN-hosted.
+
+Known and deliberate: there is no rate limiting (a reverse proxy's job)
+and no auth (the app holds no state and stores nothing).
+
 ## Transcribed spec tables
 
 Four tables are transcribed from published specs, and each has a

@@ -1,0 +1,14 @@
+# Weekly CVE and version checks. This app is meant to be deployed by
+# other people, so a known-vulnerable FastAPI or pydantic is their
+# problem as much as ours.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
