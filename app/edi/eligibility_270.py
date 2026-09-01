@@ -2,7 +2,7 @@
 CoverageEligibilityRequest.
 
 No official, free X12-to-FHIR ConceptMap IG exists for this transaction
-(unlike HL7v2's v2-to-FHIR or C-CDA's C-CDA on FHIR - see CLAUDE.md's EDI
+(unlike HL7v2's v2-to-FHIR or C-CDA's C-CDA on FHIR - see docs/build-history.md's EDI
 section for the full disclosed verification-source gap). Field mapping
 here is checked against the base FHIR CoverageEligibilityRequest resource
 definition (official, free) plus a hand-verified real 270 segment/loop
@@ -55,7 +55,7 @@ TRANSACTION_SET_ID = "270"
 def _build_serviced_date(dtp_segments: list, resource_id: str | None = None, recorder=None) -> str | None:
     """DTP02 qualifier "D8" (a simple CCYYMMDD date) is handled; "RD8" (a
     CCYYMMDD-CCYYMMDD range) is deferred this slice, disclosed rather than
-    guessed at - see the module's Phase-1 scope notes in CLAUDE.md."""
+    guessed at - see the module's Phase-1 scope notes in docs/build-history.md."""
     for dtp in dtp_segments:
         if element(dtp, 2) == "D8":
             raw = element(dtp, 3)

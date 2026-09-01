@@ -126,7 +126,7 @@ def _build_sv3_segment(item) -> str:
     app/edi/claim_837d_generator.py::_build_sv3 already established for
     this identical segment, adopted here after an earlier manual
     star-counting mistake elsewhere in this project's own EDI fixtures
-    (see CLAUDE.md's own testing guidance)."""
+    (see docs/build-history.md's own testing guidance)."""
     fields = [""] * 11
     fields[0] = _reverse_procedure_composite(item)  # SV3-01
     # :.2f, not str(Decimal) - see remittance_835.py's own

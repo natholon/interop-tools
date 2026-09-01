@@ -138,7 +138,7 @@ def _resolve_binary(document_reference, binaries_by_id: dict):
 def _build_obx_segments(binary) -> list[str]:
     # Binary.data decodes to raw bytes at construction time (fhir.resources'
     # own Base64Binary type) - it's already decoded, not a base64 string to
-    # decode again here (see CLAUDE.md's fhir.resources gotcha list).
+    # decode again here (see docs/build-history.md's fhir.resources gotcha list).
     if binary is None or not binary.data:
         return []
     body = binary.data.decode("utf-8")

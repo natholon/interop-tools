@@ -2,7 +2,7 @@
 the first proof that app/transform/'s architecture generalizes across
 input *formats*, not just across HL7v2 trigger events. Scoped to exactly
 "header + Problems section" - the identical scope CCD's own very first
-*forward*-direction slice shipped with (see CLAUDE.md/git history: "Add
+*forward*-direction slice shipped with (see docs/build-history.md/git history: "Add
 C-CDA to FHIR conversion (CCD header + Problems section)" was this app's
 first CDA commit, before Medications/Allergies/Immunizations/etc. arrived
 in later slices) - the same "one thing per slice" precedent applied to the

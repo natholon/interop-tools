@@ -39,7 +39,7 @@ def _build_sv3(rng: random.Random, num_diagnoses: int) -> str:
     asterisks - SV3 has 11 elements and only SV3-01/02/06/11 are populated
     this slice, so hand-typing the right asterisk count invites exactly the
     off-by-one mistake this app already hit once building this same
-    segment by hand for a test fixture (see CLAUDE.md's own testing
+    segment by hand for a test fixture (see docs/build-history.md's own testing
     guidance on verifying field positions programmatically)."""
     procedure = rng.choice(_CDT_PROCEDURE_CODES)
     charge = round(rng.uniform(20, 800), 2)

@@ -209,7 +209,7 @@ def validate_interchange(interchange: Interchange) -> ValidationReport:
         # Normalized the same way every other format/trigger dispatch point
         # in this codebase is (get_mapper, get_type_validator) - a
         # lowercase ST01 previously shipped silently skipping ADT's A02
-        # rule the same way (see CLAUDE.md), so this dispatch is normalized
+        # rule the same way (see docs/build-history.md), so this dispatch is normalized
         # from the start rather than waiting to rediscover that bug here.
         normalized_st01 = transaction_set.st01.strip().upper()
         if normalized_st01 == "270":

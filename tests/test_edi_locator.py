@@ -61,7 +61,7 @@ def test_multi_occurrence_resolution_for_repeating_nm1_segments():
 
 def test_explicit_segment_repetition_disambiguates_multiple_hi_segments():
     # edi_837i_basic.x12's own claim splits diagnoses across a Principal HI
-    # segment and an Other HI segment (see CLAUDE.md's own documented
+    # segment and an Other HI segment (see docs/build-history.md's own documented
     # shape) - both share intra-segment position 1, so only
     # segment_repetition tells them apart.
     loc = EdiLocator(read_fixture("edi_837i_basic.x12"))

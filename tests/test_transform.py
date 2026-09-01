@@ -752,7 +752,7 @@ def test_ccd_round_trip_preserves_original_text_as_codeable_concept_text():
 def test_ccd_round_trip_escapes_xml_special_characters_in_original_text():
     # CodeableConcept.text is free text reaching a raw f-string builder -
     # the same escaping hazard app/transform/'s own adversarial review
-    # already found once for names/displays (see CLAUDE.md).
+    # already found once for names/displays (see docs/build-history.md).
     forward_xml = (FIXTURES / "ccd_procedures_basic.xml").read_text()
     bundle = convert_cda_to_bundle(forward_xml)
     procedure = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Procedure")
@@ -2401,7 +2401,7 @@ def test_reverse_transform_preserves_resource_type_counts(target):
     observation-level <specimen> override silently lost its own Specimen
     resource on 28 of 300 generated C-CDA documents while the entire test
     suite stayed green (see app/transform/cda_ccd.py::
-    _build_result_observation_element and CLAUDE.md's own note).
+    _build_result_observation_element and docs/build-history.md's own note).
 
     Deliberately kept to a handful of seeds per target - the whole
     parametrized set runs in well under a second, and the point is the

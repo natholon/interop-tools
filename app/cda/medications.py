@@ -195,7 +195,7 @@ def build_medication_request(
         # This specific administration/order did NOT happen - disclosed
         # limitation, not modeled as its own resource this slice, same
         # "skip rather than misrepresent" philosophy as Problems' negated
-        # entries (see CLAUDE.md).
+        # entries (see docs/build-history.md).
         return None
 
     consumable = find_child(substance_administration, "consumable")

@@ -1,7 +1,7 @@
 """Synthetic ADT message generators, one per supported trigger event.
 
 Required/optional policy is documented per-field below; the guiding rule
-(see CLAUDE.md) is that a generated message must always convert successfully
+(see docs/build-history.md) is that a generated message must always convert successfully
 through app.mappings.adt - so anything the mapper actually requires for a
 given trigger is always populated, never left to chance.
 """

@@ -127,7 +127,7 @@ def _find_section(document, *template_ids: str):
     the identical entry shape, see app/cda/allergies.py). A single-
     templateId `_find_*_section` helper checking only one of these would
     silently never run that section's rules against the other variant -
-    this shipped once (see CLAUDE.md/git history) and this shared helper
+    this shipped once (see docs/build-history.md/git history) and this shared helper
     exists so the same class of gap can't recur for a future section type
     with more than one recognized templateId."""
     for section in find_all(document, "component/structuredBody/component/section"):

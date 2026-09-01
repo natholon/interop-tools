@@ -547,7 +547,7 @@ def test_oru_r01_free_text_value_with_caret_is_not_truncated_in_crosswalk():
     # field_str, specifically so a literal caret in free text isn't mistaken
     # for a component separator - the crosswalk's own recorded value must
     # reflect the same untruncated text the Bundle itself carries (see the
-    # `hl7` library gotcha section in CLAUDE.md).
+    # `hl7` library gotcha section in docs/build-history.md).
     message = parse_message(read_fixture("oru_r01_ft_with_caret.hl7"))
     recorder = ProvenanceRecorder(source_format="HL7v2")
     bundle = OruR01Mapper().to_bundle(message, recorder=recorder)
@@ -728,7 +728,7 @@ def test_mdm_t02_obx_with_caret_binary_data_is_not_truncated_in_crosswalk():
     bundle = MdmT02Mapper().to_bundle(message, recorder=recorder)
     binary = next(e.resource for e in bundle.entry if e.resource.get_resource_type() == "Binary")
     # Binary.data is stored as already-decoded raw bytes (pydantic's
-    # Base64Binary type decodes it at construction time) - see CLAUDE.md's
+    # Base64Binary type decodes it at construction time) - see docs/build-history.md's
     # own fhir.resources notes for this exact gotcha.
     assert binary.data.decode("utf-8") == "Grade II^ tear noted on exam; recommend follow-up"
 

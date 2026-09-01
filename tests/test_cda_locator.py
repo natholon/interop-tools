@@ -167,7 +167,7 @@ def test_scope_hint_disambiguates_vitals_from_results_organizer_collision():
 
 def test_scope_hint_disambiguates_problems_from_hospital_discharge_diagnosis_act_collision():
     # discharge_summary_basic.xml genuinely carries both a plain Problems
-    # Concern Act and a Hospital Discharge Diagnosis Act (see CLAUDE.md's
+    # Concern Act and a Hospital Discharge Diagnosis Act (see docs/build-history.md's
     # own documented shape for this fixture) - a real, not constructed,
     # collision case.
     loc = CdaLocator(read_fixture("discharge_summary_basic.xml"))

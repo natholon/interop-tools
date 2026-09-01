@@ -245,7 +245,7 @@ def find_nested_observation(parent, type_code: str, template_id: str):
     iter_nested_observations - the "check the relationship type, not just
     the nested templateId" discipline this app needs whenever a
     wrongly-typed relationship's nested element could otherwise falsely
-    match a templateId check alone (see CLAUDE.md's Problems-section
+    match a templateId check alone (see docs/build-history.md's Problems-section
     history of exactly this bug). Used by every Allergies nested-
     observation lookup (Status/Criticality/Severity Observations)."""
     for observation in iter_nested_observations(parent, type_code):
@@ -1173,7 +1173,7 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
     once a second real consumer existed (app/cda/discharge_summary.py) -
     the same "extract once a second real consumer exists" pattern already
     used for build_minimal_pv1_fields/build_minimal_encounter (see
-    CLAUDE.md), not a speculative abstraction ahead of need. Document types
+    docs/build-history.md), not a speculative abstraction ahead of need. Document types
     with genuinely different structure (e.g. a future document type that
     ISN'T just "header + generic sections") should NOT be forced through
     this helper - implement build_bundle() directly instead, the way
@@ -1233,7 +1233,7 @@ def build_sectioned_bundle(document, recorder=None) -> Bundle:
                     )
                 break
         # An unrecognized section is silently skipped - disclosed, not a
-        # bug (see CLAUDE.md's per-document-type scope-limit notes).
+        # bug (see docs/build-history.md's per-document-type scope-limit notes).
 
     composition, composition_resources = build_composition(
         document, patient, encounter, section_resources, recorder=recorder

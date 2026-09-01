@@ -87,7 +87,7 @@ def test_out_of_range_field_returns_none_not_a_crash():
 
 def test_occurrence_count_and_multi_occurrence_resolution_for_repeating_segments():
     # oru_r01_basic.hl7 has 2 OBR-led reports with 3 OBX results total
-    # (CLAUDE.md's own documented shape) - each occurrence must resolve to
+    # (docs/build-history.md's own documented shape) - each occurrence must resolve to
     # a genuinely distinct, correct value, not all collapsing to the first.
     loc = Hl7Locator(read_fixture("oru_r01_basic.hl7"))
     assert loc.occurrence_count("OBX") == 3

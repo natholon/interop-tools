@@ -104,7 +104,7 @@ def build_condition(
 ) -> Condition | None:
     if problem_observation.get("negationInd") == "true":
         # "No known problem" pattern - disclosed limitation, not modeled as
-        # its own resource this slice (see CLAUDE.md).
+        # its own resource this slice (see docs/build-history.md).
         return None
 
     value_element = find_child(problem_observation, "value")

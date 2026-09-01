@@ -81,7 +81,7 @@ def is_before(earlier_raw: str, earlier_dt: datetime, later_raw: str, later_dt: 
     and app/cda/validation.py - promoted here once a second real consumer
     needed the exact same date-only-aware ordering logic, mirroring this
     project's established "extract once duplication would otherwise occur"
-    pattern (see CLAUDE.md on build_minimal_pv1_fields/build_minimal_encounter)."""
+    pattern (see docs/build-history.md on build_minimal_pv1_fields/build_minimal_encounter)."""
     if not has_time_precision(earlier_raw) or not has_time_precision(later_raw):
         return earlier_dt.date() < later_dt.date()
     return earlier_dt < later_dt

@@ -33,7 +33,7 @@ from app.validation.models import ValidationFinding
 # X12 270/271 (and, prospectively, other HL-hierarchy transaction sets)
 # carries no data element for "why are we asking" -
 # CoverageEligibilityRequest/Response.purpose is FHIR-required (confirmed
-# by direct construction - see CLAUDE.md) with no source field to derive
+# by direct construction - see docs/build-history.md) with no source field to derive
 # it from. Defaults to "benefits", the dominant real-world use - the same
 # "default to the most common real value when no unknown option exists"
 # judgment already made for Medications' moodCode / Immunizations'
@@ -1078,7 +1078,7 @@ def assemble_bundle(bht: Segment, *resources: Resource, recorder=None) -> Bundle
     # construction on an otherwise perfectly convertible transaction set
     # whenever BHT05 (time) is empty or unparseable. This is the exact bug
     # app/cda/common.py::assemble_bundle already shipped once and disclosed
-    # in CLAUDE.md - call parse_hl7_datetime directly here (no date-only
+    # in docs/build-history.md - call parse_hl7_datetime directly here (no date-only
     # fallback) rather than parse_x12_datetime, matching that fix.
     bht04_raw = element(bht, 4)
     bht05_raw = element(bht, 5)

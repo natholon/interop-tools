@@ -2,7 +2,7 @@
 can't cover, plus one structural check for PV1 (the segment every ADT
 mapper requires). Several of these deliberately surface behavior the
 mappers themselves already silently default/skip, per app/mappings/adt.py
-and CLAUDE.md - no new guessing, just making an existing judgment call
+and docs/build-history.md - no new guessing, just making an existing judgment call
 visible to whoever is looking at this message."""
 
 from datetime import datetime, timezone

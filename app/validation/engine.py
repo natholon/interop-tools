@@ -3,7 +3,7 @@ rule set if one is registered, then a "would this actually convert" check.
 
 That last check deliberately does NOT re-derive a parallel "required
 segments per trigger" table - this project has already been bitten once by
-exactly that kind of duplication (see CLAUDE.md on build_minimal_pv1_fields
+exactly that kind of duplication (see docs/build-history.md on build_minimal_pv1_fields
 / build_minimal_encounter). Instead it runs the real mapper and turns
 whatever it raises into a finding, so it can never drift from what the
 mappers actually require. The tradeoff, made explicit in the finding text:
@@ -33,7 +33,7 @@ def _check_convertibility(
         mapper = get_mapper(message_type, trigger_event)
     except MappingError:
         # A registered TYPE with an unmapped TRIGGER (e.g. ADT^A38, one of
-        # the "remaining trigger events" CLAUDE.md lists) already had its
+        # the "remaining trigger events" docs/build-history.md lists) already had its
         # type-specific rules run above, by design - `only generic checks
         # were run` would be false in that case, so the message reflects
         # what actually happened rather than assuming "unsupported type"

@@ -919,12 +919,12 @@ def test_every_edi_drop_cites_the_absent_crosswalk(fixture):
 
 @pytest.mark.parametrize("fixture", _ALL_FIXTURES)
 def test_no_drop_is_an_unclosed_gap(fixture):
-    # The other half of the claim CLAUDE.md makes. A GAP means the IG
+    # The other half of the claim docs/build-history.md makes. A GAP means the IG
     # defines a target this app does not build - a real defect, not a
     # disclosure, so it should be loud.
     #
     # If this fails on a genuinely newly-found gap, that is the test
-    # working: either close the gap, or change the claim in CLAUDE.md and
+    # working: either close the gap, or change the claim in docs/build-history.md and
     # this test together. What it exists to prevent is the claim quietly
     # going stale while nothing notices - which is exactly what happened
     # to the drop counts this replaced.
