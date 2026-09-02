@@ -221,6 +221,36 @@ route-level tests.
 **One thing per slice.** ADT^A01 before the other eight triggers; CCD's
 Problems section before the other six.
 
+## API surface
+
+Every pillar is a public endpoint; the page posts to the same ones. Three
+additions exist for integrators rather than for the UI:
+
+- **`GET /api/capabilities`** answers what this instance supports from
+  the registries themselves - `list_supported_types()`,
+  `list_supported_targets()`, the conformance tables, the size cap and
+  the first-message-only limit. It cannot drift from what the converter
+  dispatches on, which a documented list does.
+- **`POST /api/fhir/conformance` and `/api/fhir/deduplicate`** take a
+  Bundle the caller already has. Both capabilities existed but were only
+  side effects of `/api/convert`, so they were useless to anyone holding
+  a Bundle from another source - the audience a conformance check is for.
+  Both accept a bare Bundle or the `{"bundle": ...}` shape `/api/convert`
+  returns, so a response feeds straight back in.
+- **A raw request body** on `/api/convert` and `/api/validate`, so
+  `curl --data-binary @message.hl7` works without JSON-encoding the file
+  first. **Content type decides, never sniffing** (`app/routes/
+  source_body.py`): `application/json` is the documented model, anything
+  else is the message verbatim, and options come from the query string.
+  Sniffing would collide with the format detection `app/pipeline.py`
+  already does.
+
+**An invalid code is reported, not refused.** `/api/fhir/conformance`
+accepts a Bundle whose `type` is nonsense and returns findings against
+it, because `fhir.resources` parses it happily and reporting exactly that
+is the endpoint's purpose. A 400 is only for a body that is not a Bundle
+at all.
+
 ## Hardening
 
 Two ASGI middlewares in `app/main.py`, both outside every route.

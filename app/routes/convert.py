@@ -11,6 +11,8 @@ from app.generators.registry import generate as generate_sample
 from app.hl7.errors import MappingError
 from app.pipeline import convert_to_bundle, validate_any
 from app.fhir_conformance.checker import check_bundle
+from app.version import VERSION
+from app.routes.source_body import SourceBodyError, query_flag, read_source_text
 from app.routes.errors import ERROR_STATUS, VALIDATION_ERROR_STATUS, resolve_raw_text
 from app.routes.page_context import default_page_context
 from app.routes.static_assets import static_url
@@ -166,8 +168,20 @@ class ConvertApiRequest(BaseModel):
 
 
 @router.post("/api/convert")
-async def convert_api(payload: ConvertApiRequest):
-    outcome = _run_conversion(payload.hl7_text, deduplicate=payload.deduplicate)
+async def convert_api(request: Request):
+    """Convert a source message to a FHIR R4 Bundle.
+
+    Takes either the documented JSON body or the message as a raw body
+    (any content type but `application/json`), in which case `deduplicate`
+    comes from the query string - see app/routes/source_body.py.
+    """
+    try:
+        text, payload = await read_source_text(request)
+    except SourceBodyError as exc:
+        return JSONResponse(
+            status_code=400, content={"error": {"category": "Bad request", "message": str(exc)}}
+        )
+    outcome = _run_conversion(text, deduplicate=query_flag(request, "deduplicate", payload))
     if outcome.error_category:
         return JSONResponse(
             status_code=outcome.status_code,
@@ -186,8 +200,16 @@ class ValidateApiRequest(BaseModel):
 
 
 @router.post("/api/validate")
-async def validate_api(payload: ValidateApiRequest):
-    outcome = _run_validation(payload.hl7_text)
+async def validate_api(request: Request):
+    """Validate a source message. Accepts the same two body shapes as
+    /api/convert."""
+    try:
+        text, _ = await read_source_text(request)
+    except SourceBodyError as exc:
+        return JSONResponse(
+            status_code=400, content={"error": {"category": "Bad request", "message": str(exc)}}
+        )
+    outcome = _run_validation(text)
     if outcome.error_category:
         # Only the two propagated parse-level exceptions land here. A
         # report concluding is_valid=False is itself a *successful*
@@ -232,4 +254,6 @@ async def generate_sample_api(message_type: str, trigger_event: str, seed: int |
 
 @router.get("/healthz")
 async def healthz():
-    return {"status": "ok"}
+    # The version matters for a deployed instance: "ok" alone cannot say
+    # which build answered.
+    return {"status": "ok", "version": VERSION}

@@ -31,7 +31,10 @@ def test_index_static_asset_urls_are_cache_busted():
 def test_healthz():
     response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    # The version is there so a deployed instance can say which build
+    # answered; the exact value is asserted in test_api_capabilities.py.
+    assert response.json()["status"] == "ok"
+    assert response.json()["version"]
 
 
 def test_api_convert_success():
