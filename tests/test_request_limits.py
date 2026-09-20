@@ -61,3 +61,24 @@ def test_get_requests_are_untouched():
     assert client.get("/healthz").status_code == 200
     assert client.get("/").status_code == 200
     assert client.get("/api/generate", params={"message_type": "ADT", "trigger_event": "A01"}).status_code == 200
+
+
+def test_a_streaming_response_survives_the_body_buffering():
+    """The middleware consumes the request body and replays it, and the
+    replay must then delegate to the real `receive`.
+
+    Answering the second call with a synthetic `http.disconnect` looked
+    harmless - the route had its body - but a StreamingResponse watches
+    `receive` for a client disconnect while it streams, so every stream
+    aborted before its first chunk. There was no streaming endpoint when
+    the middleware shipped, so nothing caught it.
+    """
+    from pathlib import Path
+
+    message = (Path(__file__).parent / "fixtures" / "adt_a01_basic.hl7").read_text()
+    response = client.post(
+        "/api/convert/batch", content=message * 3, headers={"Content-Type": "text/plain"}
+    )
+    assert response.status_code == 200
+    lines = response.text.strip().splitlines()
+    assert len(lines) == 4, "the stream was cut short"

@@ -74,13 +74,20 @@ class LimitRequestSize:
             await JSONResponse(_ERROR, status_code=413)(scope, receive, send)
             return
 
-        # The body was consumed here, so hand the route its own copy.
+        # The body was consumed here, so hand the route its own copy, then
+        # delegate.
+        #
+        # Delegating matters: a StreamingResponse watches `receive` for a
+        # client disconnect while it streams, so answering the second call
+        # with a synthetic `http.disconnect` aborted every stream before
+        # its first chunk. The real `receive` blocks until the client
+        # genuinely goes away, which is what that watcher is for.
         replayed = False
 
         async def replay_receive():
             nonlocal replayed
             if replayed:
-                return {"type": "http.disconnect"}
+                return await receive()
             replayed = True
             return {"type": "http.request", "body": bytes(body), "more_body": False}
 

@@ -24,6 +24,7 @@ from app.dedup import deduplicate_bundle
 from app.fhir_conformance.checker import check_bundle
 from app.fhir_conformance.tables import REQUIRED_BINDINGS, REQUIRED_ELEMENTS, UNCHECKED_BINDINGS
 from app.generators.registry import list_supported_types
+from app.batch import MAX_BATCH_MESSAGES
 from app.request_limits import MAX_REQUEST_BYTES
 from app.routes.source_body import SourceBodyError, query_flag, read_source_text
 from app.transform.registry import list_supported_targets
@@ -138,9 +139,10 @@ async def capabilities_api():
             },
             "limits": {
                 "max_request_bytes": MAX_REQUEST_BYTES,
-                # Disclosed rather than discovered at runtime: a batch
-                # file converts its first message only.
+                # /api/convert takes the first message only; the batch
+                # endpoint takes the whole file.
                 "messages_per_request": 1,
+                "max_batch_messages": MAX_BATCH_MESSAGES,
             },
         }
     )

@@ -52,6 +52,7 @@ all reachable from one page and one set of API routes:
 | FHIR → source message | `app/transform/pipeline.py::build_message_from_bundle` |
 | Field-level provenance (crosswalk) | `app/provenance/dispatch.py::convert_with_provenance` |
 | FHIR R4 conformance of the output | `app/fhir_conformance/checker.py::check_bundle` |
+| Batched files, one result per message | `app/batch.py::iter_conversions` |
 
 **Scope snapshot** — accurate at the time of writing, and the kind of
 claim that goes stale; `list_supported_types()` and
@@ -147,8 +148,11 @@ These are settled. Reopen them deliberately, not by accident.
 - **`Composition` only for a source that *is* a document** — C-CDA. The
   v2-to-FHIR IG assigns `Bundle.type = "message"` for HL7v2 and maps
   MDM^T02 to `DocumentReference`; X12 carries no clinical document.
-- **Only the first message / transaction set / claim is processed.** Real
-  files are often batched. Disclosed rather than silent.
+- **`convert_to_bundle` takes the first message only**, and that contract
+  stays: one input, one Bundle. A batched file goes to
+  `app/batch.py::iter_conversions` and `POST /api/convert/batch` instead,
+  which is opt-in so nothing about the existing behaviour changed. A
+  C-CDA document is never a batch - several documents are several files.
 - **X12 has no free official FHIR crosswalk.** The TR3s are paywalled.
   Every X12 mapping here is this project's own reading, verified against
   X12.org-published examples, and says so. Do not invent one.
@@ -245,6 +249,27 @@ additions exist for integrators rather than for the UI:
   Sniffing would collide with the format detection `app/pipeline.py`
   already does.
 
+**`POST /api/convert/batch` streams NDJSON**, one line per message, and
+`/api/validate/batch` answers how many messages a file holds without
+converting any. Three things about the shape:
+
+- **Streamed because the response binds, not the request.** HL7v2
+  amplifies ~11x into FHIR JSON - measured - so 2MB in is ~22MB of
+  Bundles out. Accumulating that to serialize one array puts the peak in
+  memory and makes the caller wait for the last message to see the first.
+  Streaming is why the cap can be 5,000 messages rather than a few
+  hundred: measured at the cap, the first line arrives in ~75ms and the
+  whole batch takes ~21s.
+- **`application/x-ndjson`, not `application/fhir+ndjson`.** Bulk Data's
+  NDJSON is bare resources, which has nowhere to say that message 300
+  failed. Every line is an envelope carrying a Bundle or an error, and
+  the last line is a summary. **A failure is per-message, never
+  per-batch.**
+- **X12 splits on the parsed interchange, HL7v2 on the raw text.**
+  Re-wrapping one `ST`/`SE` in its original `ISA`/`GS` would leave `GE01`
+  and `IEA01` counting the whole file's transaction sets, so the pieces
+  would be non-conformant X12 this app's own validator flags.
+
 **An invalid code is reported, not refused.** `/api/fhir/conformance`
 accepts a Bundle whose `type` is nonsense and returns findings against
 it, because `fhir.resources` parses it happily and reporting exactly that
@@ -262,7 +287,11 @@ Two ASGI middlewares in `app/main.py`, both outside every route.
   counted rather than trusted (`Content-Length` is a client claim), and
   an oversized one is drained before the 413 is sent, because answering
   mid-upload makes the client see a dropped connection instead of a
-  message it can read.
+  message it can read. **After replaying the buffered body it delegates
+  to the real `receive`**: a `StreamingResponse` watches that for a
+  client disconnect while streaming, so answering with a synthetic
+  `http.disconnect` aborted every stream before its first chunk. Nothing
+  caught it until the first streaming endpoint existed.
 - **`app/security_headers.py` sets CSP, `nosniff`, `no-referrer`,
   `DENY` and COOP.** `script-src` is strict — no inline, no `eval` — and
   that is the directive doing the work. **`style-src` allows inline and
