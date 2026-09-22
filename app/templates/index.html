@@ -17,6 +17,10 @@
             {# Caret position readout - filled in by app.js once a crosswalk
                has been generated, since the index comes from the server. #}
             <p class="caret-readout" id="source-caret" aria-live="polite"></p>
+            {# Shown when the pasted input holds more than one message - the
+               page converts the first only, and said nothing about the
+               rest. Filled in by app.js from the response's batch key. #}
+            <div id="batch-notice" class="unsupported-banner" role="status" hidden></div>
         </div>
         <div class="crosswalk-arrow" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

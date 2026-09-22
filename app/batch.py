@@ -37,10 +37,10 @@ from app.pipeline import convert_to_bundle, is_x12, is_xml
 from app.routes.errors import ERROR_STATUS
 
 # Streamed, so the response size is not the constraint; this bounds the
-# wall time instead. ~13s for 5,000 typical HL7v2 messages, which a
-# caller sees arriving from the first one rather than at the end. The
-# 2MB request cap (app/request_limits.py) binds first for anything
-# larger than a small message, whichever comes first.
+# wall time instead. Measured against a real server at the cap: first
+# line in ~75ms, the whole batch in ~21s. The 2MB request cap
+# (app/request_limits.py) binds first for anything larger than a small
+# message.
 MAX_BATCH_MESSAGES = 5_000
 
 
@@ -121,3 +121,25 @@ def _convert_one(index: int, build) -> BatchItem:
 def _as_error(index: int, exc: Exception) -> BatchItem:
     category, _status = ERROR_STATUS.get(type(exc), ("Conversion error", 500))
     return BatchItem(index=index, error_category=category, error_message=str(exc))
+
+
+def batch_notice(raw_text: str) -> dict | None:
+    """What a single-message endpoint should say about a batched input.
+
+    `convert_to_bundle` takes the first message only, and without this a
+    caller posting a three-message file got one message's Bundle and no
+    sign the other two existed - the one case where "disclosed rather than
+    silent" was silent. None for a single message, so an ordinary response
+    is unchanged.
+    """
+    total = count_messages(raw_text)
+    if total <= 1:
+        return None
+    return {
+        "messages": total,
+        "converted": 1,
+        "note": (
+            f"This input holds {total:,} messages; only the first was converted. "
+            "POST /api/convert/batch converts all of them."
+        ),
+    }

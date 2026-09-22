@@ -233,7 +233,8 @@ additions exist for integrators rather than for the UI:
 - **`GET /api/capabilities`** answers what this instance supports from
   the registries themselves - `list_supported_types()`,
   `list_supported_targets()`, the conformance tables, the size cap and
-  the first-message-only limit. It cannot drift from what the converter
+  the first-message-only limit on `/api/convert` and the batch limit.
+  It cannot drift from what the converter
   dispatches on, which a documented list does.
 - **`POST /api/fhir/conformance` and `/api/fhir/deduplicate`** take a
   Bundle the caller already has. Both capabilities existed but were only
@@ -340,7 +341,9 @@ parsing:
   MSH-led messages concatenated) parses into one `Message`, and
   `optional_segments`/`group_segments_by_leader` would then pull segments
   from every message into one Bundle with nothing to distinguish the
-  result. `_truncate_to_first_message()` cuts at the second `MSH`.
+  result. `truncate_to_first_message()` cuts at the second `MSH` for
+  `convert_to_bundle`; `app/batch.py::split_hl7_messages` splits at every
+  one for the batch endpoint.
 - When a field has no component separator (`^`), the library collapses it
   to a bare `str`. Indexing a second level (`field[0][0]`) then does
   **character** indexing and silently returns a truncated value. Use

@@ -6,6 +6,7 @@ from fastapi.templating import Jinja2Templates
 from fhir.resources.R4B.bundle import Bundle
 from pydantic import BaseModel, ValidationError
 
+from app.batch import batch_notice
 from app.dedup import deduplicate_bundle
 from app.generators.registry import generate as generate_sample
 from app.hl7.errors import MappingError
@@ -192,6 +193,9 @@ async def convert_api(request: Request):
         content["deduplication"] = outcome.dedup_summary
     if outcome.conformance_json is not None:
         content["conformance"] = json.loads(outcome.conformance_json)
+    notice = batch_notice(text)
+    if notice is not None:
+        content["batch"] = notice
     return JSONResponse(content=content)
 
 

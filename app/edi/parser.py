@@ -258,8 +258,8 @@ def first_transaction_set(interchange: Interchange) -> TransactionSet | None:
     interchange (though structurally well-formed) contains zero. Every
     pipeline in this app has a strict one-input-to-one-Bundle contract, and
     real 270/271 files are frequently batched (multiple ST per GS, multiple
-    GS per ISA) - Phase 1 processes only the first, a disclosed scope limit
-    (see app/edi/pipeline.py), not a parsing gap."""
+    GS per ISA). `convert_to_bundle` takes the first; app/batch.py walks
+    every transaction set for the batch endpoint."""
     for functional_group in interchange.functional_groups:
         for transaction_set in functional_group.transaction_sets:
             return transaction_set

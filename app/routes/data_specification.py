@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+from app.batch import batch_notice
 from app.provenance.decisions import apply_rejections, compute_decisions
 from app.provenance.dispatch import convert_with_provenance
 from app.provenance.highlighting import build_highlighting_payload
@@ -206,4 +207,7 @@ async def data_specification_api(payload: CrosswalkApiRequest):
         content["deduplication"] = outcome.dedup_summary
     if outcome.conformance_json is not None:
         content["conformance"] = json.loads(outcome.conformance_json)
+    notice = batch_notice(payload.hl7_text)
+    if notice is not None:
+        content["batch"] = notice
     return JSONResponse(content=content)

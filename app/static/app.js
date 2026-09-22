@@ -181,6 +181,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const dedupCheckbox = document.getElementById("crosswalk-deduplicate");
     const dedupSummaryEl = document.getElementById("crosswalk-dedup-summary");
     const conformanceSummaryEl = document.getElementById("conformance-summary");
+    const batchNoticeEl = document.getElementById("batch-notice");
     const unsupportedBanner = document.getElementById("crosswalk-unsupported-banner");
     const tableWrapper = document.getElementById("crosswalk-table-wrapper");
     const tableBody = document.getElementById("crosswalk-table-body");
@@ -961,7 +962,7 @@ function renderCrosswalkTable(entries) {
     watchPre(sourcePre, () => sourcePositions, sourceCaret, "Source location:");
     watchPre(fhirPre, () => fhirPositions, fhirCaret, "FHIR path:");
 
-    function showCrosswalk(report, highlighting, dedupSummary, conformance) {
+    function showCrosswalk(report, highlighting, dedupSummary, conformance, batch) {
         if (!outputPane) return;
         // A pin refers to marks about to be replaced wholesale.
         clearPin();
@@ -1010,6 +1011,17 @@ function renderCrosswalkTable(entries) {
                 conformanceSummaryEl.hidden = false;
             } else {
                 conformanceSummaryEl.hidden = true;
+            }
+        }
+
+        // A pasted batch converts its first message only. Saying so here is
+        // what "disclosed rather than silent" means for the page.
+        if (batchNoticeEl) {
+            if (batch) {
+                batchNoticeEl.textContent = batch.note;
+                batchNoticeEl.hidden = false;
+            } else {
+                batchNoticeEl.hidden = true;
             }
         }
 
@@ -1414,7 +1426,7 @@ function renderCrosswalkTable(entries) {
             // populated before the table renders or every inferred row
             // draws a blank decision cell.
             renderDecisions(data.decisions || [], data.rejection_outcomes || []);
-            showCrosswalk(data.report, data.highlighting, data.deduplication, data.conformance);
+            showCrosswalk(data.report, data.highlighting, data.deduplication, data.conformance, data.batch);
         } catch (err) {
             showError("Network error", String(err));
         } finally {

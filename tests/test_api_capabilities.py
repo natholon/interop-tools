@@ -46,8 +46,8 @@ def test_capabilities_are_answered_by_the_registries_not_a_list():
 def test_capabilities_disclose_the_limits_that_bite():
     caps = client.get("/api/capabilities").json()
     assert caps["limits"]["max_request_bytes"] == MAX_REQUEST_BYTES
-    # A batch file converts its first message only - discoverable rather
-    # than found out.
+    # /api/convert takes the first message only; the batch endpoint takes
+    # the rest. Both limits are discoverable rather than found out.
     assert caps["limits"]["messages_per_request"] == 1
 
 

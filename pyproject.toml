@@ -26,7 +26,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
-    "httpx>=0.27",
+    # Starlette's TestClient imports httpx2 first and falls back to httpx
+    # with a deprecation warning, so a future Starlette dropping the
+    # fallback would break every route test at once.
+    "httpx2>=2.13",
 ]
 
 [tool.setuptools.packages.find]

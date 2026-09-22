@@ -156,3 +156,32 @@ def test_capabilities_report_the_batch_limit():
     limits = client.get("/api/capabilities").json()["limits"]
     assert limits["max_batch_messages"] == MAX_BATCH_MESSAGES
     assert limits["messages_per_request"] == 1
+
+
+# --- disclosing a batch to the single-message endpoints ---------------
+
+
+def test_a_single_message_carries_no_batch_notice():
+    # So an ordinary response is byte-for-byte unchanged.
+    for path in ("/api/convert", "/api/data-specification"):
+        assert "batch" not in client.post(path, json={"hl7_text": _ADT}).json(), path
+
+
+def test_a_batch_posted_to_convert_says_how_many_were_skipped():
+    # One message's Bundle and no sign the other two existed was the one
+    # place "disclosed rather than silent" was silent.
+    body = client.post("/api/convert", json={"hl7_text": _ADT + _ORU + _ADT}).json()
+    assert body["batch"]["messages"] == 3
+    assert body["batch"]["converted"] == 1
+    assert "/api/convert/batch" in body["batch"]["note"]
+
+
+def test_the_page_endpoint_discloses_a_batch_too():
+    # What the page posts on Convert; it renders body["batch"]["note"].
+    body = client.post("/api/data-specification", json={"hl7_text": _ADT + _ORU}).json()
+    assert body["batch"]["messages"] == 2
+
+
+def test_an_x12_batch_is_disclosed_by_transaction_set():
+    raw = (FIXTURES / "edi_270_batch_three_sets.x12").read_text()
+    assert client.post("/api/convert", json={"hl7_text": raw}).json()["batch"]["messages"] == 3
